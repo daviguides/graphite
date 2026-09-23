@@ -721,15 +721,13 @@ Phase 6: Candle Port (future, conditional)
 - Laya does not replace any existing MCP tool. It annotates output of `blast_radius` and `diff_impact` only.
 - Laya does not run in the indexing/write path. Graph construction stays deterministic.
 - Laya does not filter VALIDATING mode. Independence required.
-- Laya is not required for Graphite to function. Optional accelerator with graceful degradation.
-- No cloud, no telemetry, no network calls from Laya. Local inference only.
-- No Jev API integration. Laya is the chosen engine (faster, open, fine-tunable).
+- Laya is not required for Graphite to function. Optional accelerator with graceful degradation.- No Jev API integration. Laya is the chosen engine (faster, open, fine-tunable).
 
 ## Alternatives Considered
 
 ### TypeSafe Jev (API)
 
-Rejected: 18x slower (236ms vs 13ms), proprietary, $0.042/M tokens, cannot fine-tune on domain data, requires network. Violates Graphite's privacy principle.
+Rejected: 18x slower (236ms vs 13ms), proprietary, $0.042/M tokens, cannot fine-tune on domain data, requires network round-trip on every query.
 
 ### Jev Open-Source Clones (OpenJev/SemIf, LitJev, NanoJev, Kev-0.5B)
 

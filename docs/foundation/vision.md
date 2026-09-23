@@ -52,9 +52,8 @@ The agent starts every session already knowing the architecture. It acts immedia
 - Not an IDE plugin. CLI + MCP server, agents consume it.
 - Not a linter or formatter. Reads structure, doesn't judge it.
 - Not a code search engine. Understands relationships, not full-text content.
-- Not cloud. Everything local, no telemetry, no network calls.
 - No embeddings. Graph relationships, not semantic similarity.
 
 ## Audience
 
-Engineers running AI code assistants (Claude Code, Cursor, Codex) on medium-to-large codebases where agent execution time matters. Orchestration builders (like Continuum runner) who drive autonomous agent workflows and need surgical context injection per mode. Value speed, correctness, and privacy over convenience.
+Engineers running AI code assistants (Claude Code, Cursor, Codex) on medium-to-large codebases where agent execution time matters. Orchestration builders (like Continuum runner) who drive autonomous agent workflows and need surgical context injection per mode. Value speed and correctness over convenience.

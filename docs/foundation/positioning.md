@@ -62,9 +62,6 @@ Not "understand your codebase" — finish the task. Faster, with fewer mistakes,
 7. **Rust single binary.** Tree-sitter grammars, CozoDB, MCP server, file watcher — one executable. No runtime, no npm, no Python venv.
 
 8. **Runner-native.** Only tool in the space that integrates with an orchestration layer. Context injection per workflow mode. EXPLORING gets architecture map, IMPLEMENTING gets blast radius, VALIDATING gets targeted tests.
-
-9. **Privacy absolute.** No cloud, no telemetry, no API keys. Zero cost per query. The graph lives next to your code.
-
 ## Landscape
 
 | Tool | Stars | Lang | Storage | Speed Focus | Correctness Focus |

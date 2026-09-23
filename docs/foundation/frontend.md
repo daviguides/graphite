@@ -155,8 +155,6 @@ Structural queries, not text search. Query builder over Datalog.
 - Whole-repo force-directed graph as landing page. Past 500 nodes it's a hairball.
 - Source editing. Not an IDE. Read-only peek only.
 - Semantic or embedding search. Out of scope by design.
-- Cloud sync or share links. Privacy absolute.
-
 ## Priority
 
 | Phase | Features | Target | Rationale |
