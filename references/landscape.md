@@ -14,6 +14,9 @@
 | **code-graph-mcp** | 77 | Rust | SQLite + FTS5 + sqlite-vec | BLAKE3 Merkle incremental, dirty propagation. Closest tech stack. |
 | **llm-context-mgr** | 61 | Rust | Petgraph + LanceDB | Rust core, reasoning-aware retrieval |
 | **repomap-rs** | 0 | Rust | In-memory | Aider PageRank algorithm in Rust |
+| **LeanKG** | 220 | Go (was Rust) | SQLite WAL + PG/pgvector (was CozoDB 0.7.6) | Exact→fuzzy→semantic query ladder with provenance on every response; dropped CozoDB (single-writer, FFI abort, zero recursive Datalog used) |
+| **infigraph** (intuit) | 89 | Rust | LadybugDB `lbug =0.16.0` active; CozoDB-sqlite parked backend | 62 languages, SCIP compiler-grade edges, ~90 MCP tools, output compression, `cozo_vs_kuzu` bench harness |
+| **ferrograph** | 3 | Rust | CozoDB 0.7 (mem / sqlite) | Only tool with true recursive Datalog blast radius; git change-coupling edges; Rust ownership/borrow edges |
 
 ## Not Cloned (reference only)
 
