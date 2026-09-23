@@ -2,6 +2,8 @@
 
 > How Graphite accelerates the Continuum runner orchestration layer.
 
+Runner lives at `~/work/sources/continuum/tools/orch/runner` within the Continuum orchestrator project (`~/work/sources/continuum`). See the runner's own `docs/architecture.md` for its full design.
+
 Runner drives Claude Agent SDK sessions through workflow modes (BRIEFING → EXPLORING → RESEARCHING → PLANNING → IMPLEMENTING → VALIDATING → FINALIZING). Graphite provides surgical codebase context that reduces total execution time, increases assertiveness, and improves correctness.
 
 ## The Problem Runner Has Today

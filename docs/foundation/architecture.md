@@ -4,6 +4,15 @@
 
 Embedded code-graph engine. Rust CLI + MCP server. Tree-sitter extracts, CozoDB stores, Datalog queries.
 
+## Why CozoDB
+
+CozoDB was chosen over alternatives for specific architectural reasons:
+
+- **Over KuzuDB** — KuzuDB uses Cypher (pattern matching). CozoDB uses Datalog (recursive rules). Transitive closure, PageRank, community detection are native Datalog operations, not query-language extensions. CozoDB also has a Rust crate (`cozo`); KuzuDB's Rust bindings are less mature.
+- **Over SQLite** — Relational, not graph-native. Code dependency traversal requires recursive CTEs that are verbose and slow compared to Datalog's native recursion. SQLite has no concept of graph edges or traversal.
+- **Over JSON/markdown files** — No indexing, no concurrent reads, entire graph loaded per query. Works for small repos, collapses at scale. Graft's approach.
+- **Over NetworkX** — Python in-memory graph. No persistence, no indexing, no concurrent access. Graphify's approach.
+
 ## How It Works
 
 ```

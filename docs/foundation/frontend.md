@@ -2,9 +2,15 @@
 
 > The graph visualizer is the canvas, not the feature.
 
-Local web UI served by `graphite ui`. Static bundle embedded in the Rust binary (rust-embed + axum), reading the same CozoDB file. One binary, zero config, no second process.
+Local web UI served by `graphite ui`. Static bundle embedded in the same Rust binary as CLI/MCP (rust-embed + axum), reading the same CozoDB instance. No second process — this follows from the single-binary architecture, not from optimizing for setup.
 
 ## Thesis
+
+The frontend serves the same three optimization targets as the engine:
+
+- **Speed** — Savings dashboard proves ROI (tokens, cost, time saved). Context workbench eliminates prompt assembly time. Agent finishes faster because the human prepared better context.
+- **Assertiveness** — Agent observatory shows where agents hesitate, backtrack, or query excessively. Touch map reveals blind edits vs informed edits. The human sees what the agent saw.
+- **Correctness** — Blast radius review catches missed impact before merge. Graph health shows where extractors fail (and agents will be blind). Override curation fixes the graph for all future sessions.
 
 Nobody opens a "graph viewer" daily. People open tools that answer questions they have every day: "what will this change break?", "is the agent using good context?", "where should I refactor next?". The node-and-edge view is the background; blast radius highlights, agent traces, coupling heatmaps are the foreground.
 
@@ -153,13 +159,13 @@ Structural queries, not text search. Query builder over Datalog.
 
 ## Priority
 
-| Phase | Features | Rationale |
-|-------|----------|-----------|
-| **P1** | Agent Observatory + Blast Radius Review + Savings Dashboard | CLI can't do these. Hit core pain: blind agents, review burden, proving value. |
-| **P2** | Graph Health + Overrides/Curation | Compound and fix trust. Every override improves future sessions. |
-| **P3** | Architecture Views (especially snapshot diff) | Defense against architectural drift from agent PRs. |
-| **P4** | Context Workbench + Smart Search | Daily utility, but graph query and MCP tools cover most of this from CLI. |
-| **P5** | Runner Control Center | Powerful but depends on runner maturity and event protocol. |
+| Phase | Features | Target | Rationale |
+|-------|----------|--------|-----------|
+| **P1** | Agent Observatory + Blast Radius Review + Savings Dashboard | Speed + Correctness | Observatory shows where agents waste turns (speed). Blast radius catches missed impact (correctness). Savings dashboard proves ROI in wall-clock time and tokens. |
+| **P2** | Graph Health + Overrides/Curation | Assertiveness + Correctness | Confidence calibration: human sees where graph is blind (assertiveness). Overrides compound — each one makes every future agent session more correct. |
+| **P3** | Architecture Views (snapshot diff) | Correctness | Defense against architectural drift from many small agent PRs. Catches coupling creep and cycle introduction. |
+| **P4** | Context Workbench + Smart Search | Speed | Eliminates prompt assembly time. Human curates context in seconds, agent starts faster. |
+| **P5** | Runner Control Center | Speed | Visual steering of orchestrated workflows. Context pack preview before spend. Depends on runner maturity. |
 
 ## Tech Stack
 
@@ -174,4 +180,4 @@ Structural queries, not text search. Query builder over Datalog.
 
 ## Sources
 
-Analysis synthesized from consultations with Fable 5.1 and Opus 5.5 (2026-09-23). Savings dashboard from project requirements.
+Analysis synthesized from consultations with Fable 5.1 and Opus 5.5 (2026-09-23). Savings dashboard from project requirements. See [landscape.md](../../references/landscape.md) for full competitor analysis including CodeGraph's UI, Graft's viz, and Graphify's export formats.
