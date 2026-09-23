@@ -113,6 +113,41 @@
 8. **Streaming/progressive results** — all return complete results
 9. **Multi-agent coordination** — no shared write-through cache for concurrent agents
 
+## Business Models
+
+| Aspect | Graft | CodeGraph | Graphify |
+|--------|-------|-----------|----------|
+| Core | Open-source CLI | Open-source CLI | Open-source CLI |
+| Cloud | Trail Brain (CLAUDE.md mgmt) | Platform (PR intelligence) — waitlist | Hosted graph + verification + PR review |
+| Pricing | Not public | Not launched | $0-$29/seat/mo + Enterprise |
+| YC backed | No (NanoNets) | No | Yes (S26) |
+
+## Notable Findings from Documentation Sites
+
+### Graphify — Enterprise Features (not in open-source)
+
+**Differential Formal Verification** — six-tier verification ladder:
+- Tier 1: SMT (Z3) — sound proofs over all inputs for pure Python
+- Tier 2: Loop-invariant tier — Z3-checked coupling invariants
+- Tier 3: CrossHair — concolic testing
+- Tier 4: Property tier — deterministic corpus in network-denied sandbox
+- Tier 5: Trace-carving — real pytest suite data
+- Tier 6: Honest abstain — explicit "unsupported" when verification can't help
+
+Verdicts: `equivalent`, `distinguished` (concrete divergence), `may_equivalent` (empirical only), `unsupported`. ~17-45% decisive verdicts with full ladder + test suite. No LLM in verification path.
+
+**CI/CD Gate**: `graphify gate --verify-edits --base origin/main --block-behavior-change` — blocks PRs that change behavior. Neither Graft nor CodeGraph has CI integration.
+
+**Hosted MCP**: `api.graphify.com/mcp` — OAuth-authenticated cloud endpoint. Agent queries pre-built graph without running locally.
+
+**Memory System**: 2K ingests/day, 10K stored memory turns/repo. Conversational memory beyond graph.
+
+### CodeGraph — Platform Vision
+"Change-impact intelligence for AI-written code" — platform (waitlist) will focus on PR analysis: what to test, what could break, which flows affected.
+
+### Graft — Trail Brain
+Cloud product at app.trailhq.com: converts agent corrections into persistent rules, manages AGENTS.md automatically, adds hooks that block rule violations.
+
 ## Graphite Positioning in Landscape
 
 | Differentiator | Why it matters |
