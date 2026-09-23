@@ -63,7 +63,7 @@ Not "understand your codebase" — finish the task. Faster, with fewer mistakes,
 
 8. **Runner-native.** Only tool in the space that integrates with an orchestration layer. Context injection per workflow mode. EXPLORING gets architecture map, IMPLEMENTING gets blast radius, VALIDATING gets targeted tests.
 
-9. **Privacy absolute.** No cloud, no telemetry, no LLM, no API keys. Zero cost per query. The graph lives next to your code.
+9. **Privacy absolute.** No cloud, no telemetry, no API keys. Zero cost per query. The graph lives next to your code.
 
 ## Landscape
 

@@ -54,7 +54,6 @@ The agent starts every session already knowing the architecture. It acts immedia
 - Not a code search engine. Understands relationships, not full-text content.
 - Not cloud. Everything local, no telemetry, no network calls.
 - No embeddings. Graph relationships, not semantic similarity.
-- No LLM in the core. Pure structural analysis, zero API keys, zero cost per query.
 
 ## Audience
 

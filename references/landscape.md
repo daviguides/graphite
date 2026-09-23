@@ -100,7 +100,7 @@ Evaluated through Graphite's optimization targets: does it make the AI agent's t
 **Deprioritized** (ease-of-use, not performance):
 
 - Pre-query freshness probe (Graft) — elegant for zero-config but adds latency per query. Replaced by background watcher in server mode. Kept only as CLI fallback.
-- Two-tier model with LLM semantic layer (Graft) — adds provider dependency and cost. Graphite is structural-only, zero LLM.
+- Two-tier model with LLM semantic layer (Graft) — adds provider dependency and cost.
 - Non-code ingestion (Graphify) — PDFs, images, video in the graph. Broadens scope but doesn't make code editing faster or more correct. Future consideration.
 - Cross-repo support (Graphify) — valuable for microservices but adds complexity. Not v1.
 - Hook-based strict mode (Graphify) — deny Read to force graph-first. Aggressive, conflicts with agent autonomy. The graph should earn usage by being faster, not by blocking alternatives.
@@ -164,7 +164,6 @@ Cloud product at app.trailhq.com: converts agent corrections into persistent rul
 |---------------|----------------|
 | **CozoDB Datalog** | No one else uses Datalog. Recursive queries (transitive closure, PageRank, community detection) are native, not hand-coded BFS loops. |
 | **Rust single binary** | code-graph-mcp proves Rust+Tree-sitter+MCP works. CozoDB adds indexed persistent graph DB. |
-| **Zero LLM** | Pure structural. No provider lock-in, no cost, no API keys. |
 | **Embedded graph DB** | Not JSON (Graft), not SQLite (CodeGraph), not NetworkX (Graphify). A real graph database with indexing and concurrent reads. |
 | **Runner integration** | No competitor integrates with an orchestration layer. Surgical context injection per workflow mode. |
 | **Frontend observatory** | Agent trace, savings dashboard, blast radius review — none offer observability of agent behavior. |

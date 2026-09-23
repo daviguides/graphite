@@ -69,9 +69,6 @@ uv run laya-mlx convert \
 ### Laya Is Not an LLM
 
 Laya is a bidirectional encoder (ModernBERT) with typed decision heads. It is non-autoregressive — no text generation, no token-by-token output, no hallucination by construction. It returns typed, structured decisions with calibrated probabilities.
-
-This distinction matters for Graphite's architecture principles. Principle 8 ("no LLM") refers to generative language models in the query path. Laya is an encoder-based classifier/ranker. The principle should read: "no generative LLM in the query path; optional local encoder for ranking."
-
 ### Why Laya Over Jev
 
 | Dimension | Laya | Jev |

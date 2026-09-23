@@ -298,6 +298,6 @@ graphite/
 5. **Complete flows** — dynamic dispatch, framework routes, and cross-module edges are resolved so the agent sees the full execution path, not just static imports.
 6. **Incremental always** — content-hash-based extraction cache. Only re-parse files whose bytes actually changed. Only update edges for affected symbols.
 7. **Single binary** — Tree-sitter grammars, CozoDB, MCP server, file watcher all compile into one executable.
-8. **Privacy absolute** — no network, no telemetry, no cloud, no LLM. Graph lives beside code.
+8. **Privacy absolute** — no network, no telemetry, no cloud. Graph lives beside code.
 9. **Concurrent-safe** — multiple agents query simultaneously while the watcher writes. CozoDB handles isolation.
 10. **Language-extensible** — adding a language means implementing one trait.
