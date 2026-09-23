@@ -48,7 +48,7 @@ The agent starts every session already knowing the architecture. It acts immedia
 
 ## Not Scope
 
-- Not optimized for easy setup. Optimized for making the agent faster.
+- Convenience is a consequence of good engineering, not a design target. Single binary and zero-config happen because Rust compiles everything in, not because we optimized for setup experience.
 - Not an IDE plugin. CLI + MCP server, agents consume it.
 - Not a linter or formatter. Reads structure, doesn't judge it.
 - Not a code search engine. Understands relationships, not full-text content.

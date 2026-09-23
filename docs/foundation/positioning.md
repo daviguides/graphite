@@ -78,4 +78,4 @@ Not "understand your codebase" — finish the task. Faster, with fewer mistakes,
 
 ### Key distinction
 
-Competing tools optimize for **ease of adoption** (npm install, zero config, works immediately). Graphite optimizes for **agent execution speed** (background watcher, source inline, consolidated queries, runner integration). Different priorities produce different architectures.
+Competing tools optimize for **ease of adoption** (npm install, zero config, works immediately). Graphite optimizes for **agent execution speed** (background watcher, source inline, consolidated queries, runner integration). Convenience follows from good engineering — single binary and zero-config are consequences of compiling everything into Rust, not design targets. Different priorities produce different architectures.
