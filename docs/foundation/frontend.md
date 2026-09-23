@@ -153,8 +153,7 @@ Structural queries, not text search. Query builder over Datalog.
 ## What NOT to Build
 
 - Whole-repo force-directed graph as landing page. Past 500 nodes it's a hairball.
-- Source editing. Not an IDE. Read-only peek only.
-- Semantic or embedding search. Out of scope by design.
+
 ## Priority
 
 | Phase | Features | Target | Rationale |

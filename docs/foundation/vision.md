@@ -14,6 +14,8 @@ Embedded code-graph engine: a Rust CLI + MCP server that extracts dependency gra
 
 These are not balanced equally. Speed of the code assistant's execution is the primary target. Assertiveness and correctness serve speed — a hesitant agent is a slow agent, an incorrect agent repeats work.
 
+**These three targets are the only absolutes in this project.** Every other rule in these docs (storage choice, sync model, scope boundaries, integrations) is a derived decision, valid only while it serves the targets, and revisable when evidence shows it hurts one. No technology, dependency, or approach is excluded by principle — only by measured effect on speed, assertiveness, or correctness.
+
 ## Pain
 
 1. **Blind agents.** AI assistants read dozens of files to understand architecture. Each file read is a tool call, each tool call is latency, each wrong file is a wasted turn. The agent explores when it should be acting.
@@ -46,13 +48,11 @@ The agent starts every session already knowing the architecture. It acts immedia
 - Single binary: Tree-sitter, CozoDB, MCP server, file watcher compiled into one executable
 - Runner integration: prompt injection + mid-session MCP access for orchestrated workflows
 
-## Not Scope
+## Not a Target
 
 - Convenience is a consequence of good engineering, not a design target. Single binary and zero-config happen because Rust compiles everything in, not because we optimized for setup experience.
-- Not an IDE plugin. CLI + MCP server, agents consume it.
-- Not a linter or formatter. Reads structure, doesn't judge it.
-- Not a code search engine. Understands relationships, not full-text content.
-- No embeddings. Graph relationships, not semantic similarity.
+
+Scope beyond v1 is decided feature by feature against the three targets — see the feature inventory.
 
 ## Audience
 

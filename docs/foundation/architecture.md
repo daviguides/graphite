@@ -297,6 +297,6 @@ graphite/
 4. **Confidence signals** — every edge carries a confidence tag (EXTRACTED / INFERRED). The agent knows when to trust the graph and when to verify.
 5. **Complete flows** — dynamic dispatch, framework routes, and cross-module edges are resolved so the agent sees the full execution path, not just static imports.
 6. **Incremental always** — content-hash-based extraction cache. Only re-parse files whose bytes actually changed. Only update edges for affected symbols.
-7. **Single binary** — Tree-sitter grammars, CozoDB, MCP server, file watcher all compile into one executable.
+7. **Single binary (consequence, not rule)** — Tree-sitter grammars, CozoDB, MCP server, file watcher compile into one executable because Rust makes that cheap. Optional accelerators (e.g. Laya) run as sidecars when that serves the targets better.
 8. **Concurrent-safe** — multiple agents query simultaneously while the watcher writes. CozoDB handles isolation.
 9. **Language-extensible** — adding a language means implementing one trait.

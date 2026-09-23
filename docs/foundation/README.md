@@ -2,6 +2,8 @@
 
 Graphite: embedded code-graph engine in Rust. Makes AI code assistants finish tasks faster, act with more confidence, and make fewer mistakes.
 
+**Only absolutes:** agent execution speed, assertiveness, correctness (defined in [vision.md](vision.md)). Everything else in these docs is a derived, revisable decision. Do not add "no X / never X / out of scope by design" rules unless derived from a target with the reasoning written down.
+
 ## Documents
 
 | Doc | What it covers |
