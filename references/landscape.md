@@ -72,28 +72,38 @@
 
 ### What to Steal for Graphite
 
-**From Graft:**
-- Pre-query freshness probe (~3ms fingerprint)
-- Content-hash extraction cache
-- Two-tier model: structural (free) + optional semantic (cached)
-- Token-budgeted repo map (graft_repo_map)
-- Regex search grouped by enclosing symbol + ranked by coupling
+Evaluated through Graphite's optimization targets: does it make the AI agent's total execution **faster**, more **assertive**, or more **correct**?
 
-**From CodeGraph:**
-- Dynamic dispatch synthesizers (callbacks, React, EventEmitter, tier-crossing)
-- Framework-aware resolution (Express, Django, Axum, etc.)
-- Single-tool philosophy (agents under-pick multiple tools)
-- NotIndexedError as success-shaped response (not isError — prevents agents abandoning toolset)
-- Adaptive explore budget scaled to project size
-- Real-time file watcher with native FSEvents
+**Agent speed** (reduce total task execution time):
 
-**From Graphify:**
-- Leiden community detection for automatic subsystem clustering
-- Edge confidence tagging (EXTRACTED/INFERRED/AMBIGUOUS)
-- PR impact analysis tools
-- Cross-repo graph support
-- Non-code ingestion (docs, configs, SQL schemas)
-- Hook-based strict mode (deny Read to force graph-first)
+- Source code in results (CodeGraph) — agent gets verbatim line-numbered source in MCP response. Eliminates Read round-trips. Directly cuts turns and wall-clock time.
+- Real-time file watcher with native FSEvents (CodeGraph) — graph always hot, zero sync cost per query. Agent never waits for a rebuild.
+- Content-hash extraction cache (Graft) — BLAKE3 hash means unchanged files replay their last parse. Watcher overhead stays minimal.
+- Token-budgeted repo map (Graft) — agent gets architecture orientation in one call. Eliminates the 10-15 exploratory Reads at session start.
+- Adaptive explore budget scaled to project size (CodeGraph) — prevents context bloat on large repos while giving enough on small ones.
+- Diff-aware query mode (gap — none have it) — "what changed + blast radius" as a single operation. Agent gets actionable scope instantly.
+- Test-to-code mapping (gap — none have it) — which tests cover changed symbols. Runner VALIDATING runs only relevant tests, minutes become seconds.
+
+**Assertiveness** (agent acts with confidence, no hesitation):
+
+- Edge confidence tagging: EXTRACTED/INFERRED/AMBIGUOUS (Graphify) — agent knows which edges are certain vs guessed. Reads files only where confidence is low.
+- Leiden community detection (Graphify) — automatic subsystem boundaries. Agent understands module ownership without reading READMEs.
+- Single-tool philosophy (CodeGraph) — data shows agents under-pick additional tools. One powerful `graphite_explore` tool that returns everything beats 11 specialized tools the agent ignores.
+- NotIndexedError as success-shaped response (CodeGraph) — returning `isError: true` teaches agents to abandon the toolset entirely. Success-shaped "not indexed yet, run graphite init" keeps the agent engaged.
+
+**Correctness** (agent makes fewer mistakes):
+
+- Dynamic dispatch synthesizers (CodeGraph) — callbacks, EventEmitter, React re-render chains, tier-crossing edges. Without these, blast radius misses entire flow branches. "The flow must exist in the graph end-to-end."
+- Framework-aware resolution (CodeGraph) — Express/Django/Axum route-to-handler edges. HTTP request → route → handler → service is one connected path, not four orphaned symbols.
+- Git-aware temporal edges (gap — none have it) — co-change history as graph edges. "These files always change together" prevents the agent from editing one and forgetting the other.
+
+**Deprioritized** (ease-of-use, not performance):
+
+- Pre-query freshness probe (Graft) — elegant for zero-config but adds latency per query. Replaced by background watcher in server mode. Kept only as CLI fallback.
+- Two-tier model with LLM semantic layer (Graft) — adds provider dependency and cost. Graphite is structural-only, zero LLM.
+- Non-code ingestion (Graphify) — PDFs, images, video in the graph. Broadens scope but doesn't make code editing faster or more correct. Future consideration.
+- Cross-repo support (Graphify) — valuable for microservices but adds complexity. Not v1.
+- Hook-based strict mode (Graphify) — deny Read to force graph-first. Aggressive, conflicts with agent autonomy. The graph should earn usage by being faster, not by blocking alternatives.
 
 ### What to Avoid
 
