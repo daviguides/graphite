@@ -1,0 +1,13 @@
+# Cloned reference repos (research only, not part of project)
+references/repos/
+
+# Build artifacts
+target/
+
+# CozoDB data
+*.db
+*.db-wal
+*.db-shm
+
+# OS
+.DS_Store
