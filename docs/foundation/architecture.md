@@ -49,6 +49,24 @@ Source code (any language)
 └─────────────────────────────────────────────────┘
 ```
 
+## Optimization Targets
+
+Graphite is not optimized for ease of setup. It is optimized for making the AI agent complete tasks **faster**, with **more confidence**, and with **fewer mistakes**.
+
+### 1. Agent Execution Speed
+
+Not query latency — total wall-clock time the agent takes to finish a task. Every Read/Grep the agent skips, every turn eliminated, every tool call avoided. The graph exists so the agent acts instead of exploring.
+
+Background file watcher keeps CozoDB hot at all times. MCP queries return in microseconds from an already-indexed graph. No probe, no rebuild in the query path. The agent never waits.
+
+### 2. Assertiveness
+
+The agent acts with confidence because it has the right context upfront. No "let me check a few more files", no hesitation, no backtracking. Edge confidence tags (EXTRACTED vs INFERRED) tell the agent exactly when to trust the graph and when to verify with a file read. Community boundaries tell it where subsystem borders are.
+
+### 3. Correctness
+
+The agent makes fewer mistakes because blast radius is visible, dynamic dispatch flows are mapped, framework routes are connected, and nothing is silently missed. Source code is returned inline with line numbers so the agent doesn't need a second round-trip to read what the graph already knows about.
+
 ## Core Components
 
 ### 1. Parser Layer
@@ -160,21 +178,42 @@ Each tool queries CozoDB and returns a compact, token-efficient response.
 
 ### 6. Sync Engine
 
-Incremental updates:
+Two modes: always-hot (server) and on-demand (CLI).
+
+#### Server mode (primary): background watcher
+
+When the MCP server runs (`graphite serve`), a background thread watches the filesystem and keeps CozoDB current. Queries never pay sync cost.
 
 ```
-graphite sync
+graphite serve
   │
-  ├─ git diff --name-only HEAD~1  (or mtime comparison)
+  ├── thread 1: MCP handler
+  │   └── query CozoDB (microseconds, always fresh)
   │
-  ├─ For each changed file:
-  │    ├─ Tree-sitter parse
-  │    ├─ Extract symbols + dependencies
-  │    ├─ Delete old entries for this file
-  │    └─ Insert new entries
+  ├── thread 2: file watcher (FSEvents / inotify / ReadDirectoryChangesW)
+  │   └── file changed → content-hash check → tree-sitter parse → update CozoDB
+  │       (incremental: only changed files, only affected edges)
   │
-  └─ Total time: ~ms for typical commits
+  └── CozoDB instance (shared across threads)
+      ├── reads: lock-free, concurrent, from any thread
+      └── writes: serialized by watcher thread, non-blocking for readers
 ```
+
+The watcher uses content hashes (BLAKE3) to skip files whose bytes haven't changed (rename, touch, save-without-edit). Only files with actual content changes trigger a re-parse. Edge updates are incremental: delete old entries for the changed file, insert new ones. Dependents of changed symbols are not rebuilt — their edges still point to the same symbol IDs.
+
+#### CLI mode (fallback): probe + sync
+
+When no server is running, CLI commands probe the filesystem before querying:
+
+```
+graphite blast <symbol>
+  │
+  ├─ probe: compare file mtimes against last sync timestamp
+  ├─ if stale: incremental sync (changed files only)
+  └─ query CozoDB
+```
+
+This adds a few milliseconds per invocation. Acceptable for human-driven CLI use, but the server mode exists because agents make dozens of queries per session and cannot afford per-query overhead.
 
 ### 7. CLI
 
@@ -209,8 +248,10 @@ graphite/
 │   │   └── queries.rs        # Named Datalog queries
 │   ├── sync/
 │   │   ├── mod.rs            # Sync orchestration
-│   │   ├── git.rs            # Git diff integration
-│   │   └── incremental.rs    # File change detection
+│   │   ├── watcher.rs        # Background file watcher (FSEvents/inotify)
+│   │   ├── hasher.rs         # BLAKE3 content hashing
+│   │   ├── probe.rs          # CLI fallback: mtime-based staleness check
+│   │   └── incremental.rs    # Incremental parse + edge update
 │   ├── mcp/
 │   │   ├── mod.rs            # MCP server
 │   │   ├── tools.rs          # Tool definitions
@@ -234,16 +275,20 @@ graphite/
 | CLI | clap |
 | MCP | rmcp or custom stdio JSON-RPC |
 | Serialization | serde + serde_json |
+| File watching | notify (cross-platform FSEvents/inotify/ReadDirectoryChangesW) |
+| Content hashing | blake3 |
 | Git integration | gix (pure Rust git) |
 | Async | tokio |
 
 ## Design Principles
 
-1. **Single binary** — everything compiles into one executable, including Tree-sitter grammars and CozoDB
-2. **Zero config** — `graphite init` in any repo, works immediately
-3. **Incremental first** — never re-parse what hasn't changed
-4. **Graph queries, not file reads** — the agent gets relationships, not raw source
-5. **Token-efficient responses** — MCP tools return compact summaries, not dumps
-6. **Privacy absolute** — no network, no telemetry, no cloud. Graph lives beside code
-7. **Language-extensible** — adding a language means implementing one trait
-8. **Concurrent-safe** — multiple agents can query simultaneously (CozoDB handles this)
+1. **Agent speed above all** — every design decision is measured by whether it reduces the agent's total execution time. Setup convenience is secondary.
+2. **Always-hot graph** — background watcher keeps CozoDB current. Zero sync cost in the query path. The agent never waits for a rebuild.
+3. **Source in results** — MCP tools return verbatim source with line numbers alongside graph context. The agent doesn't need a follow-up Read to see the code.
+4. **Confidence signals** — every edge carries a confidence tag (EXTRACTED / INFERRED). The agent knows when to trust the graph and when to verify.
+5. **Complete flows** — dynamic dispatch, framework routes, and cross-module edges are resolved so the agent sees the full execution path, not just static imports.
+6. **Incremental always** — content-hash-based extraction cache. Only re-parse files whose bytes actually changed. Only update edges for affected symbols.
+7. **Single binary** — Tree-sitter grammars, CozoDB, MCP server, file watcher all compile into one executable.
+8. **Privacy absolute** — no network, no telemetry, no cloud, no LLM. Graph lives beside code.
+9. **Concurrent-safe** — multiple agents query simultaneously while the watcher writes. CozoDB handles isolation.
+10. **Language-extensible** — adding a language means implementing one trait.
