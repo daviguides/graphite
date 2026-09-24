@@ -2,6 +2,7 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,7 +14,7 @@ use serde_json::{json, Value};
 use crate::engine::{Engine, IndexStats};
 use crate::paths::RepoPaths;
 use crate::protocol::{Op, Request, Response};
-use crate::queries::{QueryHandler, DEFAULT_DEPTH};
+use crate::queries::{Knobs, QueryHandler};
 use crate::{watcher, DaemonError, Result};
 
 /// How long a query waits for already-observed edits before answering `stale: true`.
@@ -45,6 +46,10 @@ pub fn run(paths: RepoPaths, handler: Box<dyn QueryHandler>) -> Result<()> {
         serde_json::to_string(&stats).unwrap_or_default()
     );
 
+    if let Some(parent) = paths.socket.parent() {
+        std::fs::create_dir_all(parent)?;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+    }
     let _ = std::fs::remove_file(&paths.socket);
     let listener = UnixListener::bind(&paths.socket)?;
     let state = Arc::new(State {
@@ -101,18 +106,37 @@ fn handle(state: &State, op: Op) -> Response {
         Op::Nudge { .. } | Op::Shutdown => true,
         _ => engine.fresh.wait_current(FRESHNESS_WAIT),
     };
+    let stale = !fresh;
     let result: std::result::Result<Value, String> = match &op {
         Op::Status => Ok(status(state)),
-        Op::Lookup { symbol } => state.handler.lookup(engine, symbol),
-        Op::Blast { symbol, depth } => {
-            state
-                .handler
-                .blast(engine, symbol, depth.unwrap_or(DEFAULT_DEPTH))
+        Op::Lookup { symbol } => state.handler.lookup(engine, stale, symbol),
+        Op::Blast {
+            symbol,
+            depth,
+            budget,
+            compact,
+        } => {
+            let knobs = Knobs {
+                depth: *depth,
+                budget: *budget,
+                compact: *compact,
+            };
+            state.handler.blast(engine, stale, symbol, knobs)
         }
-        Op::DiffImpact { base, depth } => {
+        Op::DiffImpact {
+            base,
+            depth,
+            budget,
+            compact,
+        } => {
+            let knobs = Knobs {
+                depth: *depth,
+                budget: *budget,
+                compact: *compact,
+            };
             state
                 .handler
-                .diff_impact(engine, base.as_deref(), depth.unwrap_or(DEFAULT_DEPTH))
+                .diff_impact(engine, stale, base.as_deref(), knobs)
         }
         Op::Nudge { paths } => nudge(engine, paths),
         Op::Shutdown => {

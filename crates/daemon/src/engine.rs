@@ -54,6 +54,7 @@ pub struct Engine {
     pub fresh: Freshness,
     adj: RwLock<Adjacency>,
     hashes: Mutex<HashMap<String, [u8; 32]>>,
+    failures: Mutex<HashSet<String>>,
     write: Mutex<()>,
     ignore: ignore::gitignore::Gitignore,
 }
@@ -70,6 +71,7 @@ impl Engine {
             fresh: Freshness::default(),
             adj: RwLock::new(Adjacency::default()),
             hashes: Mutex::new(HashMap::new()),
+            failures: Mutex::new(HashSet::new()),
             write: Mutex::new(()),
             ignore,
         })
@@ -148,6 +150,7 @@ impl Engine {
             }
             self.store.replace_file(f)?;
             hashes.insert(f.path.clone(), f.content_hash);
+            self.note_parse(&f.path, f.parse_ok);
             stats.files_written += 1;
         }
         let live: HashSet<&str> = facts.iter().map(|f| f.path.as_str()).collect();
@@ -155,6 +158,7 @@ impl Engine {
             if !live.contains(path.as_str()) {
                 self.store.remove_file(&path)?;
                 hashes.remove(&path);
+                self.failures.lock().unwrap().remove(&path);
                 stats.files_removed += 1;
             }
         }
@@ -180,6 +184,7 @@ impl Engine {
             }
             let delta = self.store.remove_file(rel)?;
             self.hashes.lock().unwrap().remove(rel);
+            self.failures.lock().unwrap().remove(rel);
             self.adj.write().unwrap().apply(&self.store, &delta)?;
             return Ok(Change::Removed);
         }
@@ -190,6 +195,7 @@ impl Engine {
         }
         let facts = graphite_extract_python::extract(rel, &source);
         let delta = self.store.replace_file(&facts)?;
+        self.note_parse(rel, facts.parse_ok);
         self.hashes
             .lock()
             .unwrap()
@@ -230,6 +236,20 @@ impl Engine {
             }
         }
         Ok(n)
+    }
+
+    fn note_parse(&self, path: &str, ok: bool) {
+        let mut f = self.failures.lock().unwrap();
+        if ok {
+            f.remove(path);
+        } else {
+            f.insert(path.to_string());
+        }
+    }
+
+    /// Indexed files whose parse failed; reported in every answer's completeness causes.
+    pub fn parse_failures(&self) -> u32 {
+        self.failures.lock().unwrap().len() as u32
     }
 
     pub fn graph_rev(&self) -> u64 {

@@ -8,6 +8,7 @@ version.workspace = true
 graphite-model.workspace = true
 graphite-store.workspace = true
 graphite-extract-python = { path = "../extract-python" }
+graphite-query = { path = "../query" }
 serde.workspace = true
 serde_json.workspace = true
 blake3.workspace = true

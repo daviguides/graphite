@@ -735,6 +735,7 @@ dependencies = [
  "fs4",
  "graphite-extract-python",
  "graphite-model",
+ "graphite-query",
  "graphite-store",
  "ignore",
  "notify",

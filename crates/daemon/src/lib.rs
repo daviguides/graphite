@@ -12,7 +12,7 @@ pub mod watcher;
 pub use engine::Engine;
 pub use paths::RepoPaths;
 pub use protocol::{Op, Request, Response};
-pub use queries::{BasicQueries, QueryHandler};
+pub use queries::{GraphQueries, Knobs, QueryHandler};
 
 /// Daemon error.
 #[derive(Debug, thiserror::Error)]

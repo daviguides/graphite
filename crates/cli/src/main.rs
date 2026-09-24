@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use graphite_daemon::{client, server, BasicQueries, Op, RepoPaths, Response};
+use graphite_daemon::{client, server, GraphQueries, Op, RepoPaths, Response};
 
 /// How long a command waits for a freshly spawned daemon to finish its initial index.
 const STARTUP_WAIT: Duration = Duration::from_secs(300);
@@ -36,15 +36,16 @@ enum Cmd {
     /// Transitive dependents of a symbol.
     Blast {
         symbol: String,
-        #[arg(long, short)]
-        depth: Option<u32>,
+        #[command(flatten)]
+        knobs: KnobArgs,
     },
     /// Symbols changed vs a git ref and everything that depends on them.
     DiffImpact {
+        /// Git ref to diff against (default HEAD; working tree included).
         #[arg(long)]
         base: Option<String>,
-        #[arg(long, short)]
-        depth: Option<u32>,
+        #[command(flatten)]
+        knobs: KnobArgs,
     },
     /// Tell the daemon these paths changed (used by edit hooks).
     Nudge { paths: Vec<String> },
@@ -53,6 +54,20 @@ enum Cmd {
         #[command(subcommand)]
         cmd: DaemonCmd,
     },
+}
+
+/// Answer-shaping options shared by traversal queries.
+#[derive(clap::Args, Clone, Copy)]
+struct KnobArgs {
+    /// Max dependency depth (default 3).
+    #[arg(long, short)]
+    depth: Option<u32>,
+    /// Token budget; detail degrades (full → summary → by file → by directory) to fit.
+    #[arg(long)]
+    budget: Option<usize>,
+    /// Skip inline source for dependents.
+    #[arg(long)]
+    compact: bool,
 }
 
 #[derive(Subcommand)]
@@ -90,7 +105,7 @@ fn run(cli: &Cli, paths: &RepoPaths) -> Result<ExitCode, String> {
         Cmd::Daemon {
             cmd: DaemonCmd::Run,
         } => {
-            server::run(paths.clone(), Box::new(BasicQueries)).map_err(|e| e.to_string())?;
+            server::run(paths.clone(), Box::new(GraphQueries)).map_err(|e| e.to_string())?;
             return Ok(ExitCode::SUCCESS);
         }
         Cmd::Daemon {
@@ -117,13 +132,17 @@ fn run(cli: &Cli, paths: &RepoPaths) -> Result<ExitCode, String> {
         Cmd::Lookup { symbol } => Op::Lookup {
             symbol: symbol.clone(),
         },
-        Cmd::Blast { symbol, depth } => Op::Blast {
+        Cmd::Blast { symbol, knobs } => Op::Blast {
             symbol: symbol.clone(),
-            depth: *depth,
+            depth: knobs.depth,
+            budget: knobs.budget,
+            compact: knobs.compact.then_some(true),
         },
-        Cmd::DiffImpact { base, depth } => Op::DiffImpact {
+        Cmd::DiffImpact { base, knobs } => Op::DiffImpact {
             base: base.clone(),
-            depth: *depth,
+            depth: knobs.depth,
+            budget: knobs.budget,
+            compact: knobs.compact.then_some(true),
         },
         Cmd::Nudge { paths: p } => Op::Nudge { paths: p.clone() },
     };

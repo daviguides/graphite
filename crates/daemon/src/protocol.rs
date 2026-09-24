@@ -14,11 +14,23 @@ pub enum Op {
     },
     Blast {
         symbol: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         depth: Option<u32>,
+        /// Token budget for the answer; tiers degrade to fit it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        budget: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compact: Option<bool>,
     },
     DiffImpact {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         base: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         depth: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        budget: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        compact: Option<bool>,
     },
     /// Hooks call this after an edit so the next query sees it.
     Nudge {
@@ -79,7 +91,9 @@ mod tests {
             r.op,
             Op::Blast {
                 symbol: "a.f".into(),
-                depth: Some(3)
+                depth: Some(3),
+                budget: None,
+                compact: None,
             }
         );
         let s = serde_json::to_string(&Request { op: Op::Status }).unwrap();

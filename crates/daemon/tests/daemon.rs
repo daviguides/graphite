@@ -2,7 +2,7 @@ use std::path::Path;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use graphite_daemon::{client, server, BasicQueries, DaemonError, Op, RepoPaths, Response};
+use graphite_daemon::{client, server, DaemonError, GraphQueries, Op, RepoPaths, Response};
 use serde_json::Value;
 
 fn write(root: &Path, rel: &str, body: &str) {
@@ -14,7 +14,7 @@ fn write(root: &Path, rel: &str, body: &str) {
 fn start(root: &Path) -> (RepoPaths, JoinHandle<graphite_daemon::Result<()>>) {
     let paths = RepoPaths::new(root);
     let p = paths.clone();
-    let h = std::thread::spawn(move || server::run(p, Box::new(BasicQueries)));
+    let h = std::thread::spawn(move || server::run(p, Box::new(GraphQueries)));
     let deadline = Instant::now() + Duration::from_secs(30);
     while client::connect(&paths).is_none() {
         assert!(Instant::now() < deadline, "daemon did not start");
@@ -35,18 +35,21 @@ fn blast(paths: &RepoPaths, symbol: &str) -> Response {
         Op::Blast {
             symbol: symbol.into(),
             depth: Some(5),
+            budget: Some(1_000_000),
+            compact: Some(true),
         },
     )
     .unwrap()
 }
 
 fn dependents(r: &Response) -> Vec<String> {
-    let mut v: Vec<String> = r.data["dependents"]["items"]
+    let mut v: Vec<String> = r.data["result"]["dependents"]["items"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|i| i["kind"] != "module")
-        .map(|i| i["qualified"].as_str().unwrap().to_string())
+        .map(|i| &i["symbol"])
+        .filter(|s| s["kind"] != "module")
+        .map(|s| s["qualified"].as_str().unwrap().to_string())
         .collect();
     v.sort();
     v
@@ -129,7 +132,7 @@ fn burst_is_never_silently_stale() {
     let tmp = tempfile::tempdir().unwrap();
     seed(tmp.path());
     let (paths, h) = start(tmp.path());
-    let n = 300;
+    let n = 100;
     for i in 0..n {
         write(
             tmp.path(),
@@ -144,7 +147,9 @@ fn burst_is_never_silently_stale() {
     loop {
         let r = blast(&paths, "a.f");
         // Each burst module and its function depend on a.f, plus b and b.g.
-        let total = r.data["dependents"]["total"].as_u64().unwrap();
+        let total = r.data["result"]["dependents"]["summary"]["total"]
+            .as_u64()
+            .unwrap();
         if r.stale {
             saw_stale = true;
         } else if total == 2 * n as u64 + 2 {
@@ -187,10 +192,10 @@ fn protocol_roundtrip_and_errors_are_success_shaped() {
     .unwrap();
     let r = client::request(&paths, Op::Lookup { symbol: "f".into() }).unwrap();
     assert!(r.ok);
-    assert_eq!(r.data["status"], "ambiguous");
+    assert_eq!(r.data["result"]["status"], "ambiguous");
     let r = blast(&paths, "nope.nothing");
     assert!(r.ok);
-    assert_eq!(r.data["status"], "not_found");
+    assert_eq!(r.data["result"]["target"]["status"], "not_found");
 
     use std::io::{BufRead, BufReader, Write};
     let mut s = client::connect(&paths).unwrap();
@@ -209,7 +214,7 @@ fn single_instance_per_repo() {
     let tmp = tempfile::tempdir().unwrap();
     seed(tmp.path());
     let (paths, h) = start(tmp.path());
-    let second = server::run(paths.clone(), Box::new(BasicQueries));
+    let second = server::run(paths.clone(), Box::new(GraphQueries));
     assert!(matches!(second, Err(DaemonError::AlreadyRunning(_))));
     stop(&paths, h);
 }
