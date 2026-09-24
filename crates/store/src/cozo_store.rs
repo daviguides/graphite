@@ -1,6 +1,6 @@
 //! CozoDB (mnestic fork, RocksDB backend) implementation of `GraphStore`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -27,6 +27,10 @@ const SCHEMA: &[(&str, &str)] = &[
     ("symbol:by_name", "::index create symbol:by_name {name, id}"),
     ("symbol:by_parent", "::index create symbol:by_parent {parent, id}"),
     (
+        "symbol:cov",
+        "::index create symbol:cov {name, lang, kind, qualified, path, id}",
+    ),
+    (
         "raw_edge",
         ":create raw_edge {path: String, idx: Int => lang: String, src: String, kind: String, site_line: Int, \
          dst_id: String?, name: String?, key_name: String?, qualifier: String?, import_path: String?, prov: String}",
@@ -35,6 +39,12 @@ const SCHEMA: &[(&str, &str)] = &[
     ("raw_edge:by_dst", "::index create raw_edge:by_dst {dst_id, path, idx}"),
     ("raw_edge:by_src", "::index create raw_edge:by_src {src, path, idx}"),
     ("raw_edge:by_qual", "::index create raw_edge:by_qual {qualifier, path, idx}"),
+    ("raw_edge:by_kind", "::index create raw_edge:by_kind {kind, path, idx}"),
+    (
+        "imp_head",
+        ":create imp_head {path: String, idx: Int => head: String}",
+    ),
+    ("imp_head:by_head", "::index create imp_head:by_head {head, path, idx}"),
     ("meta", ":create meta {k: String => v: Int}"),
 ];
 
@@ -47,6 +57,7 @@ const RESOLVE: &str = r#"
 sep[lang, s] <- $sep
 compat[ek, sk] <- $compat
 selfish[q] <- $selfish
+builtin_method[lang, n] <- $builtin_methods
 special[n] <- [['<module>'], ['*'], ['<dynamic>']]
 modlike[n] <- [['<module>'], ['*']]
 
@@ -59,6 +70,10 @@ open[path, idx, src, kind, name, key, qual, imp, lang] :=
 internal[path, idx] := open[path, idx, _, _, _, _, _, imp, _], is_null(imp)
 internal[path, idx] := open[path, idx, _, _, _, _, _, imp, _], !is_null(imp),
     !starts_with(imp, '<external>:')
+repo_head[path, idx] := open[path, idx, _, _, _, _, _, imp, lang], internal[path, idx], !is_null(imp),
+    head = regex_extract_first(imp, '^[^.:]+'), *symbol:cov{name: head, lang, kind: mk}, mk in ['module']
+guessable[path, idx] := open[path, idx, _, _, _, _, _, imp, _], is_null(imp)
+guessable[path, idx] := repo_head[path, idx]
 
 c[path, idx, tier, d, dpath, depth, n] := e[path, idx, _, _, _, _, _, _, _, _, _, _],
     tier = 'none', d = null, dpath = null, depth = 0, n = 0
@@ -66,52 +81,71 @@ c[path, idx, tier, d, dpath, depth, n] := e[path, idx, _, _, _, _, _, _, _, _, _
 c[path, idx, tier, d, dpath, depth, n] := e[path, idx, _, _, _, d, _, _, _, _, _, _], !is_null(d),
     *symbol{id: d, path: dpath}, tier = 'direct', depth = 0, n = 1
 
-imp_hit[path, idx, d, dpath, sk, nm] := open[path, idx, _, kind, nm, key, _, imp, lang], !is_null(imp),
-    internal[path, idx], sep[lang, s], *symbol:by_name{name: key, id: d},
-    *symbol{id: d, lang, kind: sk, qualified: q, path: dpath}, compat[kind, sk],
+ikey[key, lang, kind, imp] := open[path, idx, _, kind, _, key, _, imp, lang], !is_null(imp),
+    internal[path, idx]
+icand[key, lang, kind, imp, d, dpath, sk] := ikey[key, lang, kind, imp], sep[lang, s],
+    *symbol:cov{name: key, lang, kind: sk, qualified: q, path: dpath, id: d}, compat[kind, sk],
     or(q == imp, ends_with(q, concat(s, imp)))
+imp_hit[path, idx, d, dpath, sk, nm] := open[path, idx, _, kind, nm, key, _, imp, lang], !is_null(imp),
+    internal[path, idx], icand[key, lang, kind, imp, d, dpath, sk]
 c[path, idx, tier, d, dpath, depth, n] := imp_hit[path, idx, d, dpath, sk, nm], modlike[nm],
-    sk == 'module', tier = 'import', depth = 0, n = 1
+    sk in ['module'], tier = 'import', depth = 0, n = 1
 c[path, idx, tier, d, dpath, depth, n] := imp_hit[path, idx, d, dpath, _, nm], not modlike[nm],
     tier = 'import', depth = 0, n = 1
 
 need[s] := open[_, _, s, _, _, _, qual, imp, _], is_null(imp), selfish[qual]
 need[p] := need[x], *symbol{id: x, parent: p}, !is_null(p)
-cls_of[x, k] := need[x], *symbol{id: x, parent: k}, !is_null(k), *symbol{id: k, kind: 'class'}
-cls_of[x, k] := need[x], *symbol{id: x, parent: p}, !is_null(p), *symbol{id: p, kind: pk},
-    pk != 'class', cls_of[p, k]
+par[x, p] := need[x], *symbol{id: x, parent: p}, !is_null(p)
+parent_of[k] := par[_, k]
+klass[k] := parent_of[k], *symbol{id: k, kind: kk}, kk in ['class']
+cls_of[x, k] := par[x, k], klass[k]
+cls_of[x, k] := par[x, p], not klass[p], cls_of[p, k]
 root[k] := cls_of[_, k]
-base[k, b] := *raw_edge:by_src{src: k, path, idx}, *raw_edge{path, idx, kind: 'inherits', dst_id: b},
-    !is_null(b), *symbol{id: b}
-base[k, b] := *raw_edge:by_src{src: k, path, idx},
-    *raw_edge{path, idx, kind: 'inherits', dst_id, key_name: key, import_path: imp, lang},
+walk[x] := root[_], x = 1
+inh[k, path, idx] := walk[1], *raw_edge:by_kind{kind: 'inherits', path, idx}, *raw_edge{path, idx, src: k}
+base_e[k, path, idx, b] := inh[k, path, idx], *raw_edge{path, idx, dst_id: b}, !is_null(b), *symbol{id: b}
+base_e[k, path, idx, b] := inh[k, path, idx], *raw_edge{path, idx, dst_id, key_name: key, import_path: imp, lang},
     is_null(dst_id), !is_null(imp), !starts_with(imp, '<external>:'), sep[lang, s],
-    *symbol:by_name{name: key, id: b}, *symbol{id: b, kind: 'class', qualified: q},
+    *symbol:cov{name: key, lang, kind: bk, qualified: q, id: b}, bk in ['class'],
     or(q == imp, ends_with(q, concat(s, imp)))
+base[k, b] := base_e[k, _, _, b]
+base_hit[path, idx] := base_e[_, path, idx, _]
+ext_base[k] := inh[k, path, idx], *raw_edge{path, idx, dst_id}, is_null(dst_id), not base_hit[path, idx]
 anc[k, a, min(d)] := root[k], base[k, a], d = 1
 anc[k, a, min(d)] := anc[k, m, d0], d0 < 32, base[m, a], d = d0 + 1
+ext_chain[k] := root[k], ext_base[k]
+ext_chain[k] := anc[k, a, _], ext_base[a]
+ext_self[path, idx] := open[path, idx, src, _, _, _, qual, imp, _], is_null(imp), selfish[qual],
+    cls_of[src, k], ext_chain[k]
 c[path, idx, tier, d, dpath, depth, n] := open[path, idx, src, kind, name, _, qual, imp, _],
     is_null(imp), selfish[qual], cls_of[src, k], anc[k, a, depth],
-    *symbol:by_parent{parent: a, id: d}, *symbol{id: d, name, kind: sk, path: dpath}, compat[kind, sk],
+    *symbol:by_parent{parent: a, id: d}, *symbol{id: d, name: dn, kind: sk, path: dpath}, dn == name,
+    compat[kind, sk],
     tier = 'inherit', n = 1
 
+qkey[name, qual, lang, kind] := open[_, _, _, kind, name, _, qual, imp, lang], is_null(imp),
+    !is_null(qual), not selfish[qual], not special[name]
+qcand[name, qual, lang, kind, d, dpath] := qkey[name, qual, lang, kind], sep[lang, s],
+    suffix = concat(s, qual, s, name), *symbol:cov{name, lang, kind: sk, qualified: q, path: dpath, id: d},
+    compat[kind, sk], ends_with(q, suffix)
 c[path, idx, tier, d, dpath, depth, n] := open[path, idx, _, kind, name, _, qual, imp, lang],
-    is_null(imp), !is_null(qual), not selfish[qual], not special[name], sep[lang, s],
-    suffix = concat(s, qual, s, name), *symbol:by_name{name, id: d},
-    *symbol{id: d, lang, kind: sk, qualified: q, path: dpath}, compat[kind, sk], ends_with(q, suffix),
+    is_null(imp), !is_null(qual), qcand[name, qual, lang, kind, d, dpath],
     tier = 'qual', depth = 0, n = 1
 
-name_hit[path, idx, d] := open[path, idx, _, kind, name, _, qual, _, lang], internal[path, idx],
-    not special[name], is_null(qual), *symbol:by_name{name, id: d}, *symbol{id: d, lang, kind: sk},
-    compat[kind, sk]
-name_hit[path, idx, d] := open[path, idx, _, _, name, _, qual, _, lang], internal[path, idx],
-    not special[name], !is_null(qual), *symbol:by_name{name, id: d},
-    *symbol{id: d, lang, kind: 'method'}
-n_name[path, idx, count(d)] := name_hit[path, idx, d]
-c[path, idx, tier, d, dpath, depth, n] := name_hit[path, idx, d], n_name[path, idx, 1],
-    *symbol{id: d, path: dpath}, tier = 'name', depth = 0, n = 1
-c[path, idx, tier, d, dpath, depth, n] := n_name[path, idx, n], n > 1, tier = 'name', d = null,
-    dpath = null, depth = 0
+nkey[name, lang, kind] := named[_, _, name, lang, kind]
+ncand[name, lang, kind, d, dpath] := nkey[name, lang, kind],
+    *symbol:cov{name, lang, kind: sk, path: dpath, id: d}, compat[kind, sk]
+ncount[name, lang, kind, count(d)] := ncand[name, lang, kind, d, _]
+named[path, idx, name, lang, kind] := open[path, idx, _, kind, name, _, _, _, lang], guessable[path, idx],
+    not special[name], not ext_self[path, idx]
+risky[path, idx] := open[path, idx, _, _, name, _, qual, imp, lang], is_null(imp), !is_null(qual),
+    not selfish[qual], builtin_method[lang, name]
+c[path, idx, tier, d, dpath, depth, n] := named[path, idx, name, lang, kind], not risky[path, idx],
+    ncount[name, lang, kind, 1], ncand[name, lang, kind, d, dpath], tier = 'name', depth = 0, n = 1
+c[path, idx, tier, d, dpath, depth, n] := named[path, idx, name, lang, kind], not risky[path, idx],
+    ncount[name, lang, kind, n], n > 1, tier = 'name', d = null, dpath = null, depth = 0
+c[path, idx, tier, d, dpath, depth, n] := named[path, idx, name, lang, kind], risky[path, idx],
+    ncount[name, lang, kind, m], n = m + 1, tier = 'name', d = null, dpath = null, depth = 0
 
 ?[path, idx, src, kind, line, prov, tier, d, dpath, depth, n] := c[path, idx, tier, d, dpath, depth, n],
     e[path, idx, src, kind, line, _, _, _, _, _, prov, _]
@@ -151,13 +185,148 @@ fn selfish_rows() -> DataValue {
     list(SELF_RECEIVERS.iter().map(|q| list(vec![s(q)])).collect())
 }
 
+/// Methods of builtin/stdlib types. An untyped `obj.m()` with one of these names is far more often the
+/// builtin than the lone repo method of that name, so it is kept ambiguous instead of name-guessed.
+const PY_BUILTIN_METHODS: &[&str] = &[
+    "get",
+    "items",
+    "keys",
+    "values",
+    "update",
+    "pop",
+    "popitem",
+    "setdefault",
+    "copy",
+    "clear",
+    "append",
+    "extend",
+    "insert",
+    "remove",
+    "sort",
+    "reverse",
+    "index",
+    "count",
+    "split",
+    "rsplit",
+    "join",
+    "strip",
+    "lstrip",
+    "rstrip",
+    "replace",
+    "format",
+    "startswith",
+    "endswith",
+    "lower",
+    "upper",
+    "title",
+    "capitalize",
+    "encode",
+    "decode",
+    "find",
+    "rfind",
+    "splitlines",
+    "partition",
+    "rpartition",
+    "zfill",
+    "isdigit",
+    "isalpha",
+    "add",
+    "discard",
+    "union",
+    "intersection",
+    "difference",
+    "issubset",
+    "read",
+    "write",
+    "close",
+    "readline",
+    "readlines",
+    "seek",
+    "tell",
+    "flush",
+    "search",
+    "match",
+    "fullmatch",
+    "sub",
+    "findall",
+    "finditer",
+    "group",
+    "groups",
+    "post",
+    "put",
+    "patch",
+    "delete",
+    "head",
+    "json",
+    "exists",
+    "mkdir",
+    "glob",
+    "rglob",
+    "iterdir",
+    "is_file",
+    "is_dir",
+    "open",
+    "resolve",
+    "unlink",
+    "rename",
+    "read_text",
+    "write_text",
+    "read_bytes",
+    "write_bytes",
+    "cancel",
+    "result",
+    "done",
+    "wait",
+    "set",
+    "is_set",
+    "acquire",
+    "release",
+    "put_nowait",
+    "get_nowait",
+    "total_seconds",
+    "isoformat",
+    "strftime",
+    "timestamp",
+    "astimezone",
+    "hexdigest",
+    "digest",
+];
+
+fn builtin_method_rows() -> DataValue {
+    list(
+        PY_BUILTIN_METHODS
+            .iter()
+            .map(|m| list(vec![s(Lang::Python.as_str()), s(m)]))
+            .collect(),
+    )
+}
+
 fn params(pairs: Vec<(&str, DataValue)>) -> BTreeMap<String, DataValue> {
     pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
 }
 
-fn touches_classes(facts: &FileFacts) -> bool {
-    facts.symbols.iter().any(|s| s.kind == SymbolKind::Class)
-        || facts.edges.iter().any(|e| e.kind == EdgeKind::Inherits)
+/// Resolution-relevant identity of a symbol: if none of these change, no other file's edge can re-resolve.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SymSig {
+    id: String,
+    name: String,
+    qualified: String,
+    kind: String,
+    lang: String,
+    parent: Option<String>,
+}
+
+impl SymSig {
+    fn of(sym: &Symbol) -> Self {
+        SymSig {
+            id: sym.id.to_hex(),
+            name: sym.name.clone(),
+            qualified: sym.qualified.clone(),
+            kind: sym.kind.as_str().to_string(),
+            lang: sym.lang.as_str().to_string(),
+            parent: sym.parent.map(|p| p.to_hex()),
+        }
+    }
 }
 
 /// CozoDB-backed store. Single writer (serialized by a mutex), concurrent readers.
@@ -220,6 +389,7 @@ impl CozoStore {
         p.insert("sep".into(), sep_rows());
         p.insert("compat".into(), compat_rows());
         p.insert("selfish".into(), selfish_rows());
+        p.insert("builtin_methods".into(), builtin_method_rows());
         let script = format!("{todo}\n{RESOLVE}");
         let rows = self.run(&script, p, false)?;
         rows::select(&rows.rows)
@@ -234,41 +404,72 @@ impl CozoStore {
     fn write_file(&self, path: &str, facts: Option<&FileFacts>) -> Result<WriteDelta> {
         let _guard = self.write_lock.lock().unwrap_or_else(|p| p.into_inner());
 
+        // Only symbols whose resolution-relevant fields changed can change other files' edges.
         let old = self.run(
-            "?[id, name, kind] := *symbol:by_path{path: $p, id}, *symbol{id, name, kind}",
+            "?[id, name, qualified, kind, lang, parent] := *symbol:by_path{path: $p, id}, \
+             *symbol{id, name, qualified, kind, lang, parent}",
             params(vec![("p", s(path))]),
             false,
         )?;
         let old_edges = self.run(
-            "?[idx, kind] := *raw_edge{path: $p, idx, kind}",
+            "?[idx, kind, src, dst_id, key_name, qualifier, import_path] := \
+             *raw_edge{path: $p, idx, kind, src, dst_id, key_name, qualifier, import_path}",
             params(vec![("p", s(path))]),
             false,
         )?;
 
-        let mut names: BTreeSet<String> = BTreeSet::new();
-        let mut ids: BTreeSet<SymbolId> = BTreeSet::new();
-        let mut classes = false;
+        let mut old_syms: BTreeSet<SymSig> = BTreeSet::new();
         for r in &old.rows {
-            ids.insert(get_id(&r[0], "id")?);
-            names.insert(get_str(&r[1], "name")?.to_string());
-            classes |= get_str(&r[2], "kind")? == SymbolKind::Class.as_str();
+            old_syms.insert(SymSig {
+                id: get_str(&r[0], "id")?.to_string(),
+                name: get_str(&r[1], "name")?.to_string(),
+                qualified: get_str(&r[2], "qualified")?.to_string(),
+                kind: get_str(&r[3], "kind")?.to_string(),
+                lang: get_str(&r[4], "lang")?.to_string(),
+                parent: rows::get_opt_str(&r[5], "parent")?.map(str::to_string),
+            });
         }
+        let mut old_inherits: BTreeSet<Vec<Option<String>>> = BTreeSet::new();
         for r in &old_edges.rows {
-            classes |= get_str(&r[1], "kind")? == EdgeKind::Inherits.as_str();
-        }
-        if let Some(f) = facts {
-            for sym in &f.symbols {
-                ids.insert(sym.id);
-                names.insert(sym.name.clone());
+            if get_str(&r[1], "kind")? == EdgeKind::Inherits.as_str() {
+                old_inherits.insert(
+                    r[2..]
+                        .iter()
+                        .map(|v| rows::get_opt_str(v, "inherits").map(|o| o.map(str::to_string)))
+                        .collect::<Result<_>>()?,
+                );
             }
-            classes |= touches_classes(f);
+        }
+        let (new_syms, new_inherits) = match facts {
+            Some(f) => (
+                f.symbols.iter().map(SymSig::of).collect(),
+                f.edges
+                    .iter()
+                    .filter(|e| e.kind == EdgeKind::Inherits)
+                    .map(|e| rows::inherits_sig(f, e))
+                    .collect(),
+            ),
+            None => (BTreeSet::new(), BTreeSet::new()),
+        };
+
+        let changed: Vec<&SymSig> = old_syms.symmetric_difference(&new_syms).collect();
+        let names: BTreeSet<String> = changed.iter().map(|c| c.name.clone()).collect();
+        let classes = changed.iter().any(|c| c.kind == SymbolKind::Class.as_str())
+            || old_inherits != new_inherits;
+        let mut ids: BTreeSet<SymbolId> = BTreeSet::new();
+        for sig in old_syms.iter().chain(new_syms.iter()) {
+            ids.insert(
+                SymbolId::from_hex(&sig.id)
+                    .ok_or_else(|| StoreError::Corrupt(format!("id {}", sig.id)))?,
+            );
         }
 
         let rev = self.rev.load(Ordering::SeqCst) + 1;
         let mut script = String::from(
             "{?[id] := *symbol:by_path{path: $p, id} :rm symbol {id}}\n\
-             {?[path, idx] := *raw_edge{path, idx}, path = $p :rm raw_edge {path, idx}}\n\
-             {?[path] := *file{path}, path = $p :rm file {path}}\n\
+             {?[path, idx] := path = $p, *raw_edge{path, idx} :rm raw_edge {path, idx}}\n\
+             {?[path, idx] := path = $p, *imp_head{path, idx} :rm imp_head {path, idx}}\n\
+             {?[path] <- [[$p]] :rm file {path}}\n\
              {?[k, v] <- [['rev', $rev]] :put meta {k => v}}\n",
         );
         let mut p = vec![("p", s(path)), ("rev", i(rev as i64))];
@@ -308,6 +509,19 @@ impl CozoStore {
                             .collect(),
                     ),
                 ));
+            }
+            let heads: Vec<DataValue> = f
+                .edges
+                .iter()
+                .enumerate()
+                .filter_map(|(n, e)| {
+                    import_head(&e.dst, f.lang).map(|h| list(vec![s(&f.path), i(n as i64), s(&h)]))
+                })
+                .collect();
+            if !heads.is_empty() {
+                script
+                    .push_str("{?[path, idx, head] <- $heads :put imp_head {path, idx => head}}\n");
+                p.push(("heads", list(heads)));
             }
         }
         self.run(&script, params(p), true)?;
@@ -379,6 +593,57 @@ impl GraphStore for CozoStore {
         self.query_symbols(&script, vec![("p", s(path))])
     }
 
+    fn symbols(&self, ids: &[SymbolId]) -> Result<Vec<Symbol>> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let script = format!(
+            "?[{c}] := id in $ids, *symbol{{{c}}}",
+            c = rows::SYMBOL_COLS
+        );
+        self.query_symbols(
+            &script,
+            vec![("ids", list(ids.iter().map(|d| s(&d.to_hex())).collect()))],
+        )
+    }
+
+    fn file_hashes(&self) -> Result<HashMap<String, [u8; 32]>> {
+        let rows = self.run(
+            "?[path, content_hash] := *file{path, content_hash}",
+            BTreeMap::new(),
+            false,
+        )?;
+        rows.rows
+            .iter()
+            .map(|r| {
+                let hex = get_str(&r[1], "content_hash")?;
+                let mut hash = [0u8; 32];
+                if hex.len() != 64 {
+                    return Err(StoreError::Corrupt(format!("content_hash {hex}")));
+                }
+                for (n, byte) in hash.iter_mut().enumerate() {
+                    *byte = u8::from_str_radix(&hex[2 * n..2 * n + 2], 16)
+                        .map_err(|_| StoreError::Corrupt(format!("content_hash {hex}")))?;
+                }
+                Ok((get_str(&r[0], "path")?.to_string(), hash))
+            })
+            .collect()
+    }
+
+    fn name_gaps(&self, name: &str) -> Result<Vec<Resolution>> {
+        let gaps = self.resolve_with(
+            "todo[path, idx] := *raw_edge:by_key{key_name: $n, path, idx}, \
+             *raw_edge{path, idx, import_path: imp}, is_null(imp)\n\
+             todo[path, idx] := *raw_edge:by_key{key_name: $n, path, idx}, \
+             *raw_edge{path, idx, import_path: imp}, !is_null(imp), !starts_with(imp, '<external>:')",
+            vec![("n", s(name))],
+        )?;
+        Ok(gaps
+            .into_iter()
+            .filter(|r| !matches!(r.outcome, crate::Outcome::Resolved { .. }))
+            .collect())
+    }
+
     fn test_symbols(&self) -> Result<Vec<SymbolId>> {
         let rows = self.run(
             "?[id] := *symbol{id, is_test: true}",
@@ -394,9 +659,10 @@ impl GraphStore for CozoStore {
 
     fn resolve_affected(&self, delta: &WriteDelta) -> Result<Vec<Resolution>> {
         let mut todo = String::from(
-            "todo[path, idx] := *raw_edge{path, idx}, path = $p\n\
+            "todo[path, idx] := path = $p, *raw_edge{path, idx}\n\
              todo[path, idx] := n in $names, *raw_edge:by_key{key_name: n, path, idx}\n\
-             todo[path, idx] := d in $ids, *raw_edge:by_dst{dst_id: d, path, idx}\n",
+             todo[path, idx] := d in $ids, *raw_edge:by_dst{dst_id: d, path, idx}\n\
+             todo[path, idx] := h in $names, *imp_head:by_head{head: h, path, idx}\n",
         );
         if delta.touched_classes {
             todo.push_str(
@@ -444,6 +710,24 @@ impl GraphStore for CozoStore {
             vec![("s", s(&id.to_hex()))],
         )
     }
+}
+
+/// First segment of an in-repo import path. Name-guess fallback for import edges depends on a repo
+/// module with that name existing, so writes touching such a module re-resolve these edges.
+fn import_head(dst: &Target, lang: Lang) -> Option<String> {
+    use graphite_model::target::EXTERNAL_PREFIX;
+    let Target::Unresolved {
+        import_path: Some(imp),
+        ..
+    } = dst
+    else {
+        return None;
+    };
+    if imp.starts_with(EXTERNAL_PREFIX) {
+        return None;
+    }
+    let sep = if lang == Lang::Rust { "::" } else { "." };
+    imp.split(sep).next().map(str::to_string)
 }
 
 /// Name an unresolved edge is indexed under: its name, or the module's last segment for module/wildcard targets.

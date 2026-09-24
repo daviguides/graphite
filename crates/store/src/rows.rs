@@ -105,6 +105,25 @@ pub fn parse_symbol(r: &[DataValue]) -> Result<Symbol> {
 pub const EDGE_COLS: &str =
     "path, idx, lang, src, kind, site_line, dst_id, name, key_name, qualifier, import_path, prov";
 
+/// (src, dst_id, key_name, qualifier, import_path) of an inherits edge, as stored; compared across writes.
+pub fn inherits_sig(facts: &FileFacts, e: &RawEdge) -> Vec<Option<String>> {
+    let (dst_id, qualifier, import_path) = match &e.dst {
+        Target::Symbol(id) => (Some(id.to_hex()), None, None),
+        Target::Unresolved {
+            qualifier,
+            import_path,
+            ..
+        } => (None, qualifier.clone(), import_path.clone()),
+    };
+    vec![
+        Some(e.src.to_hex()),
+        dst_id,
+        crate::cozo_store::key_name(&e.dst, facts.lang),
+        qualifier,
+        import_path,
+    ]
+}
+
 pub fn edge_row(facts: &FileFacts, idx: usize, e: &RawEdge) -> DataValue {
     let (dst_id, name, qualifier, import_path) = match &e.dst {
         Target::Symbol(id) => (Some(id.to_hex()), None, None, None),

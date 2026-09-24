@@ -7,6 +7,8 @@ mod rows;
 pub use adjacency::{Adjacency, EdgeSnapshot, DEPENDENCY_KINDS};
 pub use cozo_store::CozoStore;
 
+use std::collections::HashMap;
+
 use graphite_model::{EdgeKind, FileFacts, GraphRev, Provenance, Symbol, SymbolId};
 
 /// Store error.
@@ -89,6 +91,13 @@ pub trait GraphStore: Send + Sync {
     fn symbol(&self, id: SymbolId) -> Result<Option<Symbol>>;
     fn symbols_by_name(&self, name: &str) -> Result<Vec<Symbol>>;
     fn symbols_in_file(&self, path: &str) -> Result<Vec<Symbol>>;
+    /// Batch lookup; unknown ids are skipped, order is unspecified.
+    fn symbols(&self, ids: &[SymbolId]) -> Result<Vec<Symbol>>;
+    /// blake3 content hash of every stored file, so a restart can skip unchanged files.
+    fn file_hashes(&self) -> Result<HashMap<String, [u8; 32]>>;
+    /// Ambiguous or unresolved references named `name`, excluding stdlib/builtin targets: potential
+    /// hidden dependents of any symbol with that name.
+    fn name_gaps(&self, name: &str) -> Result<Vec<Resolution>>;
     fn test_symbols(&self) -> Result<Vec<SymbolId>>;
     /// Every raw edge resolved; used to rebuild the adjacency from scratch.
     fn resolve_all(&self) -> Result<Vec<Resolution>>;
