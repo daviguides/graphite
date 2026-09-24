@@ -86,7 +86,13 @@ impl SymbolKind {
 pub struct SymbolId(pub [u8; 16]);
 
 impl SymbolId {
-    pub fn new(lang: Lang, path: &str, qualified: &str, kind: SymbolKind, overload_index: u32) -> Self {
+    pub fn new(
+        lang: Lang,
+        path: &str,
+        qualified: &str,
+        kind: SymbolKind,
+        overload_index: u32,
+    ) -> Self {
         let mut h = blake3::Hasher::new();
         for part in [lang.as_str(), path, qualified, kind.as_str()] {
             h.update(part.as_bytes());
