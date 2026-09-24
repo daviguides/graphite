@@ -11,6 +11,7 @@ pub fn human(cmd: &str, r: &Response) {
     let d = &r.data;
     match cmd {
         "status" => status(r),
+        "stop" => println!("daemon stopping (rev {})", r.graph_rev),
         "lookup" => {
             header(r);
             lookup(&d["result"]);

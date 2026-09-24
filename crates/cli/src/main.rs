@@ -171,6 +171,9 @@ fn emit(cli: &Cli, resp: Option<&Response>, note: &str) -> Result<ExitCode, Stri
 impl Cli {
     fn cmd_name(&self) -> String {
         match &self.cmd {
+            Cmd::Daemon {
+                cmd: DaemonCmd::Stop,
+            } => "stop",
             Cmd::Init | Cmd::Status | Cmd::Daemon { .. } => "status",
             Cmd::Lookup { .. } => "lookup",
             Cmd::Blast { .. } => "blast",
