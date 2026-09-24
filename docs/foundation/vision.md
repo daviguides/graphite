@@ -2,7 +2,7 @@
 
 ## What
 
-Embedded code-graph engine: a Rust CLI + MCP server that extracts dependency graphs from source code via Tree-sitter, persists them in CozoDB (embedded Datalog database), and serves surgical context to AI agents. Built to make the agent finish tasks faster, act with more confidence, and make fewer mistakes.
+Embedded code-graph engine: a Rust daemon with CLI, MCP and hook clients that extracts dependency graphs from source code via Tree-sitter, persists them in CozoDB (embedded Datalog database), and serves surgical context to AI agents. Built to make the agent finish tasks faster, act with more confidence, and make fewer mistakes.
 
 ## Optimization Targets
 
@@ -28,25 +28,21 @@ These are not balanced equally. Speed of the code assistant's execution is the p
 
 The agent's execution time is dominated by exploration, not action. Graphite eliminates exploration.
 
-Tree-sitter extracts structure. CozoDB stores it as a persistent indexed graph with recursive Datalog queries in microseconds. A background watcher keeps the graph always hot — no rebuild in the query path. MCP tools return verbatim source code with dependency context — the agent gets the answer AND the code in one call, not a pointer it has to follow.
+Tree-sitter extracts structure. A per-repo daemon keeps the graph always hot: CozoDB holds the facts and rules, an in-memory adjacency answers traversals in microseconds, and the watcher indexes eagerly — no rebuild in the query path. Responses return verbatim source code with dependency context — the agent gets the answer AND the code in one call, through the CLI it already uses or MCP, and hooks deliver the answer at the moment it would otherwise grep or edit blind.
 
 The agent starts every session already knowing the architecture. It acts immediately, with confidence, and with full visibility of what its changes will affect.
 
 ## Scope (v1)
 
-- Tree-sitter parsing for Rust, TypeScript, Python, Go (extensible to 20+ languages)
-- Symbol extraction: functions, structs/classes, traits/interfaces, imports, exports
-- Dependency graph: who-calls-who, who-imports-who, type references
-- Edge confidence tagging (EXTRACTED vs INFERRED)
-- CozoDB persistence: embedded SQLite backend
-- Recursive Datalog queries: blast radius, transitive closure, shortest path, community detection
-- Background file watcher: graph always hot, zero query-time sync cost
-- Content-hash extraction cache (BLAKE3): only re-parse files whose bytes changed
-- MCP server with source code in results (verbatim, line-numbered)
-- Consolidated `diff_impact` query: changed files + blast radius + affected tests + source in one call
-- CLI commands: `graphite init`, `graphite serve`, `graphite blast`, `graphite query`
-- Single binary: Tree-sitter, CozoDB, MCP server, file watcher compiled into one executable
-- Runner integration: prompt injection + mid-session MCP access for orchestrated workflows
+Every feature is placed on the versioned [roadmap in features.md](features.md#roadmap) (v1–v8, each with goal, dependencies and exit criteria; v1 is a proposal pending confirmation). v1 in short:
+
+- Tree-sitter extraction for Rust, TypeScript, Python, Go: symbols, calls, imports, inheritance, references, tests
+- Edge confidence (EXTRACTED / INFERRED / AMBIGUOUS) with provenance, derived by rule
+- One daemon per repo: CozoDB (`mnestic`, RocksDB) facts + in-memory adjacency, eager watcher, freshness barrier, `graph_rev` watermark
+- Queries: `diff_impact`, `context`, blast radius, search — source inline, honest disclosure, risk verdict
+- CLI via Bash as primary agent surface, MCP shim secondary, steering hooks (pre-grep answer, pre-edit impact)
+- Runner integration: socket bridge, per-mode prompt injection, targeted tests in VALIDATING
+- Measurement: trace, conversion, turns and wall-clock with vs without Graphite
 
 ## Not a Target
 

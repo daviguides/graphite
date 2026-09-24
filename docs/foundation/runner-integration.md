@@ -21,12 +21,13 @@ Today:
 
 ## How Graphite Changes This
 
-Two integration layers — upfront injection AND mid-session access:
+Two integration layers — upfront injection AND mid-session access — plus steering hooks, all served by the per-repo Graphite daemon (see [architecture.md](architecture.md) §6):
 
 ```
 With Graphite:
-  Layer 1 (upfront): compose_prompt() → inject Graphite context map + source code
-  Layer 2 (mid-session): SDK has Graphite MCP as tool source → agent queries on-demand
+  Layer 1 (upfront): runner bridge → daemon socket → inject context map + source code
+  Layer 2 (mid-session): agent calls `graphite <cmd> --json` via Bash (primary) or MCP (secondary)
+  Hooks: pre-grep answers with the graph; pre-edit injects impact + covering tests
 
   Result:
   SDK session starts → agent already has dependency graph + verbatim source
@@ -41,21 +42,39 @@ With Graphite:
 
 Runner pre-computes Graphite context and injects into prompt. Agent starts with full picture. Reduces turns at session start.
 
-### Layer 2: MCP Tool Access (mid-session queries)
+### Layer 2: Mid-session queries (CLI first, MCP second)
 
-Runner registers Graphite MCP server as tool source for SDK session. Agent can query blast radius, dependents, communities mid-execution — without runner composing anything.
+The agent queries Graphite during a mode without runner composing anything. **CLI via Bash is the primary surface**: in Claude Code, MCP tools are deferred (a ToolSearch load is needed before first use) while Bash is always live, and code-graph-mcp measured its conversions coming through the CLI. The prompt and the skill file lead with CLI commands:
+
+```bash
+graphite diff-impact --json
+graphite context auth::validate_token --json
+graphite blast auth::validate_token --depth 3 --json
+```
+
+**MCP is secondary** — registered for hosts that don't defer tools. It is a thin shim over the same daemon, so answers are identical:
 
 ```python
-# In sdk_wrapper.py — register Graphite MCP alongside gradient plugins
+# In sdk_wrapper.py — register the Graphite MCP shim alongside gradient plugins
 sdk = SDKWrapper(
     cwd=cwd,
     plugins=plugins,
-    mcp_servers=[{"name": "graphite", "command": "graphite", "args": ["serve", "--mcp"]}],
+    mcp_servers=[{"name": "graphite", "command": "graphite", "args": ["mcp"]}],
     # ...
 )
 ```
 
-Layer 1 gives speed (zero turns to get context). Layer 2 gives assertiveness (agent queries exactly what it needs mid-task).
+### Steering hooks
+
+Hint-only steering ("prefer the graph tool") measured ~0% uptake in code-graph-mcp. What converts is answering:
+
+- **Pre-grep (PreToolUse on Bash/Grep):** block a raw grep for an identifier and return the graph's answer (hits grouped by enclosing symbol) in the deny reason.
+- **Pre-edit (PreToolUse on Edit):** when the edit touches a signature with ≥2 prod callers, inject the impact summary and runnable covering tests.
+- **Post-edit (PostToolUse on Write/Edit):** nudge the daemon with the edited path so the next query sees the edit.
+
+Hooks are registered in the worktree's `settings.json` (plugin `hooks.json` only honors SessionStart), fail open, and hit the daemon socket in milliseconds. SDK sessions launched by runner load project settings (`setting_sources=["project"]`), so the hooks apply there too.
+
+Layer 1 gives speed (zero turns to get context). Layer 2 and hooks give assertiveness and correctness (the agent gets exactly what it needs at the moment it acts).
 
 ## Integration Points by Mode
 
@@ -196,31 +215,33 @@ Runner calls this once per mode, formats per mode's needs.
 
 ## Communication Protocol
 
-### Primary: MCP (when server running)
+### Primary: daemon socket
 
-Runner connects to Graphite MCP server directly. No subprocess overhead.
+The runner bridge talks to the per-repo Graphite daemon over its local unix socket. One hot graph serves every parallel runner task and every agent session in the repo; no process spawn per query. Each response carries `graph_rev` and `stale`, which the bridge records in the session log.
 
 ```python
 # graphite_bridge.py
-import asyncio
-from mcp import ClientSession, StdioServerParameters
+import json
+import socket
 
-async def query_mcp(tool: str, args: dict) -> dict:
-    """Query Graphite via MCP protocol."""
-    server = StdioServerParameters(command="graphite", args=["serve", "--mcp"])
-    async with ClientSession(server) as session:
-        result = await session.call_tool(tool, args)
-        return result
+def query_daemon(sock_path: str, command: str, args: dict) -> dict:
+    """Query the Graphite daemon over its unix socket (newline-delimited JSON)."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.connect(sock_path)
+        s.sendall((json.dumps({"cmd": command, "args": args}) + "\n").encode())
+        return json.loads(s.makefile().readline())
 ```
 
 ### Fallback: CLI subprocess
 
-When MCP server not running (CI, one-off use):
+When no daemon runs (CI, one-off use), the bridge shells out; the CLI then uses probe mode:
 
 ```bash
 graphite diff-impact --json
 graphite blast src/auth/token.rs --json --depth 3
 ```
+
+The bridge can also start the daemon for the worktree (`graphite daemon`) at task start so every mode after that hits a hot graph.
 
 ### Future: PyO3 in-process
 
@@ -237,16 +258,18 @@ impact = db.diff_impact()
 ```
 runner/core/
 ├── graphite_bridge.py     # All Graphite interaction
-│   ├── is_available()     # MCP server running? graphite.db exists?
-│   ├── query_mcp()        # Primary: MCP protocol
-│   ├── query_cli()        # Fallback: subprocess
+│   ├── is_available()     # Daemon socket reachable? graphite installed?
+│   ├── ensure_daemon()    # Start the worktree daemon at task start
+│   ├── query_daemon()     # Primary: unix socket
+│   ├── query_cli()        # Fallback: subprocess (probe mode)
+│   ├── install_hooks()    # Steering hooks in the worktree settings.json
 │   ├── diff_impact()      # Consolidated query for any mode
 │   ├── exploring_context()# Architecture map
 │   ├── researching_context()  # Communities + paths
 │   ├── planning_context()     # Coupling + cycles
 │   ├── implementing_context() # Blast radius + source
 │   ├── targeted_tests()       # Test files for VALIDATING
-│   └── register_mcp()    # Register as SDK tool source (Layer 2)
+│   └── register_mcp()    # Register the MCP shim as SDK tool source (secondary)
 ```
 
 ## Expected Impact
@@ -261,10 +284,12 @@ runner/core/
 | Token spend per task | Baseline | Est. 30-50% reduction |
 | Total task wall-clock | Baseline | Est. 40-60% reduction |
 
+These are hypotheses to be measured by the effectiveness bench (turns and wall-clock with vs without Graphite, see [features.md §10](features.md#10-measurement--observability)).
+
 ## Not Scope (for this integration)
 
 - Runner does NOT depend on Graphite. Optional enhancement only.
 - Graphite does NOT know about runner internals. It exposes generic tools.
-- No changes to runner's workflow definitions, gate system, or SDK wrapper.
+- No changes to runner's workflow definitions or gate system. SDK wrapper change is limited to registering the optional MCP shim.
 - No changes to dao-cli state management.
 - PyO3 bindings are future optimization, not v1.

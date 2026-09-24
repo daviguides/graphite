@@ -2,7 +2,7 @@
 
 > The graph your agent reads before it acts.
 
-Embedded code-graph engine. Rust CLI + MCP server. Tree-sitter extracts, CozoDB stores facts and rules, an in-memory adjacency serves hot traversals.
+Embedded code-graph engine. One Rust daemon per repo; CLI, MCP shim, hooks and runner are its thin clients. Tree-sitter extracts, CozoDB stores facts and rules, an in-memory adjacency serves hot traversals.
 
 ## Storage Decision: Hybrid (benchmarked 2026-09-24)
 
@@ -67,14 +67,21 @@ Source code (any language)
 │  │    blast_radius[x] := depends(x, z), │       │
 │  │                       blast_radius[z] │       │
 │  └──────────────┬───────────────────────┘       │
-│                 │                                │
-│        ┌────────┴────────┐                      │
-│        ▼                 ▼                      │
-│   ┌─────────┐     ┌───────────┐                 │
-│   │  CLI    │     │MCP Server │                 │
-│   │  Human  │     │  Agents   │                 │
-│   └─────────┘     └───────────┘                 │
-└─────────────────────────────────────────────────┘
+│                 │ derived (never written directly)│
+│                 ▼                                │
+│  ┌──────────────────────────────────────┐       │
+│  │  In-memory adjacency (hot traversals) │       │
+│  └──────────────┬───────────────────────┘       │
+│   ONE DAEMON PER REPO — owns all of the above    │
+└─────────────────┼───────────────────────────────┘
+                  │ local unix socket
+     ┌────────────┼──────────────┬──────────────┐
+     ▼            ▼              ▼              ▼
+┌─────────┐ ┌───────────┐ ┌────────────┐ ┌──────────┐
+│  CLI    │ │ MCP shim  │ │   Hooks    │ │  Runner  │
+│ (Bash)  │ │  (stdio)  │ │ grep/edit  │ │  bridge  │
+└─────────┘ └───────────┘ └────────────┘ └──────────┘
+ thin clients — N agent sessions share one hot graph
 ```
 
 ## Optimization Targets
@@ -85,7 +92,7 @@ Graphite is not optimized for ease of setup. It is optimized for making the AI a
 
 Not query latency — total wall-clock time the agent takes to finish a task. Every Read/Grep the agent skips, every turn eliminated, every tool call avoided. The graph exists so the agent acts instead of exploring.
 
-Background file watcher keeps CozoDB hot at all times. MCP queries return in microseconds from an already-indexed graph. No probe, no rebuild in the query path. The agent never waits.
+One daemon per repo indexes eagerly on its watcher thread and keeps the graph hot. Queries from the CLI, MCP shim, hooks and runner hit an already-indexed graph through a local socket. No probe, no rebuild in the query path; at most a short freshness barrier.
 
 ### 2. Assertiveness
 
@@ -186,50 +193,57 @@ path[s, t, n] := path[s, m, n1], *depends[m, t, _], n = n1 + 1, n < 10
     *depends[dep, id, _]
 ```
 
-### 5. MCP Server
+### 5. Agent Surface (CLI first, MCP second, hooks)
 
-Tools exposed to AI agents:
+All surfaces are thin clients of the daemon and share the same handlers, so answers are identical whichever path the agent takes.
 
-| Tool | Input | Output |
+- **CLI via Bash is the primary agent surface.** In Claude Code, MCP tools are deferred (a ToolSearch load is needed before first use) while Bash is always live; code-graph-mcp measured its conversions coming through the CLI. `graphite <cmd> --json`.
+- **MCP shim (stdio) is secondary** — for hosts that don't defer tools and for runner's SDK sessions. Few listed tools (≤5), capability via flags; no `anyOf` in schemas, descriptions ≤200 chars, instructions ≤1.5 KB (measured client limits). A routing bench guards tool descriptions.
+- **Steering hooks** (registered in `settings.json`, fail-open): pre-grep **block and answer** with the graph's result; pre-edit **impact + covering tests** injection; post-edit nudge to the daemon. Hint-only steering measured ~0% uptake.
+
+Core queries (full list and verdicts in [features.md](features.md)):
+
+| Query | Input | Output |
 |------|-------|--------|
-| `blast_radius` | symbol name or file path | list of affected files/symbols with depth |
-| `dependents` | symbol name | who calls/uses this symbol |
-| `dependencies` | symbol name | what this symbol calls/uses |
-| `symbol_search` | query string | matching symbols with file:line |
-| `file_overview` | file path | symbols defined, imports, dependency counts |
-| `path_between` | source, target | shortest dependency path |
-| `hot_symbols` | top_n | most-depended-on symbols (high-impact change targets) |
+| `diff_impact` | working tree / staged / ref | changed symbols → blast radius → covering tests, with source |
+| `context` | symbol (name, disambiguated in response) | signature, source, callers/callees, references, tests |
+| `blast_radius` | symbol, depth (default 3), direction | dependents with depth labels, risk, prod/test split |
+| `search` | name or text | exact → fuzzy matches with retrieval provenance |
 
-Each tool queries CozoDB and returns a compact, token-efficient response.
+Every response follows the contract in [features.md §5](features.md#5-response-contract): source inline, compact/tiered compression, disclosure fields, `epistemic`, risk, `stale` + `graph_rev`.
 
 ### 6. Sync Engine
 
-Two modes: always-hot (server) and on-demand (CLI).
+Two modes: always-hot daemon (primary) and on-demand probe (fallback when no daemon runs).
 
-#### Server mode (primary): background watcher
+#### Daemon mode (primary): one daemon per repo
 
-When the MCP server runs (`graphite serve`), a background thread watches the filesystem and keeps CozoDB current. Queries never pay sync cost.
+Every Claude Code session and every runner task spawns its own MCP process, so a watcher inside the MCP server would mean N watchers racing on one store. Instead, `graphite daemon` runs once per repo and owns CozoDB, the watcher and the in-memory adjacency. The CLI, the MCP shim, hooks and the runner bridge are thin clients over a local unix socket. One hot graph serves N sessions.
 
 ```
-graphite serve
+graphite daemon  (one per repo)
   │
-  ├── thread 1: MCP handler
-  │   └── query CozoDB (microseconds, always fresh)
+  ├── watcher thread (FSEvents / inotify / ReadDirectoryChangesW)
+  │   └── event → seqno++ → mtime+size stamp → BLAKE3 → parse (rayon)
+  │       → ONE atomic CozoDB transaction replacing that file's facts
+  │       → apply same delta to in-memory adjacency → graph_rev++
   │
-  ├── thread 2: file watcher (FSEvents / inotify / ReadDirectoryChangesW)
-  │   └── file changed → content-hash check → tree-sitter parse → update CozoDB
-  │       (incremental: only changed files, only affected edges)
+  ├── socket server (N concurrent clients)
+  │   └── query → freshness barrier → adjacency (traversals) / CozoDB (rules, search)
   │
-  └── CozoDB instance (shared across threads)
-      ├── reads: lock-free, concurrent, from any thread
-      └── writes: serialized by watcher thread, non-blocking for readers
+  ├── background jobs: communities, PageRank (off the query path)
+  │
+  └── safety nets: periodic backstop rescan, unknown events = content change,
+      index_run_in_flight crash marker, stale-file sweep
 ```
 
-The watcher uses content hashes (BLAKE3) to skip files whose bytes haven't changed (rename, touch, save-without-edit). Only files with actual content changes trigger a re-parse. Edge updates are incremental: delete old entries for the changed file, insert new ones. Dependents of changed symbols are not rebuilt — their edges still point to the same symbol IDs.
+**Freshness barrier.** Each query records the watcher seqno at arrival and waits up to ~200 ms for indexing to reach it. If it doesn't, the query answers from the last committed graph with `stale: true`. Every response carries `graph_rev` (a watermark stored in the DB) so the agent and the Observatory know which state answered. The post-edit hook nudges the daemon with the edited path so the agent's own edit is indexed before its next query.
 
-#### CLI mode (fallback): probe + sync
+**Incremental == full.** The watcher replaces exactly one file's facts; derived edges and confidence are recomputed from facts, and the adjacency is derived from the same delta. A fixture test compares incremental results with a full rebuild.
 
-When no server is running, CLI commands probe the filesystem before querying:
+#### CLI probe mode (fallback): no daemon running
+
+For CI and one-off use, CLI commands probe the filesystem before querying:
 
 ```
 graphite blast <symbol>
@@ -239,19 +253,24 @@ graphite blast <symbol>
   └─ query CozoDB
 ```
 
-This adds a few milliseconds per invocation. Acceptable for human-driven CLI use, but the server mode exists because agents make dozens of queries per session and cannot afford per-query overhead.
+This adds per-invocation cost. Acceptable when no daemon runs; agents make dozens of queries per session, which is why the daemon is the primary mode.
 
 ### 7. CLI
 
+Every query command talks to the daemon when one runs, otherwise uses probe mode. `--json` is the agent format.
+
 ```
-graphite init           # Parse entire repo, build initial graph
-graphite sync           # Incremental update (changed files only)
-graphite query <datalog> # Run raw Datalog query
-graphite blast <symbol>  # Shorthand for blast radius
-graphite deps <symbol>   # Direct dependencies
-graphite overview <file> # File summary
-graphite serve           # Start MCP server (stdio or HTTP)
-graphite stats           # Graph stats: files, symbols, edges
+graphite daemon          # Start the per-repo daemon (watcher + socket)
+graphite init            # Parse entire repo, build initial graph
+graphite diff-impact     # Changed symbols → blast radius → covering tests
+graphite context <sym>   # One symbol: source, callers/callees, refs, tests
+graphite blast <sym>     # Blast radius (default depth 3)
+graphite search <text>   # Exact → fuzzy symbol search
+graphite grep <regex>    # Hits grouped by enclosing symbol (used by the grep hook)
+graphite mcp             # MCP stdio shim (thin client of the daemon)
+graphite hooks install   # Register steering hooks in settings.json
+graphite query <datalog> # Raw Datalog (humans / UI)
+graphite stats | health  # Graph stats, parse errors, staleness
 ```
 
 ## Module Map
@@ -269,20 +288,30 @@ graphite/
 │   │   ├── python.rs         # Python extractor
 │   │   └── go.rs             # Go extractor
 │   ├── store/
-│   │   ├── mod.rs            # CozoDB wrapper
-│   │   ├── schema.rs         # Relation definitions
-│   │   └── queries.rs        # Named Datalog queries
+│   │   ├── mod.rs            # GraphStore trait + CozoDB (mnestic, RocksDB) impl
+│   │   ├── schema.rs         # Relation definitions + schema fingerprint
+│   │   └── queries.rs        # Named Datalog queries (rules, search)
+│   ├── graph/
+│   │   ├── adjacency.rs      # In-memory adjacency derived from store facts
+│   │   ├── traverse.rs       # Blast radius, paths, callers/callees (Rust BFS)
+│   │   └── algos.rs          # Communities, PageRank, SCC (background)
+│   ├── daemon/
+│   │   ├── mod.rs            # Per-repo daemon lifecycle
+│   │   ├── socket.rs         # Unix socket server, N concurrent clients
+│   │   ├── freshness.rs      # Seqno barrier, graph_rev watermark
+│   │   └── jobs.rs           # Background jobs
 │   ├── sync/
-│   │   ├── mod.rs            # Sync orchestration
-│   │   ├── watcher.rs        # Background file watcher (FSEvents/inotify)
-│   │   ├── hasher.rs         # BLAKE3 content hashing
-│   │   ├── probe.rs          # CLI fallback: mtime-based staleness check
-│   │   └── incremental.rs    # Incremental parse + edge update
-│   ├── mcp/
-│   │   ├── mod.rs            # MCP server
-│   │   ├── tools.rs          # Tool definitions
-│   │   └── transport.rs      # stdio / HTTP transport
-│   └── types.rs              # Symbol, Dependency, SymbolKind, etc.
+│   │   ├── watcher.rs        # File watcher + safety nets
+│   │   ├── hasher.rs         # mtime/size stamp → BLAKE3 ladder
+│   │   ├── probe.rs          # Fallback when no daemon runs
+│   │   └── incremental.rs    # Atomic per-file fact replacement
+│   ├── query/                # diff_impact, context, blast, search, grep handlers
+│   ├── response/             # Contract: source inline, compression, disclosure, risk
+│   ├── client/
+│   │   ├── cli.rs            # CLI commands (thin client, --json)
+│   │   ├── mcp.rs            # MCP stdio shim (thin client)
+│   │   └── hooks.rs          # pre-grep / pre-edit / post-edit hook entry points
+│   └── types.rs              # Symbol, Edge, Provenance, SymbolKind, etc.
 ├── grammars/                  # Tree-sitter grammar .so files (or compiled in)
 ├── tests/
 │   ├── fixtures/             # Sample repos for testing
@@ -297,9 +326,10 @@ graphite/
 |-----------|------------|
 | Language | Rust |
 | AST parsing | Tree-sitter (C, compiled in) |
-| Graph storage | CozoDB (Rust, embedded, Datalog) |
+| Graph storage | CozoDB via `mnestic` fork (RocksDB backend) + in-memory adjacency |
+| Daemon IPC | Local unix socket |
 | CLI | clap |
-| MCP | rmcp or custom stdio JSON-RPC |
+| MCP | rmcp or custom stdio JSON-RPC (thin shim over the socket) |
 | Serialization | serde + serde_json |
 | File watching | notify (cross-platform FSEvents/inotify/ReadDirectoryChangesW) |
 | Content hashing | blake3 |
@@ -309,11 +339,12 @@ graphite/
 ## Design Principles
 
 1. **Agent speed above all** — every design decision is measured by whether it reduces the agent's total execution time. Setup convenience is secondary.
-2. **Always-hot graph** — background watcher keeps CozoDB current. Zero sync cost in the query path. The agent never waits for a rebuild.
-3. **Source in results** — MCP tools return verbatim source with line numbers alongside graph context. The agent doesn't need a follow-up Read to see the code.
-4. **Confidence signals** — every edge carries a confidence tag (EXTRACTED / INFERRED). The agent knows when to trust the graph and when to verify.
+2. **Always-hot graph, one daemon per repo** — the daemon's watcher indexes eagerly; every client (CLI, MCP shim, hooks, runner) shares the same hot graph. At most a short freshness barrier in the query path, never a rebuild.
+3. **Source in results** — responses return verbatim source with line numbers alongside graph context. The agent doesn't need a follow-up Read to see the code.
+4. **Confidence signals** — every edge carries a tier (EXTRACTED / INFERRED / AMBIGUOUS) plus categorical provenance, derived by rule at query time. The agent knows when to trust the graph and when to verify.
 5. **Complete flows** — dynamic dispatch, framework routes, and cross-module edges are resolved so the agent sees the full execution path, not just static imports.
 6. **Incremental always** — content-hash-based extraction cache. Only re-parse files whose bytes actually changed. Only update edges for affected symbols.
-7. **Single binary (consequence, not rule)** — Tree-sitter grammars, CozoDB, MCP server, file watcher compile into one executable because Rust makes that cheap. Optional accelerators (e.g. Laya) run as sidecars when that serves the targets better.
-8. **Concurrent-safe** — multiple agents query simultaneously while the watcher writes. CozoDB handles isolation.
-9. **Language-extensible** — adding a language means implementing one trait.
+7. **Single binary (consequence, not rule)** — Tree-sitter grammars, CozoDB, daemon, clients and file watcher compile into one executable because Rust makes that cheap. Optional accelerators (e.g. Laya) run as sidecars when that serves the targets better.
+8. **Concurrent-safe** — multiple agents query the daemon simultaneously while the watcher writes. RocksDB snapshot reads don't wait for the writer; the adjacency is updated from committed deltas only.
+9. **Agent surface where the agent already is** — CLI via Bash first, MCP second, steering hooks that answer instead of hinting.
+10. **Language-extensible** — adding a language means a `.scm` query file with unified capture tags plus a registry entry.

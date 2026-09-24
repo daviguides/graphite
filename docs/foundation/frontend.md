@@ -169,7 +169,7 @@ Structural queries, not text search. Query builder over Datalog.
 | Component | Technology |
 |-----------|------------|
 | Embedding | rust-embed (static files compiled into binary) |
-| Server | axum (same process as CLI/MCP) |
+| Server | axum (inside the per-repo daemon) |
 | Data | CozoDB (same instance, read-only from UI) |
 | Frontend | Vanilla JS or Svelte (small bundle, no framework tax) |
 | Graph rendering | d3-force or cytoscape.js (local subgraph only, never whole-repo) |
