@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["common", "cozo-bench"]
+members = ["common", "cozo-bench", "lbug-bench", "diy-bench"]
 
 [workspace.package]
 edition = "2021"

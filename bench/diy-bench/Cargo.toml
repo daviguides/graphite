@@ -1,0 +1,10 @@
+[package]
+name = "diy-bench"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+common.workspace = true
+ascent = { version = "=0.8.1", default-features = false }
+redb = "=4.3.0"

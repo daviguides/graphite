@@ -671,13 +671,11 @@ pub fn run_suite<F: Factory>(factory: &F, opts: &RunOpts) {
     let rebuilt = factory.fresh("rebuilt");
     rebuilt.load(&ds_inc);
     let mut rng = Rng::new(4242);
-    let mut inc_vs_full = 0;
-    let mut inc_vs_ref = 0;
-    let mut checks = 0;
     let mut targets: Vec<u32> = (0..20).map(|_| rng.below(ds.n_syms() as u64) as u32).collect();
     targets.push(hub);
     targets.push(median);
     for &v in &variants {
+        let (mut inc_vs_full, mut inc_vs_ref, mut checks) = (0, 0, 0);
         for &tg in &targets {
             for &tr in &[false, true] {
                 let a = engine.blast(v, tg, 10, tr);
@@ -692,18 +690,22 @@ pub fn run_suite<F: Factory>(factory: &F, opts: &RunOpts) {
                 }
             }
         }
+        rec.value(
+            &format!("correct_incremental_eq_full[{v}]"),
+            (inc_vs_full == 0 && inc_vs_ref == 0) as u8 as f64,
+            format!("after 200 updates: {inc_vs_full}/{checks} differ from full rebuild, {inc_vs_ref}/{checks} differ from reference"),
+        );
     }
-    let ok = inc_vs_full == 0 && inc_vs_ref == 0;
-    rec.value(
-        "correct_incremental_eq_full",
-        ok as u8 as f64,
-        format!("after 200 updates, all variants: {inc_vs_full}/{checks} differ from full rebuild, {inc_vs_ref}/{checks} differ from reference"),
-    );
     drop(rebuilt);
 
     // ---- reopen from disk (persistent engines)
     drop(engine);
-    let engine = match factory.reopen("main") {
+    let t_reopen = Instant::now();
+    let reopened = factory.reopen("main");
+    if reopened.is_some() {
+        rec.value("reopen_ms", t_reopen.elapsed().as_secs_f64() * 1e3, "open persisted store (incl. any in-memory rebuild)");
+    }
+    let engine = match reopened {
         Some(e) => {
             let t = Instant::now();
             let _ = e.blast(dv, median, 10, false);
@@ -746,7 +748,7 @@ pub fn run_suite<F: Factory>(factory: &F, opts: &RunOpts) {
             lat
         });
         std::thread::sleep(Duration::from_millis(100));
-        let s = time_it(20, 100_000, Duration::from_secs(4), || {
+        let s = time_it(20, usize::MAX, Duration::from_secs(4), || {
             std::hint::black_box(engine.blast(dv, median, 10, false));
         });
         stop.store(true, Ordering::Relaxed);

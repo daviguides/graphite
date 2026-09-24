@@ -1,0 +1,10 @@
+[package]
+name = "lbug-bench"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+common.workspace = true
+# LadybugDB: maintained Kuzu fork (C++ engine, static prebuilt liblbug).
+lbug = "=0.20.4"
