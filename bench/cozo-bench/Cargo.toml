@@ -1,0 +1,15 @@
+[package]
+name = "cozo-bench"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+common.workspace = true
+# mnestic: maintained CozoDB fork; the importable crate name stays `cozo`.
+cozo = { package = "mnestic", version = "=0.18.0", default-features = false, features = [
+    "storage-sqlite",
+    "storage-sqlite-src",
+    "storage-new-rocksdb",
+    "graph-algo",
+] }
