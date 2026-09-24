@@ -22,7 +22,9 @@ impl Rng {
     }
 }
 
-const NAMES: &[&str] = &["load", "save", "parse", "run", "check", "Config"];
+const FUNCS: &[&str] = &["load", "save", "parse", "run"];
+const CLASSES: &[&str] = &["Base", "Config"];
+const METHODS: &[&str] = &["start", "stop", "run"];
 
 fn module(file: u64) -> String {
     format!("pkg.m{file}")
@@ -47,70 +49,116 @@ fn sym(path: &str, qualified: &str, name: &str, kind: SymbolKind, line: u32) -> 
     }
 }
 
-/// Random Python-shaped file: a few functions from a small shared name pool so names collide across files.
+fn unresolved(name: &str, qualifier: Option<&str>, import_path: Option<String>) -> Target {
+    Target::Unresolved {
+        name: name.to_string(),
+        qualifier: qualifier.map(str::to_string),
+        import_path,
+    }
+}
+
+fn pick<'a>(rng: &mut Rng, pool: &[&'a str]) -> &'a str {
+    pool[rng.below(pool.len() as u64) as usize]
+}
+
+/// Random Python-shaped file in the extractor's conventions: a module, functions and one class with
+/// methods from small shared pools so names collide across files.
 fn random_file(file: u64, n_files: u64, rng: &mut Rng) -> FileFacts {
     let path = format!("pkg/m{file}.py");
-    let mut names: Vec<&str> = NAMES.to_vec();
-    let mut symbols = Vec::new();
-    for n in 0..(1 + rng.below(4)) {
-        let idx = rng.below(names.len() as u64) as usize;
-        let name = names.remove(idx);
-        let kind = if name == "Config" {
-            SymbolKind::Class
-        } else {
-            SymbolKind::Function
-        };
-        symbols.push(sym(
+    let modq = module(file);
+    let is_test = file == 0;
+    let mut module_sym = sym(&path, &modq, &format!("m{file}"), SymbolKind::Module, 1);
+    module_sym.is_test = is_test;
+    let mut symbols = vec![module_sym.clone()];
+    let mut funcs = FUNCS.to_vec();
+    for n in 0..(1 + rng.below(3)) {
+        let name = funcs.remove(rng.below(funcs.len() as u64) as usize);
+        let mut s = sym(
             &path,
-            &format!("{}.{name}", module(file)),
+            &format!("{modq}.{name}"),
             name,
-            kind,
-            n as u32 * 5 + 1,
-        ));
+            SymbolKind::Function,
+            n as u32 * 5 + 3,
+        );
+        s.parent = Some(module_sym.id);
+        s.is_test = is_test;
+        symbols.push(s);
     }
+    let class_name = pick(rng, CLASSES);
+    let mut class = sym(
+        &path,
+        &format!("{modq}.{class_name}"),
+        class_name,
+        SymbolKind::Class,
+        40,
+    );
+    class.parent = Some(module_sym.id);
+    class.is_test = is_test;
+    symbols.push(class.clone());
+    let mut methods = METHODS.to_vec();
+    for n in 0..rng.below(3) {
+        let name = methods.remove(rng.below(methods.len() as u64) as usize);
+        let mut s = sym(
+            &path,
+            &format!("{modq}.{class_name}.{name}"),
+            name,
+            SymbolKind::Method,
+            41 + n as u32 * 3,
+        );
+        s.parent = Some(class.id);
+        s.is_test = is_test;
+        symbols.push(s);
+    }
+
     let mut edges = Vec::new();
-    for s in &symbols {
-        for _ in 0..rng.below(4) {
-            let name = match rng.below(10) {
-                0 => "print".to_string(),
-                _ => NAMES[rng.below(NAMES.len() as u64) as usize].to_string(),
-            };
-            let dst = match rng.below(4) {
-                0 => match symbols.iter().find(|t| t.name == name) {
-                    Some(t) => Target::Symbol(t.id),
-                    None => Target::Unresolved {
-                        name,
-                        qualifier: None,
-                        import_path: None,
-                    },
-                },
-                1 => Target::Unresolved {
-                    name,
-                    qualifier: None,
-                    import_path: Some(module(rng.below(n_files))),
-                },
-                2 => Target::Unresolved {
-                    name,
-                    qualifier: Some(format!("m{}", rng.below(n_files))),
-                    import_path: None,
-                },
-                _ => Target::Unresolved {
-                    name,
-                    qualifier: None,
-                    import_path: None,
-                },
-            };
-            let provenance = if matches!(dst, Target::Symbol(_)) {
-                Provenance::Extracted
-            } else {
-                Provenance::NameGuess
+    let other = |rng: &mut Rng| rng.below(n_files);
+    if rng.below(2) == 0 {
+        let base = pick(rng, CLASSES);
+        edges.push(RawEdge {
+            src: class.id,
+            dst: unresolved(base, None, Some(format!("{}.{base}", module(other(rng))))),
+            kind: EdgeKind::Inherits,
+            site_line: 40,
+            provenance: Provenance::Extracted,
+        });
+    }
+    edges.push(RawEdge {
+        src: module_sym.id,
+        dst: unresolved("<module>", None, Some(module(other(rng)))),
+        kind: EdgeKind::Imports,
+        site_line: 1,
+        provenance: Provenance::Extracted,
+    });
+    for s in symbols
+        .iter()
+        .filter(|s| s.kind != SymbolKind::Module && s.kind != SymbolKind::Class)
+    {
+        for _ in 0..(1 + rng.below(3)) {
+            let dst = match rng.below(7) {
+                0 => {
+                    let name = pick(rng, FUNCS);
+                    match symbols.iter().find(|t| t.name == name) {
+                        Some(t) => Target::Symbol(t.id),
+                        None => unresolved(name, None, None),
+                    }
+                }
+                1 => {
+                    let (name, f) = (pick(rng, FUNCS), other(rng));
+                    let qual = (rng.below(2) == 0).then(|| format!("m{f}"));
+                    unresolved(name, qual.as_deref(), Some(format!("{}.{name}", module(f))))
+                }
+                2 => unresolved(pick(rng, METHODS), Some("self"), None),
+                3 => unresolved(pick(rng, METHODS), Some("obj"), None),
+                4 => unresolved(pick(rng, FUNCS), Some(&format!("m{}", other(rng))), None),
+                5 => unresolved("getcwd", Some("os"), Some("<external>:os.getcwd".into())),
+                _ => unresolved(pick(rng, FUNCS), None, None),
             };
             edges.push(RawEdge {
                 src: s.id,
                 dst,
                 kind: EdgeKind::Calls,
                 site_line: s.start_line + 1,
-                provenance,
+                provenance: Provenance::Extracted,
             });
         }
     }

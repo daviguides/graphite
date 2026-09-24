@@ -76,6 +76,8 @@ pub struct WriteDelta {
     pub removed_keys: Vec<EdgeKey>,
     pub touched_names: Vec<String>,
     pub touched_ids: Vec<SymbolId>,
+    /// The file had or has classes or inheritance, so self/cls/super() edges anywhere may re-resolve.
+    pub touched_classes: bool,
 }
 
 /// Storage contract. CozoDB is the only implementation today; kept behind a trait so the engine can be swapped.
@@ -87,6 +89,7 @@ pub trait GraphStore: Send + Sync {
     fn symbol(&self, id: SymbolId) -> Result<Option<Symbol>>;
     fn symbols_by_name(&self, name: &str) -> Result<Vec<Symbol>>;
     fn symbols_in_file(&self, path: &str) -> Result<Vec<Symbol>>;
+    fn test_symbols(&self) -> Result<Vec<SymbolId>>;
     /// Every raw edge resolved; used to rebuild the adjacency from scratch.
     fn resolve_all(&self) -> Result<Vec<Resolution>>;
     /// Only the raw edges whose resolution a write may have changed.

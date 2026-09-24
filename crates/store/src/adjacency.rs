@@ -30,6 +30,7 @@ pub struct Adjacency {
     links: HashMap<EdgeKey, Link>,
     callers: HashMap<SymbolId, HashSet<EdgeKey>>,
     callees: HashMap<SymbolId, HashSet<EdgeKey>>,
+    tests: HashSet<SymbolId>,
 }
 
 /// Comparable view of the adjacency, for incremental-equals-rebuild checks.
@@ -46,6 +47,7 @@ impl Adjacency {
         for r in store.resolve_all()? {
             adj.upsert(r);
         }
+        adj.tests = store.test_symbols()?.into_iter().collect();
         Ok(adj)
     }
 
@@ -56,6 +58,14 @@ impl Adjacency {
         }
         for r in store.resolve_affected(delta)? {
             self.upsert(r);
+        }
+        for id in &delta.touched_ids {
+            self.tests.remove(id);
+        }
+        for sym in store.symbols_in_file(&delta.path)? {
+            if sym.is_test {
+                self.tests.insert(sym.id);
+            }
         }
         self.rev = self.rev.max(delta.rev);
         Ok(())
@@ -149,6 +159,23 @@ impl Adjacency {
             depth.into_iter().filter(|(id, _)| *id != target).collect();
         out.sort_by_key(|(id, d)| (*d, *id));
         out
+    }
+
+    /// Tests covering `target`: test symbols reaching it through calls/references, nearest first.
+    /// Derived at read time from resolved calls, so it tracks the graph without a stored relation.
+    pub fn covering_tests(&self, target: SymbolId, max_depth: u32) -> Vec<(SymbolId, u32)> {
+        self.blast_radius(target, max_depth, &[EdgeKind::Calls, EdgeKind::References])
+            .into_iter()
+            .filter(|(id, _)| self.tests.contains(id))
+            .collect()
+    }
+
+    pub fn is_test(&self, id: SymbolId) -> bool {
+        self.tests.contains(&id)
+    }
+
+    pub fn test_set(&self) -> BTreeSet<SymbolId> {
+        self.tests.iter().copied().collect()
     }
 
     pub fn snapshot(&self) -> EdgeSnapshot {
