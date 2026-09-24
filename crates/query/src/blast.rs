@@ -90,17 +90,41 @@ pub(crate) struct Built {
     pub source_changed: u32,
 }
 
-pub(crate) fn fetch(
-    ctx: &QueryContext,
-    cache: &mut HashMap<SymbolId, Option<Symbol>>,
-    id: SymbolId,
-) -> Result<Option<Symbol>> {
-    if let Some(s) = cache.get(&id) {
-        return Ok(s.clone());
+/// Per-request symbol rows, filled in batches so a large result costs one store query, not one per symbol.
+#[derive(Default)]
+pub(crate) struct SymbolCache {
+    rows: HashMap<SymbolId, Option<Symbol>>,
+}
+
+impl SymbolCache {
+    /// Load every id not yet cached in one store call; ids the store doesn't know are remembered as absent.
+    pub(crate) fn prefetch(
+        &mut self,
+        ctx: &QueryContext,
+        ids: impl IntoIterator<Item = SymbolId>,
+    ) -> Result<()> {
+        let mut want: Vec<SymbolId> = ids
+            .into_iter()
+            .filter(|id| !self.rows.contains_key(id))
+            .collect();
+        if want.is_empty() {
+            return Ok(());
+        }
+        want.sort();
+        want.dedup();
+        for id in &want {
+            self.rows.insert(*id, None);
+        }
+        for sym in ctx.store.symbols(&want)? {
+            self.rows.insert(sym.id, Some(sym));
+        }
+        Ok(())
     }
-    let s = ctx.store.symbol(id)?;
-    cache.insert(id, s.clone());
-    Ok(s)
+
+    pub(crate) fn get(&mut self, ctx: &QueryContext, id: SymbolId) -> Result<Option<&Symbol>> {
+        self.prefetch(ctx, [id])?;
+        Ok(self.rows[&id].as_ref())
+    }
 }
 
 /// Dependents of `roots` (roots themselves excluded), ranked and grouped.
@@ -109,20 +133,25 @@ pub(crate) fn build_dependents(
     roots: &[SymbolId],
     opts: &Options,
     reader: &mut SourceReader,
-    cache: &mut HashMap<SymbolId, Option<Symbol>>,
+    cache: &mut SymbolCache,
 ) -> Result<Built> {
     let (reached, beyond) = dependents(ctx.adj, roots, opts.depth, &opts.kinds);
+    cache.prefetch(ctx, reached.iter().flat_map(|r| [r.id, r.via]))?;
     let mut items = Vec::with_capacity(reached.len());
     let mut missing = 0usize;
     for r in reached {
-        let (Some(sym), Some(via)) = (fetch(ctx, cache, r.id)?, fetch(ctx, cache, r.via)?) else {
+        let Some(via) = cache.get(ctx, r.via)?.map(|v| v.qualified.clone()) else {
+            missing += 1;
+            continue;
+        };
+        let Some(sym) = cache.get(ctx, r.id)? else {
             missing += 1;
             continue;
         };
         items.push(DependentItem {
-            symbol: SymbolView::from(&sym),
+            symbol: SymbolView::from(sym),
             depth: r.depth,
-            via: via.qualified,
+            via,
             edge: r.kind.as_str(),
             edge_confidence: r.edge_conf.into(),
             confidence: r.path_conf.into(),
@@ -178,8 +207,8 @@ pub(crate) fn build_dependents(
     };
     for item in items.iter_mut().take(shown) {
         let id = SymbolId::from_hex(&item.symbol.id).expect("own hex id");
-        if let Some(sym) = fetch(ctx, cache, id)? {
-            let block = reader.read(&sym, SOURCE_CAP);
+        if let Some(sym) = cache.get(ctx, id)? {
+            let block = reader.read(sym, SOURCE_CAP);
             if block.state != SourceState::Fresh {
                 source_changed += 1;
             }
@@ -413,7 +442,7 @@ pub fn blast_radius(
     };
 
     let mut reader = SourceReader::new(ctx.root);
-    let mut cache = HashMap::new();
+    let mut cache = SymbolCache::default();
     let source = reader.read(&sym, SOURCE_CAP);
     if source.state != SourceState::Fresh {
         causes.source_changed += 1;

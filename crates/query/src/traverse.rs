@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use graphite_model::{EdgeKind, Symbol, SymbolId};
-use graphite_store::{confidence, Adjacency, Confidence, GraphStore, Outcome, WriteDelta};
+use graphite_store::{confidence, Adjacency, Confidence, GraphStore, Outcome};
 
 use crate::Result;
 
@@ -91,12 +91,8 @@ pub(crate) fn name_gaps(
     sym: &Symbol,
     kinds: &[EdgeKind],
 ) -> Result<(u32, u32)> {
-    let probe = WriteDelta {
-        touched_names: vec![sym.name.clone()],
-        ..Default::default()
-    };
     let (mut ambiguous, mut unresolved) = (0, 0);
-    for r in store.resolve_affected(&probe)? {
+    for r in store.name_gaps(&sym.name)? {
         if r.src == sym.id || !kinds.contains(&r.kind) {
             continue;
         }

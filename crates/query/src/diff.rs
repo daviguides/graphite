@@ -7,7 +7,7 @@ use std::process::Command;
 use graphite_model::{Symbol, SymbolId};
 use serde::{Deserialize, Serialize};
 
-use crate::blast::{build_dependents, Dependents};
+use crate::blast::{build_dependents, Dependents, SymbolCache};
 use crate::compress::{finish, Tiered};
 use crate::envelope::{
     role, Causes, Disclosure, Envelope, Risk, RiskLevel, Role, SymbolView, Tier,
@@ -214,7 +214,14 @@ pub fn diff_impact(
     }
 
     let mut reader = SourceReader::new(ctx.root);
-    let mut cache = HashMap::new();
+    let mut cache = SymbolCache::default();
+    cache.prefetch(
+        ctx,
+        changed
+            .keys()
+            .flat_map(|id| ctx.adj.callers_of(*id))
+            .map(|(src, _, _)| src),
+    )?;
     let mut changed_views = Vec::new();
     let mut gaps_total = 0;
     for (sym, ranges) in changed.values() {
@@ -228,7 +235,7 @@ pub fn diff_impact(
             if !opts.kinds.contains(kind) {
                 continue;
             }
-            match cache_role(ctx, &mut cache, *src)? {
+            match cache.get(ctx, *src)?.map(role) {
                 Some(Role::Prod) => prod += 1,
                 Some(Role::Test) => test += 1,
                 None => {}
@@ -309,12 +316,4 @@ pub fn diff_impact(
 /// Test modules are containers, not runnable tests.
 fn runnable(kind: &str) -> bool {
     matches!(kind, "function" | "method" | "class")
-}
-
-fn cache_role(
-    ctx: &QueryContext,
-    cache: &mut HashMap<SymbolId, Option<Symbol>>,
-    id: SymbolId,
-) -> Result<Option<Role>> {
-    Ok(crate::blast::fetch(ctx, cache, id)?.map(|s| role(&s)))
 }
