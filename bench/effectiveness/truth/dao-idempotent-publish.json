@@ -16,5 +16,33 @@
   "tools/orch/dao-cli",
   "tools/orch/instrument"
  ],
- "ref_diff_lines": 468
+ "ref_diff_lines": 468,
+ "start_failures": {
+  "tools/orch/dao-cli": [],
+  "tools/orch/instrument": []
+ },
+ "ref_failures": {
+  "tools/orch/dao-cli": [],
+  "tools/orch/instrument": []
+ },
+ "hidden_at_ref": {
+  "tools/orch/dao-cli": {
+   "passed": 16,
+   "failed": 0
+  },
+  "tools/orch/instrument": {
+   "passed": 1,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/orch/dao-cli": {
+   "passed": 0,
+   "failed": 1
+  },
+  "tools/orch/instrument": {
+   "passed": 0,
+   "failed": 1
+  }
+ }
 }

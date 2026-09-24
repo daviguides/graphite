@@ -15,5 +15,77 @@
   "tools/orch/dao-cli",
   "tools/orch/instrument"
  ],
- "ref_diff_lines": 572
+ "ref_diff_lines": 572,
+ "start_failures": {
+  "tools/orch/dao-cli": [
+   "tests.dao_cli.test_completer.TestMilestoneCompletions::test_lists_milestones",
+   "tests.dao_cli.test_completer.TestMilestoneCompletions::test_includes_goal_in_description",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_tasks_from_milestone",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_enriches_from_task_yaml",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_all_tasks_without_milestone",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_combines_milestones_and_standalone",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_standalone_shows_mode_and_summary",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_empty_when_no_standalone",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_standalone_fallback",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_with_milestone",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_scan_finds_milestone_task",
+   "tests.dao_cli.test_core_utils.TestResolveTaskDocsDir::test_returns_same_as_yaml_parent",
+   "tests.dao_cli.test_core_utils.TestResolveMilestoneYamlPath::test_returns_correct_path",
+   "tests.dao_cli.test_hook.TestCompleteCommands::test_complete_milestones",
+   "tests.dao_cli.test_hook.TestCompleteCommands::test_complete_tasks_with_milestone",
+   "tests.dao_cli.test_milestone.TestMilestoneCreate::test_creates_milestone_yaml",
+   "tests.dao_cli.test_milestone.TestMilestoneUpdate::test_adds_task",
+   "tests.dao_cli.test_milestone.TestMilestoneUpdate::test_adds_decision",
+   "tests.dao_cli.test_milestone.TestMilestoneStatus::test_json_output",
+   "tests.dao_cli.test_milestone.TestMilestoneStatus::test_md_output",
+   "tests.dao_cli.test_milestone.TestMilestoneStatusEnrichedMdCli::test_md_no_current_task_outside_worktree"
+  ],
+  "tools/orch/instrument": []
+ },
+ "ref_failures": {
+  "tools/orch/dao-cli": [
+   "tests.dao_cli.test_completer.TestMilestoneCompletions::test_lists_milestones",
+   "tests.dao_cli.test_completer.TestMilestoneCompletions::test_includes_goal_in_description",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_tasks_from_milestone",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_enriches_from_task_yaml",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_all_tasks_without_milestone",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_combines_milestones_and_standalone",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_standalone_shows_mode_and_summary",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_empty_when_no_standalone",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_standalone_fallback",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_with_milestone",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_scan_finds_milestone_task",
+   "tests.dao_cli.test_core_utils.TestResolveTaskDocsDir::test_returns_same_as_yaml_parent",
+   "tests.dao_cli.test_core_utils.TestResolveMilestoneYamlPath::test_returns_correct_path",
+   "tests.dao_cli.test_hook.TestCompleteCommands::test_complete_milestones",
+   "tests.dao_cli.test_hook.TestCompleteCommands::test_complete_tasks_with_milestone",
+   "tests.dao_cli.test_milestone.TestMilestoneCreate::test_creates_milestone_yaml",
+   "tests.dao_cli.test_milestone.TestMilestoneUpdate::test_adds_task",
+   "tests.dao_cli.test_milestone.TestMilestoneUpdate::test_adds_decision",
+   "tests.dao_cli.test_milestone.TestMilestoneStatus::test_json_output",
+   "tests.dao_cli.test_milestone.TestMilestoneStatus::test_md_output",
+   "tests.dao_cli.test_milestone.TestMilestoneStatusEnrichedMdCli::test_md_no_current_task_outside_worktree"
+  ],
+  "tools/orch/instrument": []
+ },
+ "hidden_at_ref": {
+  "tools/orch/dao-cli": {
+   "passed": 21,
+   "failed": 0
+  },
+  "tools/orch/instrument": {
+   "passed": 26,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/orch/dao-cli": {
+   "passed": 19,
+   "failed": 2
+  },
+  "tools/orch/instrument": {
+   "passed": 0,
+   "failed": 1
+  }
+ }
 }

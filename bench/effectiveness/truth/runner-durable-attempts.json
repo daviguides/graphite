@@ -15,5 +15,46 @@
  "suites": [
   "tools/orch/runner"
  ],
- "ref_diff_lines": 575
+ "ref_diff_lines": 575,
+ "start_failures": {
+  "tools/orch/runner": [
+   "tests.test_engine.TestRunTaskDryRun::test_dry_run_returns_prompt",
+   "tests.test_prompt.TestComposePrompt::test_basic_prompt",
+   "tests.test_prompt.TestComposePrompt::test_includes_branch_and_issue",
+   "tests.test_prompt.TestComposePrompt::test_includes_current_state",
+   "tests.test_prompt.TestComposePrompt::test_includes_key_context",
+   "tests.test_prompt.TestComposePrompt::test_includes_resume_action",
+   "tests.test_prompt.TestComposePrompt::test_omits_none_fields",
+   "tests.test_prompt.TestForkParallelSafety::test_parallel_safety_covers_forks",
+   "tests.test_prompt.TestImplementingGitGuardrail::test_implementing_prompt_does_not_permit_git_commit",
+   "tests.test_sync.TestStaleWorktreeCleanup::test_sync_recovers_when_its_temp_worktree_was_left_behind",
+   "tests.test_validating_reject_route_back.TestGateRecheckBeforeAdvance::test_failed_gate_reruns_stored_mode_instead_of_skipping"
+  ]
+ },
+ "ref_failures": {
+  "tools/orch/runner": [
+   "tests.test_engine.TestRunTaskDryRun::test_dry_run_returns_prompt",
+   "tests.test_prompt.TestComposePrompt::test_basic_prompt",
+   "tests.test_prompt.TestComposePrompt::test_includes_branch_and_issue",
+   "tests.test_prompt.TestComposePrompt::test_includes_current_state",
+   "tests.test_prompt.TestComposePrompt::test_includes_key_context",
+   "tests.test_prompt.TestComposePrompt::test_includes_resume_action",
+   "tests.test_prompt.TestComposePrompt::test_omits_none_fields",
+   "tests.test_prompt.TestForkParallelSafety::test_parallel_safety_covers_forks",
+   "tests.test_prompt.TestImplementingGitGuardrail::test_implementing_prompt_does_not_permit_git_commit",
+   "tests.test_validating_reject_route_back.TestGateRecheckBeforeAdvance::test_failed_gate_reruns_stored_mode_instead_of_skipping"
+  ]
+ },
+ "hidden_at_ref": {
+  "tools/orch/runner": {
+   "passed": 20,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/orch/runner": {
+   "passed": 0,
+   "failed": 1
+  }
+ }
 }

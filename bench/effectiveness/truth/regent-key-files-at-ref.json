@@ -14,5 +14,37 @@
  "suites": [
   "tools/orch/regent"
  ],
- "ref_diff_lines": 1038
+ "ref_diff_lines": 1038,
+ "start_failures": {
+  "tools/orch/regent": [
+   "tests.test_cli.TestRunAndClose::test_emits_report_on_success",
+   "tests.test_cli.TestRunAndClose::test_emits_report_and_reraises_on_escalation",
+   "tests.test_cli.TestAutopsyFailure::test_failing_report_is_shown_not_swallowed",
+   "tests.test_cli.TestAutopsyFailure::test_a_plain_crash_is_reported_as_failed_not_completed",
+   "tests.test_cli.TestAutopsyFailure::test_an_interrupt_in_the_pipeline_is_reported_as_failed",
+   "tests.test_cli.TestAutopsyFailure::test_the_escalation_still_names_its_own_stage"
+  ]
+ },
+ "ref_failures": {
+  "tools/orch/regent": [
+   "tests.test_cli.TestRunAndClose::test_emits_report_on_success",
+   "tests.test_cli.TestRunAndClose::test_emits_report_and_reraises_on_escalation",
+   "tests.test_cli.TestAutopsyFailure::test_failing_report_is_shown_not_swallowed",
+   "tests.test_cli.TestAutopsyFailure::test_a_plain_crash_is_reported_as_failed_not_completed",
+   "tests.test_cli.TestAutopsyFailure::test_an_interrupt_in_the_pipeline_is_reported_as_failed",
+   "tests.test_cli.TestAutopsyFailure::test_the_escalation_still_names_its_own_stage"
+  ]
+ },
+ "hidden_at_ref": {
+  "tools/orch/regent": {
+   "passed": 74,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/orch/regent": {
+   "passed": 0,
+   "failed": 2
+  }
+ }
 }

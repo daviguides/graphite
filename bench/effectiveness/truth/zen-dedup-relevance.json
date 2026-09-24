@@ -15,5 +15,41 @@
  "suites": [
   "tools/context/zen-review"
  ],
- "ref_diff_lines": 745
+ "ref_diff_lines": 745,
+ "start_failures": {
+  "tools/context/zen-review": [
+   "tests.integration.test_pipeline_integration.TestPipelineIntegration::test_orchestrate_post_pipeline",
+   "tests.unit.test_cli.TestCLIReviewCommand::test_review_command_executes_pipeline",
+   "tests.unit.test_cli.TestCLIReviewCommand::test_review_command_posts_to_github_when_requested",
+   "tests.unit.test_cli.TestCLIReviewCommand::test_review_command_warns_when_posting_without_pr",
+   "tests.unit.test_pr_collector.TestPRCollectorCollect::test_collects_pr_successfully",
+   "tests.unit.test_pr_collector.TestPRCollectorCollect::test_collects_pr_with_repo_parameter",
+   "tests.unit.test_pr_collector.TestPRCollectorCollect::test_collects_pr_with_no_changed_files",
+   "tests.unit.test_pr_collector.TestPRCollectorCollect::test_handles_unreadable_files_gracefully"
+  ]
+ },
+ "ref_failures": {
+  "tools/context/zen-review": [
+   "tests.integration.test_pipeline_integration.TestPipelineIntegration::test_orchestrate_post_pipeline",
+   "tests.unit.test_cli.TestCLIReviewCommand::test_review_command_executes_pipeline",
+   "tests.unit.test_cli.TestCLIReviewCommand::test_review_command_posts_to_github_when_requested",
+   "tests.unit.test_cli.TestCLIReviewCommand::test_review_command_warns_when_posting_without_pr",
+   "tests.unit.test_pr_collector.TestPRCollectorCollect::test_collects_pr_successfully",
+   "tests.unit.test_pr_collector.TestPRCollectorCollect::test_collects_pr_with_repo_parameter",
+   "tests.unit.test_pr_collector.TestPRCollectorCollect::test_collects_pr_with_no_changed_files",
+   "tests.unit.test_pr_collector.TestPRCollectorCollect::test_handles_unreadable_files_gracefully"
+  ]
+ },
+ "hidden_at_ref": {
+  "tools/context/zen-review": {
+   "passed": 11,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/context/zen-review": {
+   "passed": 0,
+   "failed": 1
+  }
+ }
 }

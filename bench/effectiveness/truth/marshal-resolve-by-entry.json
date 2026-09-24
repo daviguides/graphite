@@ -15,5 +15,23 @@
  "suites": [
   "tools/orch/marshal"
  ],
- "ref_diff_lines": 1023
+ "ref_diff_lines": 1023,
+ "start_failures": {
+  "tools/orch/marshal": []
+ },
+ "ref_failures": {
+  "tools/orch/marshal": []
+ },
+ "hidden_at_ref": {
+  "tools/orch/marshal": {
+   "passed": 94,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/orch/marshal": {
+   "passed": 0,
+   "failed": 1
+  }
+ }
 }

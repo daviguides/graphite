@@ -14,5 +14,23 @@
  "suites": [
   "tools/flow/rover"
  ],
- "ref_diff_lines": 423
+ "ref_diff_lines": 423,
+ "start_failures": {
+  "tools/flow/rover": []
+ },
+ "ref_failures": {
+  "tools/flow/rover": []
+ },
+ "hidden_at_ref": {
+  "tools/flow/rover": {
+   "passed": 4,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/flow/rover": {
+   "passed": 0,
+   "failed": 4
+  }
+ }
 }
