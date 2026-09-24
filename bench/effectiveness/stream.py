@@ -12,9 +12,23 @@ READ = {"cat", "head", "tail", "less", "wc", "sed", "awk", "nl"}
 RUN = {"pytest", "uv", "python", "python3", "make", "ruff", "mypy", "pip"}
 
 
+EDIT_PATTERNS = [
+    re.compile(r"\bsed\s+(-\w*\s+)*-i"),
+    re.compile(r"\bperl\s+(-\w*\s+)*-i"),
+    re.compile(r"(write_text|\.write\(|open\([^)]*['\"][wa]['\"])"),
+    re.compile(r"(^|[;&|]\s*)(cat|echo|printf|tee)\b[^|]*>\s*\S+\.(py|toml|md|json|ya?ml)\b"),
+]
+
+
+def is_bash_edit(command: str) -> bool:
+    return any(p.search(command) for p in EDIT_PATTERNS)
+
+
 def bash_category(command: str) -> str:
-    cmd = command.strip()
-    cmd = re.sub(r"^(cd\s+\S+\s*(&&|;)\s*)+", "", cmd)
+    cmd = command.strip().lstrip("( ")
+    cmd = re.sub(r"^(cd\s+\S+\s*(&&|;)\s*)+", "", cmd).lstrip("( ")
+    if is_bash_edit(cmd):
+        return "edit"
     first = cmd.split()[0] if cmd.split() else ""
     first = first.rsplit("/", 1)[-1]
     if first == "git":
@@ -60,7 +74,10 @@ def parse_stream(path: Path) -> dict:
                     subagent_calls += 1
                 tools[name] += 1
                 if name == "Bash":
-                    bash[bash_category(inp.get("command", ""))] += 1
+                    cat = bash_category(inp.get("command", ""))
+                    bash[cat] += 1
+                    if cat == "edit" and first_edit_index is None:
+                        first_edit_index = call_index
                 elif name == "Read" and inp.get("file_path"):
                     files_read.add(inp["file_path"])
                 if name in {"Edit", "Write", "NotebookEdit", "MultiEdit"} and first_edit_index is None:
