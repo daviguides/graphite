@@ -12,3 +12,5 @@ thiserror.workspace = true
 [dev-dependencies]
 blake3.workspace = true
 tempfile = "3"
+graphite-extract-python = { path = "../extract-python" }
+walkdir = "2"
