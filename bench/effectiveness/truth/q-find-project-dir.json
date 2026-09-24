@@ -1,0 +1,44 @@
+{
+ "id": "q-find-project-dir",
+ "kind": "question",
+ "sha": "ce363fce754180bcc9edcfe53ddb01e1a65ca6ce",
+ "symbol": "find_project_dir",
+ "defined_in": [
+  "tools/orch/dao-cli/dao_cli/core/project.py"
+ ],
+ "callers": [
+  "tools/orch/dao-cli/dao_cli/core/completer.py",
+  "tools/orch/dao-cli/dao_cli/core/project.py",
+  "tools/orch/dao-cli/dao_cli/milestone.py",
+  "tools/orch/dao-cli/dao_cli/project.py",
+  "tools/orch/dao-cli/dao_cli/task.py",
+  "tools/orch/instrument/instrument/core/initiative.py",
+  "tools/orch/instrument/instrument/core/milestone.py",
+  "tools/orch/intake/intake/core/digest.py",
+  "tools/orch/intake/intake/core/paths.py",
+  "tools/orch/intake/intake/core/reader.py",
+  "tools/orch/intake/intake/core/triage.py",
+  "tools/orch/marshal/marshal_cli/commands/enqueue.py",
+  "tools/orch/marshal/marshal_cli/core/config.py",
+  "tools/orch/marshal/marshal_cli/core/dispatch.py",
+  "tools/orch/marshal/marshal_cli/core/reader.py",
+  "tools/orch/marshal/marshal_cli/tui/app.py",
+  "tools/orch/refiner/refiner/commands/egest.py",
+  "tools/orch/refiner/refiner/commands/resume.py",
+  "tools/orch/refiner/refiner/commands/start.py",
+  "tools/orch/refiner/refiner/commands/status.py",
+  "tools/orch/regent/regent/cli.py",
+  "tools/orch/regent/regent/core/config.py",
+  "tools/orch/regent/regent/core/decide.py",
+  "tools/orch/regent/regent/core/pipeline.py",
+  "tools/orch/runner/runner/core/engine.py",
+  "tools/orch/runner/runner/core/initiative_run.py"
+ ],
+ "test_callers": [
+  "tools/orch/dao-cli/tests/dao_cli/test_config.py",
+  "tools/orch/dao-cli/tests/dao_cli/test_core_utils.py",
+  "tools/orch/intake/tests/test_run_pipeline.py",
+  "tools/orch/marshal/tests/test_dispatch.py",
+  "tools/orch/marshal/tests/test_promote_armed_initiatives.py"
+ ]
+}

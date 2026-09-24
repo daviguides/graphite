@@ -1,0 +1,18 @@
+{
+ "id": "runner-auto-merge-queued",
+ "kind": "bugfix",
+ "start": "283321864de2bea0d71cda0e813204f1e75d091e",
+ "ref": "24c1aec482bd77fff0bdc9ae513a7bd6465cc29b",
+ "expected_src": [
+  "tools/orch/runner/runner/core/engine.py",
+  "tools/orch/runner/runner/core/hooks.py"
+ ],
+ "ref_tests": [
+  "tools/orch/runner/tests/test_engine_finalizing.py",
+  "tools/orch/runner/tests/test_execute_finalizing_idempotent.py"
+ ],
+ "suites": [
+  "tools/orch/runner"
+ ],
+ "ref_diff_lines": 290
+}

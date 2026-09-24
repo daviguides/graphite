@@ -1,0 +1,29 @@
+# Bench arms. Both arms use the same model, flags, prompt and sandbox;
+# arm B only adds the Graphite setup commands and one prompt line.
+#
+# Placeholders in `setup` / `teardown`: {tree} = task worktree path.
+# `requires` = executables that must be on PATH for the arm to run.
+
+[arms.A]
+name = "baseline"
+setup = []
+teardown = []
+prompt_suffix = ""
+requires = []
+
+[arms.B]
+name = "graphite"
+# Stub until the Graphite CLI exists. Expected v1.0 shape: start/attach the
+# per-repo daemon, build the graph, then hand the agent the CLI.
+setup = [
+  "graphite init --repo {tree} --quiet",
+  "graphite daemon start --repo {tree} --wait-ready",
+]
+teardown = ["graphite daemon stop --repo {tree}"]
+prompt_suffix = """
+A code-graph CLI is available in this repository: `graphite`. Prefer it over
+grep/find/reading many files to locate code, callers and impact:
+`graphite diff-impact --json`, `graphite blast <symbol> --json`,
+`graphite context <symbol> --json`. Results include source inline.
+"""
+requires = ["graphite"]

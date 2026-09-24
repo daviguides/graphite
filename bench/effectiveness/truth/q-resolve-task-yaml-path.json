@@ -1,0 +1,27 @@
+{
+ "id": "q-resolve-task-yaml-path",
+ "kind": "question",
+ "sha": "ce363fce754180bcc9edcfe53ddb01e1a65ca6ce",
+ "symbol": "resolve_task_yaml_path",
+ "defined_in": [
+  "tools/orch/dao-cli/dao_cli/core/project.py"
+ ],
+ "callers": [
+  "tools/orch/dao-cli/dao_cli/core/project.py",
+  "tools/orch/dao-cli/dao_cli/gate.py",
+  "tools/orch/dao-cli/dao_cli/milestone.py",
+  "tools/orch/dao-cli/dao_cli/task.py",
+  "tools/orch/instrument/instrument/core/milestone.py",
+  "tools/orch/marshal/marshal_cli/commands/enqueue.py",
+  "tools/orch/marshal/marshal_cli/core/dispatch.py",
+  "tools/orch/runner/runner/core/hooks.py",
+  "tools/orch/runner/runner/core/initiative_run.py",
+  "tools/orch/runner/runner/core/milestone_run.py",
+  "tools/orch/runner/runner/core/state.py",
+  "tools/orch/runner/runner/core/sync.py"
+ ],
+ "test_callers": [
+  "tools/orch/dao-cli/tests/dao_cli/test_core_utils.py",
+  "tools/orch/marshal/tests/test_dispatch.py"
+ ]
+}

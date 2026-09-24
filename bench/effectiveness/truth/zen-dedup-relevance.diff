@@ -1,0 +1,745 @@
+diff --git a/tools/context/zen-review/tests/unit/test_dedup.py b/tools/context/zen-review/tests/unit/test_dedup.py
+new file mode 100644
+index 0000000..b3cd6ab
+--- /dev/null
++++ b/tools/context/zen-review/tests/unit/test_dedup.py
+@@ -0,0 +1,236 @@
++"""Tests for cross-reviewer deduplication and relevance filtering.
++
++Cases mirror the real PR#9 run (review-20260824-192036.yaml) where
++zen-reviewer and style-reviewer duplicated findings at the same
++file:line, and testing-reviewer produced low-relevance noise.
++"""
++
++from zen_review.models.review import ReviewIssue
++from zen_review.orchestration.dedup import dedupe_issues
++from zen_review.orchestration.orchestrator import Orchestrator
++
++
++def _issue(
++    file: str,
++    line: int,
++    title: str,
++    severity: str = "MEDIUM",
++    reviewer: str = "zen-reviewer",
++    category: str = "zen",
++    relevance: int = 3,
++) -> ReviewIssue:
++    """Build a synthetic issue for dedup tests."""
++    return ReviewIssue(
++        file=file,
++        line=line,
++        severity=severity,
++        category=category,
++        title=title,
++        problem="Problem description long enough",
++        impact="Impact description long enough",
++        reviewer=reviewer,
++        relevance=relevance,
++    )
++
++
++class TestDedupeIssues:
++    """Tests for dedupe_issues() on real-run shapes."""
++
++    def test_merges_same_finding_across_reviewers(self) -> None:
++        """pom.xml:21 Java version flagged by zen AND style → 1 issue."""
++        zen = _issue(
++            "pom.xml",
++            21,
++            "Java version does not meet LTS requirement",
++            severity="HIGH",
++            reviewer="zen-reviewer",
++        )
++        style = _issue(
++            "pom.xml",
++            21,
++            "Java version does not meet required LTS",
++            severity="MEDIUM",
++            reviewer="style-reviewer",
++            category="style",
++        )
++
++        merged = dedupe_issues([zen, style])
++
++        assert len(merged) == 1
++        assert merged[0].severity == "HIGH"
++        assert "Also flagged by: style-reviewer" in merged[0].problem
++
++    def test_merges_within_line_tolerance(self) -> None:
++        """Spotless/ErrorProne flagged at pom.xml:60 and :61 → merged."""
++        first = _issue(
++            "pom.xml",
++            60,
++            "Missing Spotless and Error Prone build plugins",
++            severity="HIGH",
++        )
++        second = _issue(
++            "pom.xml",
++            61,
++            "Spotless and Error Prone plugins absent from build",
++            reviewer="style-reviewer",
++            category="style",
++        )
++
++        merged = dedupe_issues([first, second])
++
++        assert len(merged) == 1
++
++    def test_record_finding_deduped_per_line_not_across_lines(self) -> None:
++        """OrderResponse record issues at :10 and :45 stay separate."""
++        outer_zen = _issue(
++            "src/main/java/dto/OrderResponse.java",
++            10,
++            "Mutable POJO instead of immutable record",
++        )
++        outer_style = _issue(
++            "src/main/java/dto/OrderResponse.java",
++            10,
++            "DTO should be immutable record",
++            reviewer="style-reviewer",
++            category="style",
++        )
++        nested = _issue(
++            "src/main/java/dto/OrderResponse.java",
++            45,
++            "Nested TicketResponse should be immutable record",
++        )
++
++        merged = dedupe_issues([outer_zen, outer_style, nested])
++
++        assert len(merged) == 2
++
++    def test_distinct_findings_on_same_line_not_merged(self) -> None:
++        """Auth vs rate-limit on TicketController:30 → both survive."""
++        auth = _issue(
++            "src/main/java/controller/TicketController.java",
++            30,
++            "Missing Authentication on Ticket Scan Endpoint",
++            severity="HIGH",
++            reviewer="security-reviewer",
++            category="security",
++        )
++        rate = _issue(
++            "src/main/java/controller/TicketController.java",
++            30,
++            "No Rate Limiting on Ticket Scan Endpoint",
++            reviewer="security-reviewer",
++            category="security",
++        )
++
++        merged = dedupe_issues([auth, rate])
++
++        assert len(merged) == 2
++
++    def test_distant_lines_never_merge(self) -> None:
++        """Identical titles far apart in the file stay separate."""
++        first = _issue("src/App.java", 10, "Mutable DTO should be record")
++        second = _issue("src/App.java", 200, "Mutable DTO should be record")
++
++        merged = dedupe_issues([first, second])
++
++        assert len(merged) == 2
++
++    def test_different_files_never_merge(self) -> None:
++        """Same title in different files stays separate."""
++        first = _issue("src/A.java", 5, "Request DTO should be record")
++        second = _issue("src/B.java", 5, "Request DTO should be record")
++
++        merged = dedupe_issues([first, second])
++
++        assert len(merged) == 2
++
++    def test_merge_keeps_higher_relevance(self) -> None:
++        """Merged issue carries the max relevance of the pair."""
++        low = _issue("pom.xml", 21, "Java version below LTS", relevance=2)
++        high = _issue(
++            "pom.xml",
++            21,
++            "Java version below required LTS",
++            reviewer="style-reviewer",
++            relevance=4,
++        )
++
++        merged = dedupe_issues([low, high])
++
++        assert len(merged) == 1
++        assert merged[0].relevance == 4
++
++
++class TestRelevanceFilter:
++    """Tests for orchestrator relevance filtering after dedup."""
++
++    def test_filters_below_threshold_by_default(self) -> None:
++        """Default min_relevance=3 drops relevance 1-2 issues."""
++        orchestrator = Orchestrator()
++        issues = [
++            _issue("src/A.java", 1, "Real security defect", relevance=5),
++            _issue("src/B.java", 1, "Concrete improvement", relevance=3),
++            _issue(
++                "src/C.java",
++                1,
++                "Exception constructor lacks direct unit test",
++                relevance=1,
++            ),
++        ]
++
++        result = orchestrator._consolidate_results(issues)
++
++        assert result.summary.total == 2
++        assert len(result.filtered_issues) == 1
++        assert result.filtered_issues[0].filtered is True
++
++    def test_threshold_is_configurable(self) -> None:
++        """min_relevance=1 keeps everything."""
++        orchestrator = Orchestrator()
++        issues = [
++            _issue("src/A.java", 1, "Bureaucratic nit", relevance=1),
++        ]
++
++        result = orchestrator._consolidate_results(issues, min_relevance=1)
++
++        assert result.summary.total == 1
++        assert result.filtered_issues == []
++
++    def test_filtered_issues_not_counted_in_summary(self) -> None:
++        """Summary severity counts exclude filtered issues."""
++        orchestrator = Orchestrator()
++        issues = [
++            _issue("src/A.java", 1, "Real defect", severity="HIGH", relevance=5),
++            _issue(
++                "src/B.java",
++                1,
++                "Theoretical nit",
++                severity="HIGH",
++                relevance=1,
++            ),
++        ]
++
++        result = orchestrator._consolidate_results(issues)
++
++        assert result.summary.high == 1
++        assert result.summary.total == 1
++
++    def test_pipeline_dedupes_before_filtering(self) -> None:
++        """Duplicates merge first; merged relevance decides the filter."""
++        orchestrator = Orchestrator()
++        issues = [
++            _issue("pom.xml", 21, "Java version below LTS", relevance=2),
++            _issue(
++                "pom.xml",
++                21,
++                "Java version below required LTS",
++                reviewer="style-reviewer",
++                relevance=4,
++            ),
++        ]
++
++        result = orchestrator._consolidate_results(issues)
++
++        # Merged into one, max relevance 4 → kept
++        assert result.summary.total == 1
++        assert result.filtered_issues == []
+diff --git a/tools/context/zen-review/zen_review/cli/main.py b/tools/context/zen-review/zen_review/cli/main.py
+index 5675cb0..3560f59 100644
+--- a/tools/context/zen-review/zen_review/cli/main.py
++++ b/tools/context/zen-review/zen_review/cli/main.py
+@@ -388,6 +388,16 @@ def review(
+             "skipping auto-detection. Files are NOT filtered.",
+         ),
+     ] = None,
++    min_relevance: Annotated[
++        int,
++        typer.Option(
++            "--min-relevance",
++            min=1,
++            max=5,
++            help="Minimum issue relevance (1-5) to keep. Issues below "
++            "are stored but not posted/displayed. Default: 3.",
++        ),
++    ] = 3,
+ ) -> None:
+     """Execute full code review pipeline.
+ 
+@@ -474,9 +484,16 @@ def review(
+ 
+         # Run orchestration (execute all reviewers in parallel)
+         orchestrator = Orchestrator()
+-        result = asyncio.run(orchestrator.execute(context))
++        result = asyncio.run(
++            orchestrator.execute(context, min_relevance=min_relevance)
++        )
+ 
+         console.print(f"[green]✓[/green] Found {result.summary.total} issues")
++        if result.filtered_issues:
++            console.print(
++                f"[dim]Filtered {len(result.filtered_issues)} low-relevance "
++                f"issues (kept in storage; --min-relevance {min_relevance})[/dim]"
++            )
+         console.print(f"  [red]●[/red] HIGH: {result.summary.high}")
+         console.print(f"  [yellow]●[/yellow] MEDIUM: {result.summary.medium}")
+         console.print(f"  [green]●[/green] LOW: {result.summary.low}")
+diff --git a/tools/context/zen-review/zen_review/models/review.py b/tools/context/zen-review/zen_review/models/review.py
+index 04c65b7..8371f32 100644
+--- a/tools/context/zen-review/zen_review/models/review.py
++++ b/tools/context/zen-review/zen_review/models/review.py
+@@ -192,6 +192,20 @@ class ReviewIssue(BaseModel):
+     current_code: str = ""
+     suggested_fix: str = ""
+     impact: str = Field(min_length=10)
++    relevance: int = Field(
++        default=3,
++        ge=1,
++        le=5,
++        description=(
++            "Practical relevance: 5 = real defect affecting "
++            "correctness/security now, 3 = concrete improvement, "
++            "1 = bureaucratic/theoretical"
++        ),
++    )
++    filtered: bool = Field(
++        default=False,
++        description="True when excluded from posting by relevance filter",
++    )
+     reviewer: Literal[
+         "zen-reviewer",
+         "security-reviewer",
+@@ -320,6 +334,13 @@ class ReviewResult(BaseModel):
+ 
+     issues: list[ReviewIssue]
+     summary: ReviewSummary
++    filtered_issues: list[ReviewIssue] = Field(
++        default_factory=list,
++        description=(
++            "Low-relevance issues excluded from posting/display, "
++            "kept in storage (flagged filtered=True)"
++        ),
++    )
+ 
+ 
+ class LanguageStats(BaseModel):
+diff --git a/tools/context/zen-review/zen_review/orchestration/dedup.py b/tools/context/zen-review/zen_review/orchestration/dedup.py
+new file mode 100644
+index 0000000..3874b1b
+--- /dev/null
++++ b/tools/context/zen-review/zen_review/orchestration/dedup.py
+@@ -0,0 +1,233 @@
++"""Deterministic deduplication of review issues.
++
++Architecture
++------------
++Pure functions that merge duplicate findings reported by multiple
++reviewers at the same location (e.g. zen-reviewer and style-reviewer
++both flagging a mutable DTO on the same line).
++
++Responsibility
++--------------
++Single responsibility: Collapse duplicate issues.
++- Group by file and nearby line (±2 tolerance)
++- Detect duplicates via title token similarity (Jaccard >= 0.5)
++- Merge keeping highest severity, most specific title, and an
++  "Also flagged by" attribution note
++
++Context
++-------
++Called by the orchestrator after gathering all reviewer issues,
++BEFORE the relevance filter and summary counting.
++
++Boundaries
++----------
++DOES:
++- Merge same-finding duplicates across reviewers
++- Preserve distinct findings on the same line (e.g. missing auth
++  vs missing rate limiting on one endpoint)
++
++DOES NOT:
++- Judge relevance (relevance filter does that)
++- Talk to the SDK or any I/O — pure, fully testable
++"""
++
++import re
++from typing import Final
++
++# Runtime import kept for codebase consistency (models are imported
++# at runtime everywhere; no TYPE_CHECKING blocks in this project)
++from zen_review.models.review import ReviewIssue  # noqa: TC001
++
++# Line distance still considered "same location" (SSOT)
++LINE_TOLERANCE: Final[int] = 2
++
++# Minimum Jaccard similarity between title token sets to merge (SSOT)
++TITLE_SIMILARITY_THRESHOLD: Final[float] = 0.5
++
++# Tokens carrying no discriminating signal in issue titles
++_STOPWORDS: Final[frozenset[str]] = frozenset(
++    {
++        "a", "an", "the", "of", "in", "on", "for", "to", "is", "are",
++        "be", "should", "must", "not", "no", "missing", "instead",
++        "with", "and", "or", "does", "meet", "use", "uses", "using",
++        "has", "have", "lacks", "without",
++    }
++)
++
++_SEVERITY_RANK: Final[dict[str, int]] = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
++
++
++def dedupe_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
++    """Collapse duplicate findings reported at the same location.
++
++    Responsibility
++    --------------
++    Merge issues that describe the SAME finding on the same file and
++    (near-)same line, keeping the strongest representative and
++    attributing the other reviewers.
++
++    Context
++    -------
++    Runs after all reviewers complete, before relevance filtering
++    and summary counting.
++
++    Args
++    ----
++    issues : list[ReviewIssue]
++        All issues from all reviewers.
++
++    Returns
++    -------
++    list[ReviewIssue]
++        Deduplicated issues, original order of first occurrence
++        preserved.
++
++    Examples
++    --------
++    >>> merged = dedupe_issues([zen_issue, style_duplicate])
++    >>> len(merged)
++    1
++    """
++    merged: list[ReviewIssue] = []
++
++    for issue in issues:
++        duplicate_of = _find_duplicate(issue, merged)
++        if duplicate_of is None:
++            merged.append(issue)
++            continue
++
++        index = merged.index(duplicate_of)
++        merged[index] = _merge_pair(duplicate_of, issue)
++
++    return merged
++
++
++def _find_duplicate(
++    issue: ReviewIssue,
++    accepted: list[ReviewIssue],
++) -> ReviewIssue | None:
++    """Find an already-accepted issue that is the same finding.
++
++    Args
++    ----
++    issue : ReviewIssue
++        Candidate issue.
++    accepted : list[ReviewIssue]
++        Issues accepted so far.
++
++    Returns
++    -------
++    ReviewIssue | None
++        The accepted issue this candidate duplicates, or None.
++    """
++    for existing in accepted:
++        if existing.file != issue.file:
++            continue
++        if abs(existing.line - issue.line) > LINE_TOLERANCE:
++            continue
++        if _title_similarity(existing, issue) >= TITLE_SIMILARITY_THRESHOLD:
++            return existing
++    return None
++
++
++def _title_similarity(first: ReviewIssue, second: ReviewIssue) -> float:
++    """Jaccard similarity between significant title tokens.
++
++    Filename-derived tokens are excluded — two DIFFERENT findings on
++    the same endpoint otherwise look similar just by naming the
++    endpoint ("...on Ticket Scan Endpoint").
++
++    Args
++    ----
++    first : ReviewIssue
++        First issue.
++    second : ReviewIssue
++        Second issue (same file as first).
++
++    Returns
++    -------
++    float
++        Jaccard similarity in [0, 1].
++    """
++    filename_tokens = _tokenize(first.file)
++
++    tokens_first = _tokenize(first.title) - filename_tokens
++    tokens_second = _tokenize(second.title) - filename_tokens
++
++    if not tokens_first or not tokens_second:
++        return 0.0
++
++    intersection = tokens_first & tokens_second
++    union = tokens_first | tokens_second
++    return len(intersection) / len(union)
++
++
++def _tokenize(text: str) -> set[str]:
++    """Extract significant lowercase tokens from text.
++
++    Splits camelCase/PascalCase (``TicketController`` → ``ticket``,
++    ``controller``) so filename-derived tokens actually match the
++    words reviewers use in titles.
++
++    Args
++    ----
++    text : str
++        Title or file path.
++
++    Returns
++    -------
++    set[str]
++        Alphanumeric tokens minus stopwords.
++    """
++    raw = re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+", text)
++    return {
++        token.lower() for token in raw if token.lower() not in _STOPWORDS
++    }
++
++
++def _merge_pair(kept: ReviewIssue, duplicate: ReviewIssue) -> ReviewIssue:
++    """Merge a duplicate into the kept issue.
++
++    Keeps the higher severity, the more specific title (more
++    significant tokens), the higher relevance, and appends an
++    attribution note listing the other reviewer.
++
++    Args
++    ----
++    kept : ReviewIssue
++        Issue accepted first.
++    duplicate : ReviewIssue
++        Newly detected duplicate.
++
++    Returns
++    -------
++    ReviewIssue
++        Merged issue.
++    """
++    stronger, weaker = kept, duplicate
++    if _SEVERITY_RANK[duplicate.severity] > _SEVERITY_RANK[kept.severity]:
++        stronger, weaker = duplicate, kept
++
++    title = stronger.title
++    if len(_tokenize(weaker.title)) > len(_tokenize(stronger.title)):
++        title = weaker.title
++
++    problem = stronger.problem
++    note = f"Also flagged by: {weaker.reviewer}"
++    if note not in problem:
++        problem = f"{problem}\n\n{note}"
++
++    return stronger.model_copy(
++        update={
++            "title": title,
++            "problem": problem,
++            "relevance": max(kept.relevance, duplicate.relevance),
++        }
++    )
++
++
++__all__ = [
++    "LINE_TOLERANCE",
++    "TITLE_SIMILARITY_THRESHOLD",
++    "dedupe_issues",
++]
+diff --git a/tools/context/zen-review/zen_review/orchestration/orchestrator.py b/tools/context/zen-review/zen_review/orchestration/orchestrator.py
+index 10004b7..8d9eae2 100644
+--- a/tools/context/zen-review/zen_review/orchestration/orchestrator.py
++++ b/tools/context/zen-review/zen_review/orchestration/orchestrator.py
+@@ -60,6 +60,7 @@ from zen_review.core.standards import compile_standards
+ from zen_review.exceptions import ReviewerError
+ from zen_review.models import ReviewContext
+ from zen_review.models.review import ReviewIssue, ReviewResult, ReviewSummary
++from zen_review.orchestration.dedup import dedupe_issues
+ 
+ # Constants (SSOT)
+ REVIEWER_CLASSES: Final[list] = [
+@@ -116,6 +117,7 @@ class Orchestrator:
+         self,
+         context: ReviewContext,
+         show_progress: bool = False,
++        min_relevance: int = 3,
+     ) -> ReviewResult:
+         """Execute all reviewers in parallel.
+ 
+@@ -134,6 +136,9 @@ class Orchestrator:
+             Review context with target, files, and metadata.
+         show_progress : bool
+             Whether to display real-time progress (default: True).
++        min_relevance : int
++            Minimum relevance (1-5) an issue must have to be kept;
++            lower-relevance issues go to filtered_issues.
+ 
+         Returns
+         -------
+@@ -147,11 +152,15 @@ class Orchestrator:
+         >>> print(f"HIGH severity: {result.summary.high}")
+         """
+         if show_progress:
+-            return await self._execute_with_progress(context)
++            return await self._execute_with_progress(context, min_relevance)
+         else:
+-            return await self._execute_without_progress(context)
++            return await self._execute_without_progress(context, min_relevance)
+ 
+-    async def _execute_without_progress(self, context: ReviewContext) -> ReviewResult:
++    async def _execute_without_progress(
++        self,
++        context: ReviewContext,
++        min_relevance: int = 3,
++    ) -> ReviewResult:
+         """Execute all reviewers in parallel without progress display.
+ 
+         Responsibility
+@@ -162,6 +171,8 @@ class Orchestrator:
+         ----
+         context : ReviewContext
+             Review context with target, files, and metadata.
++        min_relevance : int
++            Minimum relevance an issue must have to be kept.
+ 
+         Returns
+         -------
+@@ -214,9 +225,13 @@ class Orchestrator:
+                 all_issues.extend(result)
+ 
+         # Consolidate into ReviewResult
+-        return self._consolidate_results(all_issues)
++        return self._consolidate_results(all_issues, min_relevance)
+ 
+-    async def _execute_with_progress(self, context: ReviewContext) -> ReviewResult:
++    async def _execute_with_progress(
++        self,
++        context: ReviewContext,
++        min_relevance: int = 3,
++    ) -> ReviewResult:
+         """Execute all reviewers in parallel with Rich Live progress display.
+ 
+         Responsibility
+@@ -233,6 +248,8 @@ class Orchestrator:
+         ----
+         context : ReviewContext
+             Review context with target, files, and metadata.
++        min_relevance : int
++            Minimum relevance an issue must have to be kept.
+ 
+         Returns
+         -------
+@@ -374,7 +391,7 @@ class Orchestrator:
+                 all_issues.extend(result)
+ 
+         # Consolidate into ReviewResult
+-        return self._consolidate_results(all_issues)
++        return self._consolidate_results(all_issues, min_relevance)
+ 
+     def _create_reviewers(self, console: Console | None = None) -> list[BaseReviewer]:
+         """Create all reviewer instances.
+@@ -426,7 +443,8 @@ class Orchestrator:
+       "problem": "What is the problem? (min 10 chars)",
+       "current_code": "Current code snippet (optional)",
+       "suggested_fix": "Suggested fix (optional)",
+-      "impact": "What is the impact? (min 10 chars)"
++      "impact": "What is the impact? (min 10 chars)",
++      "relevance": 3
+     }
+   ],
+   "summary": {
+@@ -437,44 +455,70 @@ class Orchestrator:
+   }
+ }
+ 
++relevance (integer 1-5) rates how much the finding matters IN PRACTICE:
++- 5: real defect affecting correctness or security right now
++- 4: concrete problem likely to bite soon
++- 3: concrete improvement worth doing
++- 2: minor/theoretical nicety
++- 1: bureaucratic noise (e.g. "trivial constructor lacks a direct unit
++  test", exhaustively restating a convention with no real consequence)
++
+ Return ONLY valid JSON, no explanations or markdown."""
+ 
+     def _consolidate_results(
+         self,
+         all_issues: list[ReviewIssue],
++        min_relevance: int = 3,
+     ) -> ReviewResult:
+         """Consolidate issues into ReviewResult with summary.
+ 
+         Responsibility
+         --------------
+-        Calculate summary statistics and create ReviewResult.
++        Pipeline: dedupe cross-reviewer duplicates → filter by
++        relevance → calculate summary from KEPT issues only.
++        Filtered issues are preserved (flagged) for storage.
+ 
+         Args
+         ----
+         all_issues : list[ReviewIssue]
+             All issues from all reviewers.
++        min_relevance : int
++            Minimum relevance (1-5) to keep an issue.
+ 
+         Returns
+         -------
+         ReviewResult
+-            Consolidated result with calculated summary.
++            Consolidated result: deduplicated kept issues, summary
++            counted over kept issues, filtered issues preserved.
+         """
+-        # Calculate summary
+-        high_count = sum(1 for issue in all_issues if issue.severity == "HIGH")
+-        medium_count = sum(1 for issue in all_issues if issue.severity == "MEDIUM")
+-        low_count = sum(1 for issue in all_issues if issue.severity == "LOW")
+-        total_count = len(all_issues)
+-
++        # Step 1: Deduplicate cross-reviewer duplicates
++        deduped = dedupe_issues(all_issues)
++        removed = len(all_issues) - len(deduped)
++        if removed:
++            logger.info(f"Deduplicated {removed} duplicate issues")
++
++        # Step 2: Relevance filter (kept vs filtered, nothing lost)
++        kept = [i for i in deduped if i.relevance >= min_relevance]
++        filtered = [
++            i.model_copy(update={"filtered": True})
++            for i in deduped
++            if i.relevance < min_relevance
++        ]
++        if filtered:
++            logger.info(f"Filtered {len(filtered)} low-relevance issues")
++
++        # Step 3: Summary over kept issues only
+         summary = ReviewSummary(
+-            high=high_count,
+-            medium=medium_count,
+-            low=low_count,
+-            total=total_count,
++            high=sum(1 for issue in kept if issue.severity == "HIGH"),
++            medium=sum(1 for issue in kept if issue.severity == "MEDIUM"),
++            low=sum(1 for issue in kept if issue.severity == "LOW"),
++            total=len(kept),
+         )
+ 
+         return ReviewResult(
+-            issues=all_issues,
++            issues=kept,
+             summary=summary,
++            filtered_issues=filtered,
+         )
+ 
+ 

@@ -1,0 +1,575 @@
+diff --git a/tools/orch/runner/runner/core/attempts.py b/tools/orch/runner/runner/core/attempts.py
+new file mode 100644
+index 0000000..bb2e57e
+--- /dev/null
++++ b/tools/orch/runner/runner/core/attempts.py
+@@ -0,0 +1,87 @@
++"""Durable attempt counters, kept apart from the trimmed session log.
++
++Session protection trims `sessions` to the last few per mode so the
++prompt and task.yaml stop growing. Every retry guard used to count that
++same trimmed list, so a guard that needed three attempts could never
++see more than two, and the fresh-start threshold sat above the list's
++maximum size. These counters are the evidence the guards read, and
++nothing trims them.
++
++Schema in task.yaml:
++
++    attempts:
++      total: 7          # mode runs since the last fresh start
++      lifetime: 22      # mode runs ever; never reset
++      fresh_starts: 1
++      modes: {VALIDATING: 2}    # runs since that mode's gate passed
++      gate_fails: {"VALIDATING>FINALIZING": 2}  # consecutive fails
++"""
++
++from typing import Any
++
++ATTEMPTS_KEY = "attempts"
++
++
++def _block(data: dict[str, Any]) -> dict[str, Any]:
++    raw = data.get(ATTEMPTS_KEY)
++    block: dict[str, Any] = dict(raw) if isinstance(raw, dict) else {}
++    for key in ("total", "lifetime", "fresh_starts"):
++        value = block.get(key)
++        block[key] = value if isinstance(value, int) else 0
++    for key in ("modes", "gate_fails"):
++        value = block.get(key)
++        block[key] = dict(value) if isinstance(value, dict) else {}
++    data[ATTEMPTS_KEY] = block
++    return block
++
++
++def transition_key(mode: str, next_mode: str) -> str:
++    return f"{mode}>{next_mode}"
++
++
++def total_attempts(data: dict[str, Any]) -> int:
++    return _block(data)["total"]
++
++
++def record_mode_run(data: dict[str, Any], mode: str) -> int:
++    """Count one run of `mode`; return its runs since its gate last passed."""
++    block = _block(data)
++    block["total"] += 1
++    block["lifetime"] += 1
++    block["modes"][mode] = block["modes"].get(mode, 0) + 1
++    return block["modes"][mode]
++
++
++def record_gate_pass(data: dict[str, Any], mode: str, next_mode: str) -> None:
++    block = _block(data)
++    block["modes"].pop(mode, None)
++    block["gate_fails"].pop(transition_key(mode, next_mode), None)
++
++
++def record_gate_fail(data: dict[str, Any], mode: str, next_mode: str) -> int:
++    """Count one failure of the gate `mode`→`next_mode`; return the streak."""
++    block = _block(data)
++    key = transition_key(mode, next_mode)
++    block["gate_fails"][key] = block["gate_fails"].get(key, 0) + 1
++    return block["gate_fails"][key]
++
++
++def record_fresh_start(data: dict[str, Any]) -> int:
++    """Reset per-generation counters; return fresh starts so far."""
++    block = _block(data)
++    block["total"] = 0
++    block["modes"] = {}
++    block["gate_fails"] = {}
++    block["fresh_starts"] += 1
++    return block["fresh_starts"]
++
++
++__all__ = [
++    "ATTEMPTS_KEY",
++    "record_fresh_start",
++    "record_gate_fail",
++    "record_gate_pass",
++    "record_mode_run",
++    "total_attempts",
++    "transition_key",
++]
+diff --git a/tools/orch/runner/runner/core/engine.py b/tools/orch/runner/runner/core/engine.py
+index f72c3ba..d85cff0 100644
+--- a/tools/orch/runner/runner/core/engine.py
++++ b/tools/orch/runner/runner/core/engine.py
+@@ -20,6 +20,14 @@ from gradient_cli.core.compiler import (
+ from rich.panel import Panel
+ from rich.text import Text
+ 
++from runner.core.attempts import (
++    record_fresh_start,
++    record_gate_fail,
++    record_gate_pass,
++    record_mode_run,
++    total_attempts,
++    transition_key,
++)
+ from runner.core.events import create_emitter
+ from runner.core.hooks import (
+     execute_finalizing,
+@@ -201,6 +209,39 @@ _FINALIZE_STOPS: dict[FinalizeResult, tuple[str, str]] = {
+ }
+ 
+ 
++def _limit(env_var: str, default: int) -> int:
++    """Read a positive integer limit from the environment."""
++    try:
++        value = int(os.environ.get(env_var, default))
++    except ValueError:
++        return default
++    return value if value > 0 else default
++
++
++def _update_task(task_name: str, change: Any) -> Any:
++    """Apply `change` to task.yaml as it is on disk, save, return its result.
++
++    Counters must never ride on a dict the engine loaded earlier: saving
++    that dict would drop whatever a hook wrote since.
++    """
++    data = load_task_data(task_name)
++    value = change(data)
++    save_task_data(task_name, data)
++    return value
++
++
++def _hold_for_human(task_name: str, reason: str) -> None:
++    """Park the task for a person: status needs_human, reason in blockers."""
++    def hold(data: dict[str, Any]) -> None:
++        data["status"] = "needs_human"
++        data["blockers"] = reason
++        data["escalated_at"] = datetime.now(UTC).strftime(
++            "%Y-%m-%dT%H:%M:%SZ"
++        )
++
++    _update_task(task_name, hold)
++
++
+ def _record_finalize_stop(
+     task_name: str,
+     status: str,
+@@ -356,36 +397,51 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+ 
+     # --- Session protection: trim and fresh start ---
+     sessions = task_data.get("sessions") or []
+-    _TRIM_KEEP_PER_MODE = int(
+-        os.environ.get("RUNNER_TRIM_KEEP_PER_MODE", "2")
+-    )
+-    _FRESH_START_THRESHOLD = int(
+-        os.environ.get("RUNNER_FRESH_START_THRESHOLD", "15")
++    trim_keep_per_mode = int(
++        os.environ.get("RUNNERtrim_keep_per_mode", "2")
+     )
+-
+-    # Layer 3: Fresh start if total sessions exceeded threshold
+-    if len(sessions) >= _FRESH_START_THRESHOLD:
++    fresh_start_threshold = _limit("RUNNERfresh_start_threshold", 15)
++    max_fresh_starts = _limit("RUNNERmax_fresh_starts", 1)
++
++    # Layer 3: fresh start once the durable attempt count says so. The
++    # trimmed session log can't carry this count — trim caps it below
++    # the threshold (B01) — so it lives in `attempts`.
++    attempts_so_far = total_attempts(task_data)
++    if attempts_so_far >= fresh_start_threshold:
++        fresh_starts = task_data["attempts"]["fresh_starts"]
++        if fresh_starts >= max_fresh_starts:
++            _hold_for_human(
++                config.task_name,
++                f"{attempts_so_far} mode runs after {fresh_starts} fresh "
++                f"start(s) without finishing. Manual intervention required.",
++            )
++            result.final_mode = current_mode
++            result.stopped_reason = "needs_human"
++            return result
++        first_mode = valid_modes[0]
+         print(
+             f"Session protection: fresh start for {config.task_name} "
+-            f"({len(sessions)} sessions, threshold {_FRESH_START_THRESHOLD})"
++            f"({attempts_so_far} runs, threshold {fresh_start_threshold}) "
++            f"— back to {first_mode}"
+         )
++        record_fresh_start(task_data)
+         task_data["sessions"] = []
+-        task_data["mode"] = "BRIEFING"
++        task_data["mode"] = first_mode
+         task_data["validation_verdict"] = None
+         task_data["rejection_reason"] = None
+         save_task_data(config.task_name, task_data)
+-        current_mode = "BRIEFING"
++        current_mode = first_mode
+         sessions = []
+ 
+     # Layer 2: Trim sessions to last N per mode
+-    if len(sessions) > _TRIM_KEEP_PER_MODE:
++    if len(sessions) > trim_keep_per_mode:
+         by_mode: dict[str, list] = {}
+         for s in sessions:
+             m = s.get("mode", "UNKNOWN")
+             by_mode.setdefault(m, []).append(s)
+         trimmed = []
+         for mode_sessions in by_mode.values():
+-            trimmed.extend(mode_sessions[-_TRIM_KEEP_PER_MODE:])
++            trimmed.extend(mode_sessions[-trim_keep_per_mode:])
+         trimmed.sort(key=lambda s: s.get("timestamp", ""))
+         if len(trimmed) < len(sessions):
+             print(
+@@ -537,10 +593,34 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+     current_group_idx = _find_group_index(mode_groups, current_mode)
+     sdk: SDKWrapper | None = None
+ 
++    max_mode_runs = _limit("RUNNER_MAX_MODE_RETRIES", 3)
++    max_gate_fails = _limit("RUNNER_GATE_FAIL_MAX", 3)
++    # A mode is counted once per dispatch: transient/overflow retries
++    # inside one run are bounded separately and are not loops.
++    counted_modes: set[str] = set()
++
+     # Main execution loop — wrapped in try/finally for emitter cleanup
+     try:
+       # Main execution loop
+       while current_mode:
++        if current_mode not in counted_modes:
++            counted_modes.add(current_mode)
++            mode_now = current_mode
++            runs = _update_task(
++                config.task_name,
++                lambda data: record_mode_run(data, mode_now),
++            )
++            if runs > max_mode_runs:
++                _hold_for_human(
++                    config.task_name,
++                    f"{current_mode} ran {runs} times without its gate "
++                    f"passing (limit {max_mode_runs}). "
++                    f"Manual intervention required.",
++                )
++                result.final_mode = current_mode
++                result.stopped_reason = "needs_human"
++                break
++
+         result.modes_executed.append(current_mode)
+ 
+         # Resolve plugins for this mode (action skills only)
+@@ -1238,6 +1318,12 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+                 )
+             )
+ 
++            passed_mode, passed_to = current_mode, next_mode
++            _update_task(
++                config.task_name,
++                lambda data: record_gate_pass(data, passed_mode, passed_to),
++            )
++
+             # Advance to next mode with board side-effects
+             # (PR action, kanban sync from workflow config).
+             # Mode in YAML stays as last completed; it
+@@ -1259,6 +1345,19 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+             record.outcome = ModeOutcome.GATE_FAILED
+             result.final_mode = current_mode
+             result.stopped_reason = f"gate_failed:{next_mode}"
++            failed_mode, failed_to = current_mode, next_mode
++            streak = _update_task(
++                config.task_name,
++                lambda data: record_gate_fail(data, failed_mode, failed_to),
++            )
++            if streak >= max_gate_fails:
++                _hold_for_human(
++                    config.task_name,
++                    f"Gate {transition_key(failed_mode, failed_to)} "
++                    f"failed {streak} times in a row. "
++                    f"Manual intervention required.",
++                )
++                result.stopped_reason = "needs_human"
+             checks = gate.get("checks", [])
+             gate_lines = []
+             for check in checks:
+@@ -1348,8 +1447,9 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+     ):
+         try:
+             final_data = load_task_data(config.task_name)
+-            final_data["status"] = "queued"
+-            save_task_data(config.task_name, final_data)
++            if final_data.get("status") != "needs_human":
++                final_data["status"] = "queued"
++                save_task_data(config.task_name, final_data)
+         except Exception:
+             pass
+ 
+diff --git a/tools/orch/runner/runner/core/hooks.py b/tools/orch/runner/runner/core/hooks.py
+index 55eadd9..4bf1f69 100644
+--- a/tools/orch/runner/runner/core/hooks.py
++++ b/tools/orch/runner/runner/core/hooks.py
+@@ -1582,25 +1582,6 @@ def execute_finalizing(
+         pr_number = task_data.get("pr")
+         branch = task_data.get("branch")
+ 
+-        # Fix 3: max retries guard (FINALIZING and VALIDATING)
+-        MAX_MODE_RETRIES = 3
+-        sessions = task_data.get("sessions", [])
+-        current_mode = task_data.get("mode", "")
+-        mode_count = sum(
+-            1 for s in sessions
+-            if isinstance(s, dict) and s.get("mode") == current_mode
+-        )
+-        if current_mode in ("FINALIZING", "VALIDATING") and mode_count >= MAX_MODE_RETRIES:
+-            print_error(
+-                f"{current_mode} exhausted: {mode_count} attempts. "
+-                f"Marking as needs_human."
+-            )
+-            return FinalizeOutcome(
+-                FinalizeResult.NEEDS_HUMAN,
+-                f"{current_mode} failed {mode_count} times. "
+-                f"Manual intervention required.",
+-            )
+-
+         env = resolve_auth_env(repo_path=cwd)
+         run_env = {**os.environ, **(env or {})}
+ 
+diff --git a/tools/orch/runner/tests/test_attempt_counters.py b/tools/orch/runner/tests/test_attempt_counters.py
+new file mode 100644
+index 0000000..2d8224b
+--- /dev/null
++++ b/tools/orch/runner/tests/test_attempt_counters.py
+@@ -0,0 +1,202 @@
++"""WS2-T2 (B01): retry guards count durable attempts, not the trimmed log.
++
++Session trim keeps two entries per mode; the old FINALIZING guard needed
++three and the fresh-start threshold (15) sat above the trimmed log's
++ceiling. Counted over repeated dispatches the guard saw 0, 1, 2, 2, 2...
++forever. These tests replay repeated dispatches against a dict-backed
++task.yaml with trim active and assert the guards actually fire.
++"""
++
++import asyncio
++import copy
++from contextlib import ExitStack
++from typing import Any
++from unittest.mock import MagicMock, patch
++
++from test_engine_resilience import _single_mode_context
++
++from runner.core.attempts import (
++    record_fresh_start,
++    record_gate_fail,
++    record_gate_pass,
++    record_mode_run,
++    total_attempts,
++)
++from runner.core.engine import run_task
++from runner.core.models import (
++    ExecutionConfig,
++    FinalizeOutcome,
++    FinalizeResult,
++    SessionRecord,
++)
++
++
++class TestCounterSchema:
++    def test_mode_runs_accumulate_and_reset_on_gate_pass(self) -> None:
++        data: dict[str, Any] = {}
++        assert record_mode_run(data, "VALIDATING") == 1
++        assert record_mode_run(data, "VALIDATING") == 2
++        record_gate_pass(data, "VALIDATING", "FINALIZING")
++        assert record_mode_run(data, "VALIDATING") == 1
++        assert total_attempts(data) == 3
++        assert data["attempts"]["lifetime"] == 3
++
++    def test_gate_fail_streak_resets_on_pass(self) -> None:
++        data: dict[str, Any] = {}
++        assert record_gate_fail(data, "A", "B") == 1
++        assert record_gate_fail(data, "A", "B") == 2
++        record_gate_pass(data, "A", "B")
++        assert record_gate_fail(data, "A", "B") == 1
++
++    def test_fresh_start_keeps_lifetime(self) -> None:
++        data: dict[str, Any] = {}
++        for _ in range(4):
++            record_mode_run(data, "EXPLORING")
++        assert record_fresh_start(data) == 1
++        assert total_attempts(data) == 0
++        assert data["attempts"]["lifetime"] == 4
++
++    def test_malformed_block_is_repaired(self) -> None:
++        data: dict[str, Any] = {"attempts": {"total": "x", "modes": []}}
++        assert record_mode_run(data, "M") == 1
++        assert data["attempts"]["total"] == 1
++
++
++class _Disk:
++    def __init__(self, data: dict[str, Any]) -> None:
++        self.data = copy.deepcopy(data)
++
++    def load(self, _task_name: str) -> dict[str, Any]:
++        return copy.deepcopy(self.data)
++
++    def save(self, _task_name: str, data: dict[str, Any]) -> None:
++        self.data = copy.deepcopy(data)
++
++
++BASE = {
++    "workflow": "self-implementation",
++    "branch": "feature/t",
++    "issue": 1,
++    "milestone": "m",
++}
++
++
++def _dispatch(
++    disk: _Disk,
++    modes: list[str],
++    extra: dict[str, dict[str, Any]],
++    gate_passed: bool = True,
++) -> Any:
++    """One queue dispatch of the task: a fresh run_task over `disk`."""
++    transitions = {a: b for a, b in zip(modes, modes[1:])}
++    config = ExecutionConfig(task_name="t", skip_cleanup=True)
++    records = [
++        SessionRecord(mode=m, session_id=f"s-{m}", last_text="ok")
++        for m in modes
++    ]
++    with _single_mode_context(
++        task_data=disk.data,
++        execute_side_effect=records,
++        gate_passed=gate_passed,
++    ), ExitStack() as stack:
++        stack.enter_context(patch(
++            "runner.core.engine.load_task_data", side_effect=disk.load,
++        ))
++        stack.enter_context(patch(
++            "runner.core.engine.save_task_data", side_effect=disk.save,
++        ))
++        stack.enter_context(patch(
++            "runner.core.engine.get_task_mode",
++            side_effect=lambda data: str(data.get("mode")).upper(),
++        ))
++        stack.enter_context(patch(
++            "runner.core.engine.list_workflow_modes", return_value=modes,
++        ))
++        stack.enter_context(patch(
++            "runner.core.engine.get_next_mode",
++            side_effect=lambda workflow, current: transitions.get(current),
++        ))
++        for target, kwargs in extra.items():
++            stack.enter_context(patch(target, **kwargs))
++        return asyncio.run(run_task(config))
++
++
++class TestFinalizingRetryGuardFiresUnderTrim:
++    def test_needs_human_on_fourth_dispatch(self) -> None:
++        disk = _Disk({
++            **BASE,
++            "mode": "FINALIZING",
++            "status": "queued",
++            # Trim is active: more than two entries for the mode.
++            "sessions": [
++                {"mode": "FINALIZING", "timestamp": f"t{i}"}
++                for i in range(3)
++            ],
++        })
++        finalize = MagicMock(return_value=FinalizeOutcome(
++            FinalizeResult.AUTO_QUEUED, "checks pending",
++        ))
++        extra = {"runner.core.engine.execute_finalizing": {"new": finalize}}
++
++        stops = []
++        for _ in range(4):
++            result = _dispatch(disk, ["FINALIZING"], extra)
++            stops.append(result.stopped_reason)
++            assert len(disk.data.get("sessions") or []) <= 2
++
++        assert finalize.call_count == 3
++        assert stops[-1] == "needs_human"
++        assert disk.data["status"] == "needs_human"
++        assert "FINALIZING" in disk.data["blockers"]
++
++
++class TestGateCircuitBreaker:
++    def test_third_consecutive_gate_fail_holds_for_human(self) -> None:
++        disk = _Disk({**BASE, "mode": "EXPLORING", "status": "queued"})
++        statuses = []
++        for _ in range(3):
++            _dispatch(
++                disk, ["EXPLORING", "RESEARCHING"], {}, gate_passed=False,
++            )
++            statuses.append(disk.data["status"])
++
++        assert statuses == ["queued", "queued", "needs_human"]
++        assert "EXPLORING>RESEARCHING" in disk.data["blockers"]
++
++    def test_gate_pass_clears_mode_counter(self) -> None:
++        disk = _Disk({**BASE, "mode": "EXPLORING", "status": "queued"})
++        _dispatch(disk, ["EXPLORING", "RESEARCHING"], {})
++        assert "EXPLORING" not in disk.data["attempts"]["modes"]
++
++
++class TestFreshStartReachable:
++    def test_threshold_resets_to_first_workflow_mode(self) -> None:
++        disk = _Disk({
++            **BASE,
++            "mode": "RESEARCHING",
++            "status": "queued",
++            "sessions": [{"mode": "RESEARCHING", "timestamp": "t"}],
++            "attempts": {"total": 15, "lifetime": 15},
++        })
++        _dispatch(disk, ["EXPLORING", "RESEARCHING"], {})
++
++        attempts = disk.data["attempts"]
++        assert attempts["fresh_starts"] == 1
++        assert attempts["lifetime"] > 15
++        # Reset lands on the workflow's own first mode, not "BRIEFING".
++        assert all(
++            s.get("mode") != "RESEARCHING" or s.get("timestamp") != "t"
++            for s in disk.data.get("sessions") or []
++        )
++
++    def test_second_fresh_start_escalates(self) -> None:
++        disk = _Disk({
++            **BASE,
++            "mode": "EXPLORING",
++            "status": "queued",
++            "attempts": {"total": 15, "lifetime": 40, "fresh_starts": 1},
++        })
++        result = _dispatch(disk, ["EXPLORING"], {})
++
++        assert result.stopped_reason == "needs_human"
++        assert disk.data["status"] == "needs_human"
+diff --git a/tools/orch/runner/tests/test_execute_finalizing_idempotent.py b/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
+index 22025d7..f3552fd 100644
+--- a/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
++++ b/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
+@@ -264,35 +264,6 @@ class TestExecuteFinalizingTypedOutcome:
+         assert not outcome.completed
+         mock_cleanup.assert_not_called()
+ 
+-    def test_retry_cap_returns_needs_human_without_writing_status(
+-        self, tmp_path: Path,
+-    ) -> None:
+-        task_data = {
+-            **_base_task_data(),
+-            "mode": "FINALIZING",
+-            "sessions": [{"mode": "FINALIZING"}] * 3,
+-        }
+-        mock_save = MagicMock()
+-        patches = self._patches(task_data)
+-        patches += [
+-            patch("dao_cli.core.yaml_io.save_yaml", mock_save),
+-            patch("runner.core.hooks.subprocess.run", MagicMock()),
+-        ]
+-        for p in patches:
+-            p.start()
+-        try:
+-            outcome = execute_finalizing(
+-                cwd=tmp_path, task_name="regent-run-report-emission",
+-            )
+-        finally:
+-            for p in patches:
+-                p.stop()
+-
+-        assert outcome.result == FinalizeResult.NEEDS_HUMAN
+-        assert "3" in outcome.detail
+-        # The engine owns status writes; the hook only reports.
+-        mock_save.assert_not_called()
+-
+ 
+ class TestMergeCommandVerifiedAfterSuccess:
+     """WS1-T4: `gh pr merge --auto` exits 0 when it only ARMS the merge.

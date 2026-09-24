@@ -1,0 +1,18 @@
+{
+ "id": "runner-wall-clock",
+ "kind": "feature",
+ "start": "d71a79eea2704c00f94385586c4604f1658001d5",
+ "ref": "ea401cabed4142e7db054be9f3a1f78a983d8567",
+ "expected_src": [
+  "tools/orch/runner/runner/core/engine.py",
+  "tools/orch/runner/runner/core/models.py",
+  "tools/orch/runner/runner/core/sdk_wrapper.py"
+ ],
+ "ref_tests": [
+  "tools/orch/runner/tests/test_wall_clock_instrumentation.py"
+ ],
+ "suites": [
+  "tools/orch/runner"
+ ],
+ "ref_diff_lines": 348
+}

@@ -1,0 +1,34 @@
+{
+ "id": "sourcerer-monorepo-root",
+ "kind": "signature",
+ "start": "f99e618ed3761c58ba2b6f72260fa508bba34820",
+ "ref": "41c02e3e6df95a0e3b936430af1ac73def71569b",
+ "expected_src": [
+  "tools/flow/sourcerer/sourcerer/wt/integrations/filesystem.py",
+  "tools/flow/sourcerer/sourcerer/wt/services/completer.py",
+  "tools/flow/sourcerer/sourcerer/wt/services/navigator.py"
+ ],
+ "ref_tests": [],
+ "suites": [
+  "tools/flow/sourcerer"
+ ],
+ "ref_diff_lines": 152,
+ "start_failures": {
+  "tools/flow/sourcerer": []
+ },
+ "ref_failures": {
+  "tools/flow/sourcerer": []
+ },
+ "hidden_at_ref": {
+  "tools/flow/sourcerer": {
+   "passed": 0,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/flow/sourcerer": {
+   "passed": 0,
+   "failed": 0
+  }
+ }
+}

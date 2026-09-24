@@ -1,0 +1,220 @@
+diff --git a/tools/orch/continuum-core/continuum_core/sdk.py b/tools/orch/continuum-core/continuum_core/sdk.py
+index 674bab8..5ddbbf3 100644
+--- a/tools/orch/continuum-core/continuum_core/sdk.py
++++ b/tools/orch/continuum-core/continuum_core/sdk.py
+@@ -83,10 +83,23 @@ _MODEL_PINS_CANDIDATES = (
+ _HEADLESS_SETTINGS_PATH = _TOOLS_DATA_DIR / "headless-claude-settings.json"
+ 
+ 
+-def _pin_model(model: str | None) -> str:
++def _pin_model(
++    model: str | None,
++    *,
++    custom_default_key: str | None = None,
++) -> str:
+     """Resolve short model name to pinned model ID.
+ 
+-    Falls back to 'default' pin when model is None.
++    Falls back to 'default' pin when model is None, or to a custom
++    default key if provided (e.g., 'default:refiner').
++
++    Args:
++        model: Short name (opus/sonnet/haiku) or None for default.
++        custom_default_key: Custom key to check before 'default'
++                           (e.g., 'default:refiner').
++
++    Returns:
++        Pinned model ID from model_pins.json.
+     """
+     pins = None
+     for pins_path in _MODEL_PINS_CANDIDATES:
+@@ -98,6 +111,11 @@ def _pin_model(model: str | None) -> str:
+     if pins is None:
+         return model or "sonnet"
+     if model is None:
++        if custom_default_key:
++            return pins.get(
++                custom_default_key,
++                pins.get("default", "sonnet"),
++            )
+         return pins.get("default", "sonnet")
+     return pins.get(model, model)
+ 
+diff --git a/tools/orch/continuum-core/tests/test_sdk.py b/tools/orch/continuum-core/tests/test_sdk.py
+index a12106f..f144fa1 100644
+--- a/tools/orch/continuum-core/tests/test_sdk.py
++++ b/tools/orch/continuum-core/tests/test_sdk.py
+@@ -46,6 +46,35 @@ class TestPinModel:
+         )
+         assert sdk._pin_model(None) == "from-second"
+ 
++    def test_custom_default_key_used_when_provided(
++        self, tmp_path, monkeypatch
++    ):
++        pins = tmp_path / "model_pins.json"
++        pins.write_text(
++            json.dumps(
++                {
++                    "default": "standard-model",
++                    "default:refiner": "refiner-model",
++                }
++            )
++        )
++        monkeypatch.setattr(sdk, "_MODEL_PINS_CANDIDATES", (pins,))
++        assert (
++            sdk._pin_model(None, custom_default_key="default:refiner")
++            == "refiner-model"
++        )
++
++    def test_custom_default_key_falls_back_to_default(
++        self, tmp_path, monkeypatch
++    ):
++        pins = tmp_path / "model_pins.json"
++        pins.write_text(json.dumps({"default": "standard-model"}))
++        monkeypatch.setattr(sdk, "_MODEL_PINS_CANDIDATES", (pins,))
++        assert (
++            sdk._pin_model(None, custom_default_key="default:missing")
++            == "standard-model"
++        )
++
+ 
+ class TestSharedDataPaths:
+     """The parent chain is depth-sensitive and moved during the split."""
+diff --git a/tools/orch/intake/intake/core/digest.py b/tools/orch/intake/intake/core/digest.py
+index e8eddbd..5e5aa42 100644
+--- a/tools/orch/intake/intake/core/digest.py
++++ b/tools/orch/intake/intake/core/digest.py
+@@ -8,7 +8,6 @@ Transitions items from ``captured`` to ``digested``.
+ """
+ 
+ import asyncio
+-import json
+ import subprocess
+ from pathlib import Path
+ from typing import Any, Final
+@@ -24,6 +23,7 @@ from claude_agent_sdk import (  # type: ignore[import-untyped]
+     ToolResultBlock,
+     ToolUseBlock,
+ )
++from continuum_core.sdk import _pin_model
+ from dao_cli.core.project import (
+     find_project_dir,
+     get_source_root,
+@@ -52,20 +52,6 @@ _SETTINGS_PATH = str(
+ DEFAULT_MODEL: Final[str] = "sonnet"
+ MAX_RETRIES: Final[int] = 3
+ 
+-# Shared model pin file (SSOT for model versions)
+-_MODEL_PINS_PATH = (
+-    Path(__file__).parent.parent.parent.parent.parent / "data" / "model_pins.json"
+-)
+-
+-
+-def _pin_model(model: str) -> str:
+-    """Resolve short model name to pinned model ID."""
+-    try:
+-        pins = json.loads(_MODEL_PINS_PATH.read_text())
+-        return pins.get(model, model)
+-    except (FileNotFoundError, json.JSONDecodeError):
+-        return model
+-
+ 
+ def _load_project_context() -> str:
+     """Load project context from CLAUDE.md or README.md.
+diff --git a/tools/orch/intake/pyproject.toml b/tools/orch/intake/pyproject.toml
+index 6421451..5c15009 100644
+--- a/tools/orch/intake/pyproject.toml
++++ b/tools/orch/intake/pyproject.toml
+@@ -7,11 +7,13 @@ dependencies = [
+     "typer>=0.12.0",
+     "rich>=13.0.0",
+     "pyyaml>=6.0.0",
++    "continuum-core",
+     "dao-cli",
+     "claude-agent-sdk>=0.1.0",
+ ]
+ 
+ [tool.uv.sources]
++continuum-core = { workspace = true }
+ dao-cli = { workspace = true }
+ 
+ [project.scripts]
+diff --git a/tools/orch/refiner/pyproject.toml b/tools/orch/refiner/pyproject.toml
+index 6ce8b0a..367dcab 100644
+--- a/tools/orch/refiner/pyproject.toml
++++ b/tools/orch/refiner/pyproject.toml
+@@ -8,11 +8,13 @@ dependencies = [
+     "rich>=13.0.0",
+     "pyyaml>=6.0.0",
+     "claude-agent-sdk>=0.1.0",
++    "continuum-core",
+     "dao-cli",
+     "gradient-cli",
+ ]
+ 
+ [tool.uv.sources]
++continuum-core = { workspace = true }
+ dao-cli = { workspace = true }
+ gradient-cli = { workspace = true }
+ 
+diff --git a/tools/orch/refiner/refiner/core/sdk_wrapper.py b/tools/orch/refiner/refiner/core/sdk_wrapper.py
+index b9d8a5d..40ef1ed 100644
+--- a/tools/orch/refiner/refiner/core/sdk_wrapper.py
++++ b/tools/orch/refiner/refiner/core/sdk_wrapper.py
+@@ -10,10 +10,11 @@ When claude-agent-sdk is not available, falls back to a
+ stub that logs calls without executing.
+ """
+ 
+-import json
+ import subprocess
+ from pathlib import Path
+ 
++from continuum_core.sdk import _pin_model
++
+ from refiner.core.events import EventEmitter
+ from refiner.display import console, print_error
+ from refiner.exceptions import SDKError
+@@ -87,34 +88,6 @@ _TOOL_ICON_MAP: dict[str, str] = {
+ }
+ _DEFAULT_TOOL_ICON = "\u2192"
+ 
+-# Shared model pin file (SSOT for model versions).
+-# First path works from the source tree; the home-anchored path
+-# makes uv-tool-installed copies read the live SSOT file too
+-# (site-packages has no ../data, so installs silently fell back).
+-_MODEL_PINS_CANDIDATES = (
+-    Path(__file__).parent.parent.parent.parent.parent / "data" / "model_pins.json",
+-    Path.home() / "work" / "sources" / "continuum" / "tools" / "data" / "model_pins.json",
+-)
+-
+-
+-def _pin_model(model: str | None) -> str:
+-    """Resolve short model name to pinned model ID.
+-
+-    Falls back to 'default:refiner' then 'default' pin when model is None.
+-    """
+-    pins = None
+-    for pins_path in _MODEL_PINS_CANDIDATES:
+-        try:
+-            pins = json.loads(pins_path.read_text())
+-            break
+-        except (FileNotFoundError, json.JSONDecodeError):
+-            continue
+-    if pins is None:
+-        return model or "opus"
+-    if model is None:
+-        return pins.get("default:refiner", pins.get("default", "opus"))
+-    return pins.get(model, model)
+-
+ 
+ def _tool_detail(name: str, inp: dict) -> str:
+     """Extract the key argument from a tool input dict.
+@@ -232,7 +205,7 @@ class SDKWrapper:
+             options.mcp_servers = mcp_servers
+         if allowed_tools:
+             options.allowed_tools = allowed_tools
+-        options.model = _pin_model(model)
++        options.model = _pin_model(model, custom_default_key="default:refiner")
+         if resume_session_id is not None:
+             options.resume = resume_session_id
+ 

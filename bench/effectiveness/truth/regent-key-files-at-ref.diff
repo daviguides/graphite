@@ -1,0 +1,1038 @@
+diff --git a/tools/orch/regent/regent/core/lint_context.py b/tools/orch/regent/regent/core/lint_context.py
+index bba3af3..064f479 100644
+--- a/tools/orch/regent/regent/core/lint_context.py
++++ b/tools/orch/regent/regent/core/lint_context.py
+@@ -30,6 +30,7 @@ there was nothing to run them over — and it keeps the skip finding
+ meaning "not checked" instead of a clean bill of health over nothing.
+ """
+ 
++import subprocess
+ from pathlib import Path
+ 
+ from dao_cli.core.yaml_io import load_yaml
+@@ -37,7 +38,12 @@ from refiner.core.decisions import list_decisions
+ from refiner.core.findings import list_findings
+ from refiner.core.state import load_session, session_dir
+ 
+-from regent.core.lints import LintContext, TaskTarget
++from regent.core.lints import (
++    LintContext,
++    RepoTree,
++    TaskTarget,
++    declared_base_branches,
++)
+ from regent.core.reconcile import DriftStatus
+ 
+ #: A brief body read for term-overlap, not for display. Guards against a
+@@ -216,6 +222,174 @@ def task_targets(project_dir: Path, item_id: str) -> list[TaskTarget]:
+     return out
+ 
+ 
++def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str] | None:
++    """Run one read-only git command; None when it could not run at all.
++
++    Never raises and never checks the return code: every caller here
++    treats a non-zero exit as "this repository does not answer that",
++    which is a different thing from an error worth propagating out of a
++    lint.
++    """
++    try:
++        return subprocess.run(
++            ["git", *args],
++            cwd=cwd,
++            capture_output=True,
++            text=True,
++            timeout=15,
++        )
++    except (OSError, subprocess.SubprocessError):
++        return None
++
++
++def _out(args: list[str], cwd: Path) -> str | None:
++    """stdout of a successful read-only git command, else None."""
++    proc = _git(args, cwd)
++    if proc is None or proc.returncode != 0:
++        return None
++    return proc.stdout
++
++
++def _default_branch(root: Path) -> str | None:
++    """The repository's default branch, asked for rather than assumed.
++
++    A fourth copy of the fifteen lines that `worktree` and `instrument`
++    each keep, and deliberately so: regent depends on neither, and an
++    edge across two layers for this costs more than the duplication. It
++    is copied from their CURRENT shape, after the bug both carried —
++    returning "master" on any non-zero exit, so a missing remote, an
++    unfetched clone or a bad path all came back as a confident wrong
++    branch. Order of authority: the remote's own recorded HEAD, then
++    each candidate ref explicitly. A repository that answers for neither
++    is unknown, and unknown is None.
++
++    Args:
++        root: Repository root.
++
++    Returns:
++        The default branch name, or None when nothing answers.
++    """
++    head = _out(["symbolic-ref", "refs/remotes/origin/HEAD"], root)
++    if head and head.strip():
++        return head.strip().rsplit("/", 1)[-1]
++
++    for candidate in ("main", "master"):
++        if _out(["rev-parse", "--verify", f"origin/{candidate}"], root):
++            return candidate
++    return None
++
++
++def _umbrella_branch(
++    project_dir: Path, item_id: str
++) -> tuple[str | None, str]:
++    """The integration branch this run's work converges on, if any.
++
++    Returns (branch, ambiguity). A non-empty ambiguity means the briefs
++    disagree about where the work lands, and the caller must skip rather
++    than pick one — `check_base_branch_fallback` reports that
++    disagreement in its own voice; guessing here would add a second,
++    louder wrong answer on top of it.
++    """
++    briefs = brief_paths_by_type(
++        project_dir, item_id, "initiative"
++    ) + brief_paths_by_type(project_dir, item_id, "milestone")
++    declared = declared_base_branches(briefs)
++    if len(declared) > 1:
++        spread = ", ".join(sorted(declared))
++        return None, (
++            "the run's briefs declare different **Base Branch** values "
++            f"({spread}), so the branch its work converges on is not "
++            "decided — see the base_branch finding"
++        )
++    if len(declared) == 1:
++        return next(iter(declared)), ""
++    return None, ""
++
++
++def resolve_repo_tree(project_dir: Path, item_id: str) -> RepoTree:
++    """List the paths of the ref this run's work belongs to.
++
++    Which ref, and why. The honest answer for a closed run is the branch
++    the work converged on: the initiative's declared umbrella when there
++    is one, the repository's default branch otherwise. The umbrella is
++    tried first and the default is the fallback rather than a rival —
++    `instrument setup initiative` cuts the umbrella FROM the default, so
++    before it exists on origin the default is precisely the state the
++    run started from, not a guess about it.
++
++    Everything asked here is remote-tracking (`origin/...`) on purpose.
++    A local branch is the operator's, and the whole defect this replaces
++    was a check reading one machine's idea of the project.
++
++    No network call is made: the ref may be a fetch behind, and it is
++    allowed to be, because `check_key_files` also consults the working
++    copy and only reports a path missing from both.
++
++    Args:
++        project_dir: Project directory.
++        item_id: The signal being refined.
++
++    Returns:
++        A resolved RepoTree, or one carrying the reason it is not —
++        never an empty tree standing in for an unanswerable question.
++    """
++    config_path = project_dir / "project.yaml"
++    if not config_path.is_file():
++        return RepoTree(
++            unresolved=(
++                f"{config_path} does not exist, so no repository is "
++                "named to check declared paths against"
++            )
++        )
++    config = load_yaml(path=config_path)
++    raw_root = (config or {}).get("project", {}).get("source_root")
++    if not raw_root:
++        return RepoTree(
++            unresolved=(
++                "project.yaml records no source_root — the operator's "
++                "cwd is not a substitute, it is the bug this replaces"
++            )
++        )
++
++    source_root = Path(str(raw_root))
++    toplevel = _out(["rev-parse", "--show-toplevel"], source_root)
++    if not toplevel or not toplevel.strip():
++        return RepoTree(
++            unresolved=f"{source_root} is not a git checkout"
++        )
++    root = Path(toplevel.strip())
++    prefix = (_out(["rev-parse", "--show-prefix"], source_root) or "").strip()
++
++    umbrella, ambiguity = _umbrella_branch(project_dir, item_id)
++    if ambiguity:
++        return RepoTree(unresolved=ambiguity)
++
++    candidates = [f"origin/{umbrella}"] if umbrella else []
++    default = _default_branch(root)
++    if default:
++        candidates.append(f"origin/{default}")
++
++    for ref in candidates:
++        listing = _out(["ls-tree", "-r", "-t", "--name-only", "-z", ref], root)
++        if listing is None:
++            continue
++        return RepoTree(
++            ref=ref,
++            root=root,
++            prefix=prefix,
++            paths=frozenset(p for p in listing.split("\0") if p),
++        )
++
++    tried = ", ".join(candidates) if candidates else "none"
++    return RepoTree(
++        unresolved=(
++            f"no remote branch of {root} resolved (tried: {tried}) — "
++            "origin/HEAD is unset and origin/main, origin/master are "
++            "absent"
++        )
++    )
++
++
+ def build_lint_context(
+     project_dir: Path,
+     item_id: str,
+@@ -230,18 +404,18 @@ def build_lint_context(
+     command line cannot point the lint at a brief the refinery never
+     produced.
+ 
+-    The four per-task fields (`brief_path`, `task_dir`, `task_yaml`,
+-    `claimed_brief_count`) are deliberately left None. `check_key_files`
+-    and `check_slug_consistency` take ONE task; a run produces many
+-    (eight, for the collections run). Filling them with an arbitrary
+-    task would report a clean result computed over one eighth of the
+-    work, which reads as "checked" — strictly worse than the skip
+-    finding, which reads as "not checked". Covering them properly needs
+-    a per-task fan-out that `run_all_lints`'s one-context-one-target
+-    shape does not have; that is a lints.py contract change, not a
+-    caller change. `claimed_brief_count` feeds `check_divergence`, which
+-    `run_all_lints` never calls at all, and its input is agent prose —
+-    not something on disk to resolve.
++    The per-task singles this used to leave None are gone: `tasks`
++    carries every task the run is answerable for, and the per-task lints
++    fan out over it. Filling a one-task field with an arbitrary task
++    would have reported a clean result computed over one eighth of the
++    work, which reads as "checked" — strictly worse than a skip, which
++    reads as "not checked". `claimed_brief_count` is still unresolved
++    here: it feeds `check_divergence`, which `run_all_lints` never calls
++    at all, and its input is agent prose, not something on disk.
++
++    `repo_tree` is resolved once for the whole run rather than per task
++    — the ref is a property of the run, and eight tasks asking git the
++    same question eight times is eight chances to get eight answers.
+ 
+     Args:
+         project_dir: Project directory.
+@@ -278,6 +452,7 @@ def build_lint_context(
+         ),
+         source_drift=source_drift,
+         tasks=task_targets(project_dir, item_id),
++        repo_tree=resolve_repo_tree(project_dir, item_id),
+     )
+ 
+ 
+@@ -287,5 +462,6 @@ __all__ = [
+     "briefs_text",
+     "build_lint_context",
+     "demand_signal_raw",
++    "resolve_repo_tree",
+     "task_targets",
+ ]
+diff --git a/tools/orch/regent/regent/core/lints.py b/tools/orch/regent/regent/core/lints.py
+index 15cbb9c..fd39e7b 100644
+--- a/tools/orch/regent/regent/core/lints.py
++++ b/tools/orch/regent/regent/core/lints.py
+@@ -93,6 +93,42 @@ class LintFinding:
+     suggestion: str = ""
+ 
+ 
++@dataclass(frozen=True)
++class RepoTree:
++    """Every path one named git ref contains — the repository, not a disk.
++
++    `check_key_files` used to ask `Path(...).exists()`, which answers
++    about the operator's working copy: whatever branch it happens to sit
++    on, however many commits behind, with the task's worktree already
++    removed. Over the link-health run — six tasks delivered and merged —
++    that reported four files missing; they were in `main`, and the
++    checkout was eight commits behind. The check was never wrong; the
++    source it consulted was.
++
++    `paths` is repo-root-relative and holds trees as well as blobs, so a
++    brief that legitimately declares `tests/marks/fixtures/` is not told
++    its directory does not exist. `prefix` is the path from the
++    repository root down to the project's source root, for the briefs
++    that declare a path relative to the project rather than to the repo.
++
++    `unresolved` carries the reason nothing could be listed, and is empty
++    when the ref answered. An unresolved tree is never treated as an
++    empty repository — that would report every declared path missing,
++    which is the exact outcome this type exists to prevent.
++    """
++
++    ref: str = ""
++    root: Path | None = None
++    prefix: str = ""
++    paths: frozenset[str] = frozenset()
++    unresolved: str = ""
++
++    @property
++    def resolved(self) -> bool:
++        """Whether a named ref actually answered."""
++        return not self.unresolved and self.root is not None
++
++
+ @dataclass
+ class TaskTarget:
+     """One task a run set up, with everything a per-task lint reads.
+@@ -125,12 +161,16 @@ class LintContext:
+     findings: list[Finding] | None = None
+     demand_signal_raw: str | None = None
+     briefs_text: str = ""
+-    brief_path: Path | None = None
+-    task_dir: Path | None = None
+-    task_yaml: dict | None = None
+     initiative_brief_path: Path | None = None
+     milestone_brief_paths: list[Path] = field(default_factory=list)
+     source_drift: DriftStatus | None = None
++    #: The git ref the per-task `key_files` check reads paths from.
++    #:
++    #: None means no caller resolved one, which is not the same as a ref
++    #: that resolved to nothing — `RepoTree.unresolved` says why it could
++    #: not, and run_all_lints repeats that reason in the skip. Neither is
++    #: ever allowed to mean "every declared path is missing".
++    repo_tree: RepoTree | None = None
+     #: Every task the run is answerable for, in manifest order. A list,
+     #: unlike the three single-task fields above, because the questions
+     #: it answers are about the run's whole scoreboard — checking one
+@@ -360,15 +400,101 @@ def check_signal_brief_coverage(
+     return results
+ 
+ 
+-def check_key_files(brief_path: Path) -> list[LintFinding]:
+-    """Verify every non-'Add' Key Files row's Path exists on disk.
++def _declared_key_file(cell: str) -> str:
++    """One Key Files Path cell, stripped of table and markdown decoration."""
++    return cell.strip().strip("`").strip().rstrip("/")
++
++
++def _known_to_repo(raw: str, tree: RepoTree) -> bool | None:
++    """Can this declared path be found? None when it is outside the repo.
++
++    Two sources are consulted, and a miss has to be a miss in BOTH.
++
++    The ref covers a closed run: its worktree is gone and its checkout
++    may sit any number of commits behind the branch the work merged to,
++    so the disk alone answers about a machine rather than about the
++    project. The working copy covers the opposite case: a run whose
++    tasks have not merged yet, where a file one task added and another
++    declares `Modify` exists locally and at no ref at all.
++
++    Neither kind of staleness can manufacture a "missing" on its own,
++    while the case this lint exists for — a brief naming a path that was
++    never real — is absent from both.
++
++    Args:
++        raw: The declared path, decoration already stripped.
++        tree: The resolved ref to look in.
++
++    Returns:
++        True when found, False when found in neither source, None when
++        the path lies outside the repository the ref belongs to.
++    """
++    if tree.root is None:
++        return None
++
++    path = Path(raw)
++    if path.is_absolute():
++        try:
++            candidates = [path.relative_to(tree.root).as_posix()]
++        except ValueError:
++            return None
++        on_disk = [path]
++    else:
++        # A relative declaration is read from the repository root, and
++        # then from the project's source root inside it — a brief for a
++        # monorepo subproject writes whichever its author had in mind,
++        # and guessing wrong would invent a missing file.
++        rel = path.as_posix()
++        candidates = [rel]
++        on_disk = [tree.root / rel]
++        if tree.prefix:
++            candidates.append(f"{tree.prefix}{rel}")
++            on_disk.append(tree.root / tree.prefix / rel)
++
++    if any(candidate in tree.paths for candidate in candidates):
++        return True
++    return any(p.exists() for p in on_disk)
++
++
++def check_key_files(brief_path: Path, tree: RepoTree) -> list[LintFinding]:
++    """Verify every non-Add Key Files row names a path the repo knows.
++
++    The question — does a declared path exist? — has a perfectly stable
++    answer; the old implementation asked it of `Path.exists()`, which
++    answers about the operator's working copy instead. See `RepoTree`
++    for what that cost and what is consulted now.
++
++    The listing behind `tree.paths` is one `git ls-tree -r -t` per ref
++    rather than a `git cat-file -e` per row: a run has eight tasks with
++    a handful of rows each, one listing answers all of them, and `-t`
++    keeps a row that names a directory from reading as missing —
++    `cat-file -e` would have needed the same allowance made twice.
+ 
+     Args:
+         brief_path: Path to a brief.md with a "## Key Files" table.
++        tree: The resolved ref to check declared paths against.
+ 
+     Returns:
+-        One LintFinding per row whose declared path is missing.
++        One LintFinding per row whose declared path is in neither the
++        ref nor the working copy, plus one skip finding covering any
++        rows that point outside the repository. A single skip finding if
++        the ref never resolved — never a missing report.
+     """
++    if not tree.resolved:
++        return [
++            LintFinding(
++                lint_id="key_files",
++                message=(
++                    "skipped: "
++                    + (
++                        tree.unresolved
++                        or "no git ref was resolved to check paths against"
++                    )
++                ),
++                location=str(brief_path),
++            )
++        ]
++
+     if not brief_path.exists():
+         return [
+             LintFinding(
+@@ -386,6 +512,7 @@ def check_key_files(brief_path: Path) -> list[LintFinding]:
+     section = section.split("\n## ", 1)[0]
+ 
+     results: list[LintFinding] = []
++    outside: list[str] = []
+     header_seen = False
+     for line in section.splitlines():
+         match = _KEY_FILES_ROW_PATTERN.match(line.strip())
+@@ -398,26 +525,80 @@ def check_key_files(brief_path: Path) -> list[LintFinding]:
+             header_seen = True
+             continue
+         _, path_str, change = cols
+-        if change.strip().lower() == "add":
++        # `startswith`, not equality: briefs qualify the cell in place —
++        # `Add (minimal, for these unit tests)` is an Add row, and an
++        # exact match read it as a change to an existing file and then
++        # reported the file it was about to create as missing.
++        if change.strip().lower().startswith("add"):
+             continue
+-        if not Path(path_str).exists():
+-            results.append(
+-                LintFinding(
+-                    lint_id="key_files",
+-                    message=(
+-                        f"Key Files row declares Change={change!r} "
+-                        f"but path does not exist: {path_str}"
+-                    ),
+-                    location=path_str,
+-                    suggestion=(
+-                        "Fix the path, or mark the row Change=Add "
+-                        "if the file is new"
+-                    ),
+-                )
++        raw = _declared_key_file(path_str)
++        if not raw:
++            continue
++        known = _known_to_repo(raw, tree)
++        if known is None:
++            outside.append(raw)
++            continue
++        if known:
++            continue
++        results.append(
++            LintFinding(
++                lint_id="key_files",
++                message=(
++                    f"Key Files row declares Change={change!r} but no "
++                    f"such path exists at {tree.ref} or in the working "
++                    f"copy: {raw}"
++                ),
++                location=raw,
++                suggestion=(
++                    "Fix the path, or mark the row Change=Add "
++                    "if the file is new"
++                ),
++            )
++        )
++
++    if outside:
++        # Not reported as missing and not passed over in silence: this
++        # ref cannot answer for another repository, and a clean-looking
++        # brief whose rows were never opened is how "clean" comes to
++        # mean nothing.
++        results.append(
++            LintFinding(
++                lint_id="key_files",
++                message=(
++                    f"skipped: {len(outside)} Key Files row(s) name "
++                    f"paths outside {tree.root}, which {tree.ref} "
++                    f"cannot answer for: {', '.join(outside[:3])}"
++                ),
++                location=str(brief_path),
+             )
++        )
+     return results
+ 
+ 
++def declared_base_branches(brief_paths: list[Path]) -> dict[str, list[str]]:
++    """Which **Base Branch** each brief declares, grouped by branch.
++
++    Shared with the repo-tree resolver, which needs the same reading for
++    a different question: this lint asks whether the briefs agree, the
++    resolver asks which branch the run's work converges on. Two readings
++    of one declaration is how they would start disagreeing.
++
++    Args:
++        brief_paths: Briefs to read; missing ones are skipped.
++
++    Returns:
++        Branch name -> the parent directory names that declared it.
++    """
++    declared: dict[str, list[str]] = {}
++    for path in brief_paths:
++        if not path.exists():
++            continue
++        match = _BASE_BRANCH_PATTERN.search(path.read_text(encoding="utf-8"))
++        if match:
++            declared.setdefault(match.group(1), []).append(path.parent.name)
++    return declared
++
++
+ def check_base_branch_fallback(
+     initiative_brief_path: Path,
+     milestone_brief_paths: list[Path],
+@@ -449,15 +630,7 @@ def check_base_branch_fallback(
+     # notice: instrument resolves by taking whichever brief
+     # `sorted(rglob())` reaches first, so the branch the work converges
+     # on is decided by directory order.
+-    declared: dict[str, list[str]] = {}
+-    for path in milestone_brief_paths:
+-        if not path.exists():
+-            continue
+-        match = _BASE_BRANCH_PATTERN.search(
+-            path.read_text(encoding="utf-8")
+-        )
+-        if match:
+-            declared.setdefault(match.group(1), []).append(path.parent.name)
++    declared = declared_base_branches(milestone_brief_paths)
+ 
+     if len(declared) > 1:
+         spread = "; ".join(
+@@ -731,6 +904,12 @@ def run_all_lints(ctx: LintContext) -> list[LintFinding]:
+             )
+         )
+ 
++    def _skip_because(lint_id: str, reason: str) -> None:
++        """A skip whose reason is a sentence, not a missing field name."""
++        results.append(
++            LintFinding(lint_id=lint_id, message=f"skipped: {reason}")
++        )
++
+     if ctx.decisions is not None and ctx.findings is not None:
+         results.extend(check_finding_refs(ctx.decisions, ctx.findings))
+     else:
+@@ -762,20 +941,6 @@ def run_all_lints(ctx: LintContext) -> list[LintFinding]:
+             "demand_signal_raw/decisions/findings",
+         )
+ 
+-    if ctx.brief_path:
+-        results.extend(check_key_files(ctx.brief_path))
+-    else:
+-        # NOT for want of a brief any more — ctx.tasks carries one per
+-        # task. It stays out because the question it asks has no stable
+-        # answer at run close: it tests whether a declared path exists
+-        # in the operator's working copy, and by now the task's worktree
+-        # is gone and that copy is whatever it happens to be. Run over
+-        # the link-health signal, which delivered all six tasks and
+-        # merged them, it reported four files missing — they were in
+-        # main, and the checkout was eight commits behind. Wiring it
+-        # here would spend that credibility on every clean run.
+-        _skip("key_files", "a stable answer at run close (see run_all_lints)")
+-
+     if ctx.initiative_brief_path:
+         results.extend(
+             check_base_branch_fallback(
+@@ -797,9 +962,11 @@ def run_all_lints(ctx: LintContext) -> list[LintFinding]:
+     if ctx.tasks is None:
+         _skip("delivery_verdict", "tasks")
+         _skip("slug_consistency", "tasks")
++        _skip("key_files", "tasks")
+     elif not ctx.tasks:
+         _skip("delivery_verdict", "tasks (the manifest named none)")
+         _skip("slug_consistency", "tasks (the manifest named none)")
++        _skip("key_files", "tasks (the manifest named none)")
+     else:
+         results.extend(check_delivery_verdict(ctx.tasks))
+         for task in ctx.tasks:
+@@ -809,6 +976,24 @@ def run_all_lints(ctx: LintContext) -> list[LintFinding]:
+                 )
+             )
+ 
++        # key_files needs one thing more than the other two: a ref to
++        # read paths from. It was disabled here for an honest reason —
++        # asking the operator's working copy gave a different answer on
++        # every machine and every checkout, and over the link-health run
++        # it called four merged files missing. That reason was about the
++        # SOURCE, not the question, and the source is now a named ref
++        # (RepoTree). Where no ref resolves, it skips and repeats the
++        # resolver's own reason, because a wrong "missing" is what cost
++        # this check its readers the first time.
++        tree = ctx.repo_tree
++        if tree is None:
++            _skip("key_files", "repo_tree (no caller resolved a git ref)")
++        elif not tree.resolved:
++            _skip_because("key_files", tree.unresolved)
++        else:
++            for task in ctx.tasks:
++                results.extend(check_key_files(task.brief_path, tree))
++
+     # Drift is opt-in per signal: only file-backed context_doc items
+     # pin a source_ref. A None status means "not applicable" (the norm
+     # for idea/slack/transcript), NOT a skipped-but-expected check — so
+@@ -821,6 +1006,7 @@ def run_all_lints(ctx: LintContext) -> list[LintFinding]:
+ __all__ = [
+     "LintContext",
+     "LintFinding",
++    "RepoTree",
+     "check_base_branch_fallback",
+     "check_decision_brief_coverage",
+     "check_finding_refs",
+@@ -828,5 +1014,6 @@ __all__ = [
+     "check_signal_brief_coverage",
+     "check_slug_consistency",
+     "check_source_ref_drift",
++    "declared_base_branches",
+     "run_all_lints",
+ ]
+diff --git a/tools/orch/regent/tests/test_lint_context.py b/tools/orch/regent/tests/test_lint_context.py
+index 37f7e7d..dcdc491 100644
+--- a/tools/orch/regent/tests/test_lint_context.py
++++ b/tools/orch/regent/tests/test_lint_context.py
+@@ -6,6 +6,7 @@ that has ever executed (log 2026-08-10 §33). These assert the resolver
+ reads the material the refinery actually leaves on disk.
+ """
+ 
++import subprocess
+ from pathlib import Path
+ 
+ from dao_cli.core.yaml_io import save_yaml
+@@ -18,6 +19,7 @@ from regent.core.lint_context import (
+     briefs_text,
+     build_lint_context,
+     demand_signal_raw,
++    resolve_repo_tree,
+     task_targets,
+ )
+ from regent.core.lints import run_all_lints
+@@ -61,6 +63,169 @@ def _brief(project_dir: Path, rel: str, body: str) -> Path:
+     return path
+ 
+ 
++def _git(*args: str, cwd: Path) -> None:
++    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
++
++
++def _repo_with_origin(root: Path, *, files: dict[str, str]) -> Path:
++    """A checkout with a real `origin` whose default branch is `main`.
++
++    Real, not mocked: the point of the resolver is that it asks git, and
++    a mock would only assert that this test knows the same flags the
++    resolver does.
++    """
++    bare = root / "origin.git"
++    bare.mkdir()
++    _git("init", "--bare", "--initial-branch=main", ".", cwd=bare)
++
++    work = root / "checkout"
++    work.mkdir()
++    _git("init", "--initial-branch=main", ".", cwd=work)
++    _git("config", "user.email", "t@example.com", cwd=work)
++    _git("config", "user.name", "t", cwd=work)
++    for rel, body in files.items():
++        path = work / rel
++        path.parent.mkdir(parents=True, exist_ok=True)
++        path.write_text(body, encoding="utf-8")
++    _git("add", "-A", cwd=work)
++    _git("commit", "-m", "init", cwd=work)
++    _git("remote", "add", "origin", str(bare), cwd=work)
++    _git("push", "-u", "origin", "main", cwd=work)
++    return work
++
++
++def _project_yaml(project_dir: Path, source_root: Path) -> None:
++    save_yaml(
++        path=project_dir / "project.yaml",
++        data={"project": {"name": "p", "source_root": str(source_root)}},
++    )
++
++
++class TestResolveRepoTree:
++    """Which ref the declared paths are checked against, and when none is."""
++
++    def test_lists_the_default_branch_of_the_source_repo(
++        self, tmp_path
++    ) -> None:
++        work = _repo_with_origin(
++            tmp_path, files={"a/keep.py": "", "b/other.py": ""}
++        )
++        project = tmp_path / "project"
++        project.mkdir()
++        _project_yaml(project, work)
++        _make_session(project)
++
++        tree = resolve_repo_tree(project, SESSION)
++
++        assert tree.resolved
++        assert tree.ref == "origin/main"
++        assert tree.root == work.resolve()
++        assert "a/keep.py" in tree.paths
++        # `-t` keeps directories in the listing, so a Key Files row that
++        # declares `a/` is not told it does not exist.
++        assert "a" in tree.paths
++
++    def test_deleted_from_the_checkout_still_present_at_the_ref(
++        self, tmp_path
++    ) -> None:
++        """The defect, end to end: the disk is not the repository."""
++        work = _repo_with_origin(tmp_path, files={"a/keep.py": ""})
++        (work / "a" / "keep.py").unlink()
++        project = tmp_path / "project"
++        project.mkdir()
++        _project_yaml(project, work)
++        _make_session(project)
++
++        tree = resolve_repo_tree(project, SESSION)
++
++        assert "a/keep.py" in tree.paths
++
++    def test_umbrella_declared_by_a_brief_wins_over_the_default(
++        self, tmp_path
++    ) -> None:
++        work = _repo_with_origin(tmp_path, files={"a/keep.py": ""})
++        _git("checkout", "-b", "feature/umbrella", cwd=work)
++        (work / "later.py").write_text("", encoding="utf-8")
++        _git("add", "-A", cwd=work)
++        _git("commit", "-m", "on umbrella", cwd=work)
++        _git("push", "-u", "origin", "feature/umbrella", cwd=work)
++
++        project = tmp_path / "project"
++        project.mkdir()
++        _project_yaml(project, work)
++        _make_session(project)
++        brief = _brief(
++            project,
++            "initiatives/c/brief.md",
++            "# Initiative\n\n**Base Branch**: `feature/umbrella`\n",
++        )
++        _write_briefs(
++            project,
++            [{"type": "initiative", "name": "c", "path": str(brief)}],
++        )
++
++        tree = resolve_repo_tree(project, SESSION)
++
++        assert tree.ref == "origin/feature/umbrella"
++        assert "later.py" in tree.paths
++
++    def test_disagreeing_umbrellas_skip_rather_than_pick_one(
++        self, tmp_path
++    ) -> None:
++        work = _repo_with_origin(tmp_path, files={"a/keep.py": ""})
++        project = tmp_path / "project"
++        project.mkdir()
++        _project_yaml(project, work)
++        _make_session(project)
++        one = _brief(
++            project, "initiatives/c/m/ms1/brief.md", "**Base Branch**: `one`"
++        )
++        two = _brief(
++            project, "initiatives/c/m/ms2/brief.md", "**Base Branch**: `two`"
++        )
++        _write_briefs(
++            project,
++            [
++                {"type": "milestone", "name": "ms1", "path": str(one)},
++                {"type": "milestone", "name": "ms2", "path": str(two)},
++            ],
++        )
++
++        tree = resolve_repo_tree(project, SESSION)
++
++        assert not tree.resolved
++        assert "different **Base Branch**" in tree.unresolved
++
++    def test_no_remote_branch_leaves_it_unresolved(self, tmp_path) -> None:
++        work = tmp_path / "checkout"
++        work.mkdir()
++        _git("init", "--initial-branch=main", ".", cwd=work)
++        project = tmp_path / "project"
++        project.mkdir()
++        _project_yaml(project, work)
++        _make_session(project)
++
++        tree = resolve_repo_tree(project, SESSION)
++
++        assert not tree.resolved
++        assert tree.paths == frozenset()
++        assert "no remote branch" in tree.unresolved
++
++    def test_source_root_outside_a_checkout_is_unresolved(
++        self, tmp_path
++    ) -> None:
++        project = tmp_path / "project"
++        project.mkdir()
++        _project_yaml(project, tmp_path / "not-a-repo")
++        (tmp_path / "not-a-repo").mkdir()
++        _make_session(project)
++
++        tree = resolve_repo_tree(project, SESSION)
++
++        assert not tree.resolved
++        assert "not a git checkout" in tree.unresolved
++
++
+ class TestDemandSignalRaw:
+     """The signal is nested under `context`, where create_session puts it."""
+ 
+@@ -253,18 +418,19 @@ class TestBuildLintContext:
+         assert ctx.milestone_brief_paths == [b]
+         assert ctx.source_drift is drift
+ 
+-    def test_per_task_fields_stay_none(self, tmp_path) -> None:
+-        # A run produces many tasks; these lints take one. An arbitrary
+-        # pick would report clean over a fraction of the work, which
+-        # reads as "checked" — worse than a skip, which reads as "not
+-        # checked". See build_lint_context's docstring.
++    def test_no_project_yaml_leaves_the_tree_unresolved(
++        self, tmp_path
++    ) -> None:
++        # Not an empty tree: an empty tree would report every declared
++        # path missing, which is the defect this replaces.
+         _make_session(tmp_path)
+ 
+         ctx = build_lint_context(tmp_path, SESSION)
+ 
+-        assert ctx.brief_path is None
+-        assert ctx.task_dir is None
+-        assert ctx.task_yaml is None
++        assert ctx.repo_tree is not None
++        assert not ctx.repo_tree.resolved
++        assert ctx.repo_tree.paths == frozenset()
++        assert "project.yaml" in ctx.repo_tree.unresolved
+ 
+     def test_missing_session_keeps_content_lints_skipped(
+         self, tmp_path
+diff --git a/tools/orch/regent/tests/test_lints.py b/tools/orch/regent/tests/test_lints.py
+index f2dbc11..a3bd8b5 100644
+--- a/tools/orch/regent/tests/test_lints.py
++++ b/tools/orch/regent/tests/test_lints.py
+@@ -10,6 +10,7 @@ from refiner.core.state import session_dir
+ 
+ from regent.core.lints import (
+     LintContext,
++    RepoTree,
+     TaskTarget,
+     check_base_branch_fallback,
+     check_decision_brief_coverage,
+@@ -229,7 +230,7 @@ class TestCheckSignalBriefCoverage:
+ 
+ 
+ class TestCheckKeyFiles:
+-    """Key Files table existence check."""
++    """Key Files rows, checked against a ref rather than a working copy."""
+ 
+     def _write_brief(self, tmp_path: Path, path_col: str, change: str) -> Path:
+         brief = tmp_path / "brief.md"
+@@ -243,8 +244,16 @@ class TestCheckKeyFiles:
+         )
+         return brief
+ 
++    def _tree(self, root: Path, *paths: str, prefix: str = "") -> RepoTree:
++        return RepoTree(
++            ref="origin/main",
++            root=root,
++            prefix=prefix,
++            paths=frozenset(paths),
++        )
++
+     def test_missing_brief_is_flagged(self, tmp_path: Path) -> None:
+-        results = check_key_files(tmp_path / "nope.md")
++        results = check_key_files(tmp_path / "nope.md", self._tree(tmp_path))
+ 
+         assert len(results) == 1
+         assert results[0].lint_id == "key_files"
+@@ -253,31 +262,133 @@ class TestCheckKeyFiles:
+         brief = tmp_path / "brief.md"
+         brief.write_text("# Task: Example\n", encoding="utf-8")
+ 
+-        assert check_key_files(brief) == []
++        assert check_key_files(brief, self._tree(tmp_path)) == []
+ 
+     def test_add_row_missing_path_is_not_flagged(self, tmp_path: Path) -> None:
+         brief = self._write_brief(
+             tmp_path, str(tmp_path / "new_file.py"), "Add"
+         )
+ 
+-        assert check_key_files(brief) == []
++        assert check_key_files(brief, self._tree(tmp_path)) == []
+ 
+-    def test_modify_row_missing_path_is_flagged(self, tmp_path: Path) -> None:
++    def test_qualified_add_row_is_still_an_add(self, tmp_path: Path) -> None:
++        """`Add (minimal, for these unit tests)` is an Add.
++
++        Real briefs qualify the cell in place. Exact-matching "add" read
++        those rows as changes to existing files and reported the file
++        the task was about to create as missing.
++        """
+         brief = self._write_brief(
+-            tmp_path, str(tmp_path / "missing.py"), "Modify"
++            tmp_path,
++            str(tmp_path / "tests" / "fixtures") + "/",
++            "Add (minimal, for these unit tests)",
++        )
++
++        assert check_key_files(brief, self._tree(tmp_path)) == []
++
++    def test_path_at_ref_but_not_on_disk_is_not_missing(
++        self, tmp_path: Path
++    ) -> None:
++        """The whole point: the worktree is gone, the ref still answers.
++
++        Nothing is written to disk here. The declared path exists only
++        in the ref's listing — which is the state of a closed run whose
++        checkout sits behind the branch its work merged to.
++        """
++        declared = tmp_path / "marks" / "services" / "bookmarks.py"
++        brief = self._write_brief(tmp_path, str(declared), "Modify")
++
++        assert not declared.exists()
++        results = check_key_files(
++            brief, self._tree(tmp_path, "marks/services/bookmarks.py")
++        )
++
++        assert results == []
++
++    def test_path_on_disk_but_not_at_ref_is_not_missing(
++        self, tmp_path: Path
++    ) -> None:
++        """The mirror case: work that has not merged anywhere yet.
++
++        A file one task added and another declares Modify exists in the
++        checkout and at no ref at all. Reporting it would be the same
++        false alarm from the other direction.
++        """
++        declared = tmp_path / "unmerged.py"
++        declared.write_text("", encoding="utf-8")
++        brief = self._write_brief(tmp_path, str(declared), "Modify")
++
++        assert check_key_files(brief, self._tree(tmp_path)) == []
++
++    def test_path_in_neither_is_flagged(self, tmp_path: Path) -> None:
++        brief = self._write_brief(
++            tmp_path, str(tmp_path / "typo.py"), "Modify"
+         )
+ 
+-        results = check_key_files(brief)
++        results = check_key_files(brief, self._tree(tmp_path, "real.py"))
+ 
+         assert len(results) == 1
+         assert results[0].lint_id == "key_files"
++        assert "origin/main" in results[0].message
+ 
+-    def test_modify_row_existing_path_is_clean(self, tmp_path: Path) -> None:
+-        existing = tmp_path / "existing.py"
+-        existing.write_text("", encoding="utf-8")
+-        brief = self._write_brief(tmp_path, str(existing), "Modify")
++    def test_directory_row_resolves_against_tree_entries(
++        self, tmp_path: Path
++    ) -> None:
++        brief = self._write_brief(
++            tmp_path, str(tmp_path / "tests" / "fixtures") + "/", "Read-only"
++        )
+ 
+-        assert check_key_files(brief) == []
++        results = check_key_files(
++            brief, self._tree(tmp_path, "tests", "tests/fixtures")
++        )
++
++        assert results == []
++
++    def test_relative_row_reads_from_root_then_prefix(
++        self, tmp_path: Path
++    ) -> None:
++        brief = self._write_brief(tmp_path, "regent/core/lints.py", "Modify")
++
++        tree = self._tree(
++            tmp_path,
++            "tools/orch/regent/regent/core/lints.py",
++            prefix="tools/orch/regent/",
++        )
++
++        assert check_key_files(brief, tree) == []
++
++    def test_path_outside_the_repo_skips_rather_than_reports(
++        self, tmp_path: Path
++    ) -> None:
++        """Another repository is not this ref's to answer for.
++
++        Not reported missing, and not passed over in silence either —
++        a brief whose rows were never opened must not read as clean.
++        """
++        brief = self._write_brief(tmp_path, "/elsewhere/other.py", "Modify")
++
++        results = check_key_files(
++            brief, self._tree(tmp_path / "repo", "other.py")
++        )
++
++        assert len(results) == 1
++        assert results[0].message.startswith("skipped:")
++        assert "/elsewhere/other.py" in results[0].message
++
++    def test_unresolved_ref_skips_with_its_reason(
++        self, tmp_path: Path
++    ) -> None:
++        """An unanswerable ref must never mean "everything is missing"."""
++        brief = self._write_brief(
++            tmp_path, str(tmp_path / "missing.py"), "Modify"
++        )
++
++        results = check_key_files(
++            brief, RepoTree(unresolved="origin/HEAD is unset")
++        )
++
++        assert len(results) == 1
++        assert results[0].message == "skipped: origin/HEAD is unset"
+ 
+ 
+ class TestCheckBaseBranchFallback:
+@@ -640,9 +751,7 @@ class TestRunAllLints:
+             findings=[],
+             demand_signal_raw="",
+             briefs_text="",
+-            brief_path=task_brief,
+-            task_dir=task_dir,
+-            task_yaml={"task": "my-task"},
++            repo_tree=RepoTree(ref="origin/main", root=tmp_path),
+             tasks=[
+                 TaskTarget(
+                     name="my-task",

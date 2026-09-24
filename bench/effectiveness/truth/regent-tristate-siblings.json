@@ -1,0 +1,18 @@
+{
+ "id": "regent-tristate-siblings",
+ "kind": "bugfix",
+ "start": "b309c3062a52a3c29fff59c27454dea9280feffc",
+ "ref": "c3300fddf6d75db28c98ab58d2898dd87035509f",
+ "expected_src": [
+  "tools/orch/regent/regent/core/lenses.py",
+  "tools/orch/regent/regent/core/spawn.py"
+ ],
+ "ref_tests": [
+  "tools/orch/regent/tests/test_lenses.py",
+  "tools/orch/regent/tests/test_spawn.py"
+ ],
+ "suites": [
+  "tools/orch/regent"
+ ],
+ "ref_diff_lines": 688
+}

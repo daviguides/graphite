@@ -1,0 +1,688 @@
+diff --git a/tools/orch/regent/regent/core/lenses.py b/tools/orch/regent/regent/core/lenses.py
+index d948127..bfd3342 100644
+--- a/tools/orch/regent/regent/core/lenses.py
++++ b/tools/orch/regent/regent/core/lenses.py
+@@ -35,6 +35,7 @@ scale with the question, not with how many ways we phrase it.
+ """
+ 
+ import json
++import subprocess
+ from dataclasses import dataclass
+ from pathlib import Path
+ 
+@@ -143,33 +144,102 @@ def _bare_flags() -> list[str]:
+     return ["--bare"] if os.environ.get("ANTHROPIC_API_KEY") else []
+ 
+ 
+-def _brief_bodies(project_dir: Path, item_id: str) -> str:
+-    """Every brief the manifest names, with its slug and its prose."""
++def _brief_prose(path: Path) -> str:
++    """One brief's text, or a true statement about why there is none.
++
++    "(missing on disk)" was printed for a file that was present and
++    empty, and for one that was present and unreadable. A lens told a
++    brief is missing reasons about a plan that does not exist.
++    """
++    if not path.is_file():
++        return "(missing on disk)"
++    try:
++        text = path.read_text(encoding="utf-8")
++    except (OSError, UnicodeDecodeError) as exc:
++        return f"(present but unreadable: {exc})"
++    return text[:_MAX_BRIEF_CHARS] or "(present but empty)"
++
++
++def _brief_bodies(
++    project_dir: Path, item_id: str, *, required: bool = False
++) -> str:
++    """Every brief the manifest names, with its slug and its prose.
++
++    Two callers read this, and an unreadable manifest means different
++    things to them. `judgment._consultation_context` assembles background
++    for an outside reader at every judgment in a run, most of them before
++    EGEST has written anything — no briefs there is the ordinary case and
++    the block is simply left out. `review` is about to return a verdict
++    ON the briefs, and for it the same empty string was the answer "no
++    findings": a plan that could not be opened came back indistinguishable
++    from a plan with nothing wrong with it. So the caller that is about to
++    judge says so, and gets an error instead of a blank.
++
++    Args:
++        project_dir: Project directory.
++        item_id: The signal being refined.
++        required: Whether the absence of a readable manifest is a
++            failure. False assembles what is there; True refuses to
++            return a blank that would be read as a verdict.
++
++    Returns:
++        The briefs as prose. Under `required`, the empty string is
++        reserved for a manifest that was read and names no briefs — the
++        one case where there is genuinely nothing to review.
++
++    Raises:
++        RegentError: If `required` and the manifest is absent or
++            unreadable.
++    """
+     manifest = session_dir(project_dir, item_id) / "briefs.yaml"
+     if not manifest.is_file():
++        if required:
++            raise RegentError(
++                f"no briefs manifest at {manifest} — there is no plan on "
++                "disk to read, which is not the same as a plan that "
++                "holds up"
++            )
+         return ""
+-    data = load_yaml(path=manifest)
++    try:
++        data = load_yaml(path=manifest)
++    except Exception as exc:  # YAMLError, OSError
++        if required:
++            raise RegentError(
++                f"briefs manifest at {manifest} could not be read: {exc}"
++            ) from exc
++        return ""
++
+     entries = (data or {}).get("briefs") or []
+     chunks: list[str] = []
+     for entry in entries:
+         if not isinstance(entry, dict):
+             continue
+         slug = str(entry.get("name") or "")
+-        path = Path(str(entry.get("path") or ""))
+-        body = ""
+-        if path.is_file():
+-            body = path.read_text(encoding="utf-8")[:_MAX_BRIEF_CHARS]
+         kind = entry.get("type", "?")
+-        chunks.append(f"### {kind} {slug}\n{body or '(missing on disk)'}")
++        prose = _brief_prose(Path(str(entry.get("path") or "")))
++        chunks.append(f"### {kind} {slug}\n{prose}")
+     return "\n\n".join(chunks)
+ 
+ 
+ def _decisions_text(project_dir: Path, item_id: str) -> str:
+-    """Decisions with what was chosen — including what was cut."""
++    """Decisions with what was chosen — including what was cut.
++
++    A file that could not be read says so rather than reading as an empty
++    list. "(none)" is a claim about the plan: it tells the shrinkage lens
++    that nothing was deliberately cut, which turns every declared
++    deferral into a silent one — and the prompt says plainly what a
++    finding invented that way costs, a rewrite of work already correct.
++    """
+     path = session_dir(project_dir, item_id) / "decisions.yaml"
+     if not path.is_file():
+         return ""
+-    data = load_yaml(path=path)
++    try:
++        data = load_yaml(path=path)
++    except Exception as exc:  # YAMLError, OSError
++        return (
++            "(decisions.yaml could not be read, so nothing below can be "
++            f"assumed to be the whole of what was decided: {exc})"
++        )
+     lines = []
+     for entry in (data or {}).get("decisions") or []:
+         if not isinstance(entry, dict):
+@@ -210,12 +280,17 @@ def review(
+         Findings, one per problem. Empty means the plan holds up.
+ 
+     Raises:
+-        RegentError: If the call fails or returns something unparseable —
+-            a review that could not run must not read as a clean plan.
++        RegentError: If the plan could not be read, the call failed, or
++            it returned something unparseable — a review that could not
++            run must not read as a clean plan. The caller in refinery.py
++            relies on exactly this: a RegentError stops the run as
++            `Plan review could not run`, while empty findings let it
++            proceed to COMPLETE. The two must never be the same value.
+     """
+-    briefs = _brief_bodies(project_dir, item_id)
++    briefs = _brief_bodies(project_dir, item_id, required=True)
+     if not briefs:
+-        # No call was made, so there is no receipt to carry.
++        # The manifest was read and names no briefs. No call was made, so
++        # there is no receipt to carry.
+         return [], Receipt()
+ 
+     prompt = _PROMPT.format(
+@@ -240,7 +315,22 @@ def review(
+         result = spawn.run(
+             cmd, cwd=project_dir, check=True, timeout=_TIMEOUT
+         )
+-    except Exception as exc:  # CalledProcessError / TimeoutExpired
++    except subprocess.CalledProcessError as exc:
++        # `str(CalledProcessError)` is the exit code and the command, and
++        # the command here is the whole prompt with every brief body in
++        # it. The one thing a reader needs — what the CLI said went wrong
++        # — was the one thing the message dropped.
++        stderr = (exc.stderr or "").strip()
++        raise RegentError(
++            f"plan review exited {exc.returncode}: "
++            f"{stderr[:500] or 'nothing on stderr'}"
++        ) from exc
++    except subprocess.TimeoutExpired as exc:
++        raise RegentError(
++            f"plan review timed out after {_TIMEOUT:.0f}s — the plan was "
++            "never read"
++        ) from exc
++    except Exception as exc:  # OSError: no `claude` on PATH
+         raise RegentError(f"plan review call failed: {exc}") from exc
+ 
+     return _parse(result.stdout), _receipt(result.stdout)
+@@ -287,6 +377,16 @@ def _parse(stdout: str) -> list[LensFinding]:
+             "plan review returned no findings key — refusing to read a "
+             "shapeless answer as a clean plan"
+         )
++    if not isinstance(findings, list):
++        # A string here iterates as characters, none of them dicts, and
++        # the comprehension below quietly yields []. Prose where a list
++        # was asked for is the model declining to answer in the shape,
++        # and it must not come out the far side as a clean plan.
++        raise RegentError(
++            "plan review returned findings as "
++            f"{type(findings).__name__}, not a list — refusing to read a "
++            "shapeless answer as a clean plan"
++        )
+     return [
+         LensFinding(
+             lens=str(f.get("lens") or ""),
+diff --git a/tools/orch/regent/regent/core/spawn.py b/tools/orch/regent/regent/core/spawn.py
+index f34aecb..7404956 100644
+--- a/tools/orch/regent/regent/core/spawn.py
++++ b/tools/orch/regent/regent/core/spawn.py
+@@ -58,6 +58,16 @@ def run(
+ 
+     Returns:
+         Completed process (captured stdout/stderr, text mode).
++
++    Raises:
++        subprocess.TimeoutExpired: If the child outlives `timeout`.
++        OSError: If the child could never be started at all.
++
++        Both are raised rather than folded into a returncode, because a
++        child that never answered has no exit status to report and any
++        number invented for it is a lie a caller will act on. delivery.py
++        learned this by returning 1 for a timeout — the same 1 that
++        `merge-base --is-ancestor` uses for a definite "no".
+     """
+     return subprocess.run(
+         cmd,
+@@ -101,27 +111,38 @@ def run_attached(
+ 
+ def idempotent_step[T](
+     *,
+-    check: Callable[[], bool],
++    check: Callable[[], bool | None],
+     action: Callable[[], T],
+     label: str,
+ ) -> T | None:
+     """Run action() unless check() reports the effect already exists.
+ 
+     Args:
+-        check: Returns True if the step's effect already exists.
++        check: True if the step's effect already exists, False if it does
++            not, None if it could not be found out.
+         action: The mutating step to run when not already done.
+         label: Human-readable name for skip logging.
+ 
+     Returns:
+         action()'s result, or None if skipped.
+     """
+-    if check():
++    answer = check()
++    if answer is True:
+         logger.info("skip: %s already done", label)
+         return None
++    if answer is None:
++        # Re-running an idempotent step costs a re-run; skipping one that
++        # never happened costs the step. So an unanswerable check runs the
++        # action — but says so out loud, because a skip decided by a check
++        # that failed is indistinguishable, in a log, from a real one.
++        logger.warning(
++            "could not tell whether %s was already done; running it",
++            label,
++        )
+     return action()
+ 
+ 
+-def pr_exists(branch: str, *, cwd: Path | None = None) -> bool:
++def pr_exists(branch: str, *, cwd: Path | None = None) -> bool | None:
+     """Check whether an open PR already exists for a branch.
+ 
+     Args:
+@@ -129,53 +150,105 @@ def pr_exists(branch: str, *, cwd: Path | None = None) -> bool:
+         cwd: Working directory for the gh CLI call.
+ 
+     Returns:
+-        True if gh reports an existing PR for this branch.
++        True if gh reports an existing PR, False if gh looked and found
++        none, None if gh could not be asked at all. The third matters:
++        gh exits non-zero when it is unauthenticated, rate-limited or
++        offline, and reading that as "no PR exists" turns an outage into
++        a fact about the branch — one that then gets acted on.
+     """
+-    result = run(
+-        [
+-            "gh",
+-            "pr",
+-            "list",
+-            "--head",
++    try:
++        result = run(
++            [
++                "gh",
++                "pr",
++                "list",
++                "--head",
++                branch,
++                "--json",
++                "number",
++                "--jq",
++                ".[0].number",
++            ],
++            cwd=cwd,
++        )
++    except (subprocess.SubprocessError, OSError) as exc:
++        logger.warning("could not ask gh about %s: %s", branch, exc)
++        return None
++
++    # A branch with no PR is an exit 0 and an empty list, so a non-zero
++    # exit is never the absence of a PR — it is the absence of an answer.
++    if result.returncode != 0:
++        logger.warning(
++            "gh could not answer for %s: %s",
+             branch,
+-            "--json",
+-            "number",
+-            "--jq",
+-            ".[0].number",
+-        ],
+-        cwd=cwd,
+-    )
+-    return result.returncode == 0 and bool(result.stdout.strip())
++            result.stderr.strip() or f"exit {result.returncode}",
++        )
++        return None
++    return bool(result.stdout.strip())
+ 
+ 
+-def worktree_exists(path: Path) -> bool:
++def worktree_exists(path: Path) -> bool | None:
+     """Check whether a worktree directory still exists on disk.
+ 
+     Args:
+         path: Worktree path to check.
+ 
+     Returns:
+-        True if the path exists.
++        True if the path is there, False if it is not, None if the
++        filesystem declined to say. `Path.exists()` cannot express the
++        third — it folds every OSError into False, so a parent directory
++        that denies traversal reads exactly like a worktree that was
++        removed.
+     """
+-    return path.exists()
++    try:
++        path.stat()
++    except (FileNotFoundError, NotADirectoryError):
++        return False
++    except OSError as exc:
++        logger.warning("could not stat %s: %s", path, exc)
++        return None
++    return True
+ 
+ 
+ def branch_is_current(
+     cwd: Path,
+     *,
+     base_ref: str = "origin/main",
+-) -> bool:
++) -> bool | None:
+     """Check whether HEAD already contains base_ref (no rebase needed).
+ 
++    `git merge-base --is-ancestor` documents three outcomes, not two: 0
++    is yes, 1 is no, and "errors are signaled by a non-zero status that
++    is not 1" — 128 when a ref is not in this object store, which is the
++    ordinary state of `origin/main` in a worktree that has not fetched.
++    delivery.py collapsed those same three into `code == 0` and reported
++    four merged tasks as delivering nothing; this is the identical
++    command, one module over.
++
+     Args:
+         cwd: Working directory (worktree path).
+         base_ref: Ref to check ancestry against.
+ 
+     Returns:
+-        True if base_ref is already an ancestor of HEAD.
++        True if base_ref is already an ancestor of HEAD, False if git
++        said it is not, None if git could not say.
+     """
+-    result = run(
+-        ["git", "merge-base", "--is-ancestor", base_ref, "HEAD"],
+-        cwd=cwd,
++    try:
++        result = run(
++            ["git", "merge-base", "--is-ancestor", base_ref, "HEAD"],
++            cwd=cwd,
++        )
++    except (subprocess.SubprocessError, OSError) as exc:
++        logger.warning("could not ask git about %s: %s", base_ref, exc)
++        return None
++
++    if result.returncode == 0:
++        return True
++    if result.returncode == 1:
++        return False
++    logger.warning(
++        "git could not answer ancestry for %s: %s",
++        base_ref,
++        result.stderr.strip() or f"exit {result.returncode}",
+     )
+-    return result.returncode == 0
++    return None
+diff --git a/tools/orch/regent/tests/test_lenses.py b/tools/orch/regent/tests/test_lenses.py
+index 21537b5..00fbb8b 100644
+--- a/tools/orch/regent/tests/test_lenses.py
++++ b/tools/orch/regent/tests/test_lenses.py
+@@ -1,6 +1,7 @@
+ """Tests for regent.core.lenses — the plan review before it becomes work."""
+ 
+ import json
++import subprocess
+ from pathlib import Path
+ 
+ import pytest
+@@ -194,6 +195,151 @@ class TestParsing:
+             lenses.review(tmp_path, "idea-x")
+ 
+ 
++class TestAPlanThatCouldNotBeReadIsNotACleanPlan:
++    """The caller's two channels, and what must never cross them.
++
++    refinery.py's `_review_plan` turns a RegentError into "Plan review
++    could not run" and stops the run; empty findings let it proceed to
++    COMPLETE. Every could-not-read below used to come back as the
++    second — no call made, no findings, plan approved.
++    """
++
++    def test_a_missing_manifest_is_not_a_plan_with_nothing_wrong(
++        self, tmp_path
++    ):
++        _session(tmp_path)  # session.yaml only, no briefs.yaml
++        with pytest.raises(RegentError, match="no plan on disk"):
++            lenses.review(tmp_path, "idea-x")
++
++    def test_an_unreadable_manifest_raises_rather_than_passing(
++        self, tmp_path
++    ):
++        d = _session(tmp_path, briefs=[])
++        (d / "briefs.yaml").write_text("briefs: [{unclosed\n")
++        with pytest.raises(RegentError, match="could not be read"):
++            lenses.review(tmp_path, "idea-x")
++
++    def test_a_manifest_that_names_no_briefs_is_still_nothing_to_review(
++        self, tmp_path
++    ):
++        """The genuine negative: it was read, and it lists nothing."""
++        _session(tmp_path, briefs=[])
++        assert lenses.review(tmp_path, "idea-x")[0] == []
++
++    def test_the_reader_who_is_not_judging_still_gets_a_blank(
++        self, tmp_path
++    ):
++        """`judgment._consultation_context` calls this at every judgment.
++
++        Most of them happen before EGEST has written anything. No briefs
++        is the ordinary case there, and the block is left out — only the
++        caller about to return a verdict on the briefs is refused one.
++        """
++        _session(tmp_path)
++        assert lenses._brief_bodies(tmp_path, "idea-x") == ""
++
++    def test_a_timeout_says_the_plan_was_never_read(
++        self, tmp_path, monkeypatch
++    ):
++        _session(
++            tmp_path,
++            briefs=[{"type": "task", "name": "t1", "path": "/nope"}],
++        )
++
++        def timeout(*a, **k):
++            raise subprocess.TimeoutExpired(["claude"], 300)
++
++        monkeypatch.setattr(lenses.spawn, "run", timeout)
++        with pytest.raises(RegentError, match="never read"):
++            lenses.review(tmp_path, "idea-x")
++
++    def test_a_failed_call_reports_stderr_not_the_whole_prompt(
++        self, tmp_path, monkeypatch
++    ):
++        _session(
++            tmp_path,
++            briefs=[{"type": "task", "name": "t1", "path": "/nope"}],
++        )
++
++        def boom(cmd, **k):
++            raise subprocess.CalledProcessError(
++                2, cmd, output="", stderr="Credit balance is too low"
++            )
++
++        monkeypatch.setattr(lenses.spawn, "run", boom)
++        with pytest.raises(RegentError) as caught:
++            lenses.review(tmp_path, "idea-x")
++
++        assert "Credit balance is too low" in str(caught.value)
++        # The command is the entire prompt, every brief body in it.
++        assert "DEMAND SIGNAL" not in str(caught.value)
++
++    def test_prose_where_a_findings_list_was_asked_for_raises(
++        self, tmp_path, monkeypatch
++    ):
++        """A string iterates as characters and yields [] — a clean plan."""
++        _session(
++            tmp_path,
++            briefs=[{"type": "task", "name": "t1", "path": "/nope"}],
++        )
++        monkeypatch.setattr(
++            lenses.spawn,
++            "run",
++            lambda *a, **k: _completed(
++                json.dumps({"structured_output": {"findings": "looks fine"}})
++            ),
++        )
++        with pytest.raises(RegentError, match="not a list"):
++            lenses.review(tmp_path, "idea-x")
++
++
++class TestWhatTheLensIsToldAboutMissingMaterial:
++    """A false fact about the plan is worse than an admitted gap."""
++
++    def test_unreadable_decisions_do_not_read_as_nothing_was_cut(
++        self, tmp_path, monkeypatch
++    ):
++        d = _session(
++            tmp_path,
++            briefs=[{"type": "task", "name": "t1", "path": "/nope"}],
++            decisions=[],
++        )
++        (d / "decisions.yaml").write_text("decisions: [{unclosed\n")
++        seen = {}
++
++        def fake_run(cmd, **kwargs):
++            seen["prompt"] = cmd[2]
++            return _completed(_envelope([]))
++
++        monkeypatch.setattr(lenses.spawn, "run", fake_run)
++        lenses.review(tmp_path, "idea-x")
++
++        # "(none)" would tell the shrinkage lens that nothing was
++        # deliberately cut, making every declared deferral read silent.
++        assert "could not be read" in seen["prompt"]
++
++    def test_an_empty_brief_file_is_not_reported_as_missing(
++        self, tmp_path, monkeypatch
++    ):
++        brief = tmp_path / "empty.md"
++        brief.write_text("")
++        _session(
++            tmp_path,
++            briefs=[{"type": "task", "name": "t1", "path": str(brief)}],
++        )
++        seen = {}
++
++        def fake_run(cmd, **kwargs):
++            seen["prompt"] = cmd[2]
++            return _completed(_envelope([]))
++
++        monkeypatch.setattr(lenses.spawn, "run", fake_run)
++        lenses.review(tmp_path, "idea-x")
++
++        assert "(present but empty)" in seen["prompt"]
++        assert "(missing on disk)" not in seen["prompt"]
++
++
+ class TestBareFlags:
+     """--bare is fast and unauthenticated on a subscription login."""
+ 
+diff --git a/tools/orch/regent/tests/test_spawn.py b/tools/orch/regent/tests/test_spawn.py
+index 482a48b..943f301 100644
+--- a/tools/orch/regent/tests/test_spawn.py
++++ b/tools/orch/regent/tests/test_spawn.py
+@@ -1,5 +1,6 @@
+ """Tests for regent.core.spawn."""
+ 
++import subprocess
+ from pathlib import Path
+ from unittest.mock import patch
+ 
+@@ -132,14 +133,6 @@ def test_pr_exists_false_when_empty_output(fake_completed_process):
+         assert pr_exists("feature/x") is False
+ 
+ 
+-def test_pr_exists_false_on_error(fake_completed_process):
+-    with patch(
+-        "regent.core.spawn.run",
+-        return_value=fake_completed_process(returncode=1, stdout=""),
+-    ):
+-        assert pr_exists("feature/x") is False
+-
+-
+ def test_worktree_exists_true(tmp_path):
+     assert worktree_exists(tmp_path) is True
+ 
+@@ -162,3 +155,115 @@ def test_branch_is_current_false(fake_completed_process):
+         return_value=fake_completed_process(returncode=1),
+     ):
+         assert branch_is_current(Path("/tmp")) is False
++
++
++class TestCouldNotAskIsNotAnAnswer:
++    """A process that could not run is not a process that said no.
++
++    delivery.py read `git merge-base --is-ancestor` exit 128 — "not a
++    valid commit name" — as the exit 1 that means "not an ancestor", and
++    reported four merged, on-main tasks as delivering nothing. Every
++    predicate here is the same shape: a subprocess asked a yes/no
++    question, with a third outcome that has nowhere to go.
++    """
++
++    def test_gh_failing_is_not_the_absence_of_a_pr(
++        self, fake_completed_process
++    ):
++        """Unauthenticated, rate-limited or offline all exit non-zero."""
++        with patch(
++            "regent.core.spawn.run",
++            return_value=fake_completed_process(
++                returncode=1, stderr="gh: Not logged in"
++            ),
++        ):
++            assert pr_exists("feature/x") is None
++
++    def test_gh_looking_and_finding_none_is_still_false(
++        self, fake_completed_process
++    ):
++        """Exit 0 with an empty list is gh answering, and the answer is no."""
++        with patch(
++            "regent.core.spawn.run",
++            return_value=fake_completed_process(returncode=0, stdout="  \n"),
++        ):
++            assert pr_exists("feature/x") is False
++
++    def test_a_gh_timeout_is_distinguishable_from_both(self):
++        def timeout(*a, **k):
++            raise subprocess.TimeoutExpired(["gh"], 1)
++
++        with patch("regent.core.spawn.run", timeout):
++            assert pr_exists("feature/x") is None
++
++    def test_gh_missing_from_path_is_not_the_absence_of_a_pr(self):
++        def missing(*a, **k):
++            raise FileNotFoundError("gh")
++
++        with patch("regent.core.spawn.run", missing):
++            assert pr_exists("feature/x") is None
++
++    def test_an_unfetched_base_ref_is_not_an_out_of_date_branch(
++        self, fake_completed_process
++    ):
++        """Exit 128: `origin/main` is not in this store. Ask, don't assume."""
++        with patch(
++            "regent.core.spawn.run",
++            return_value=fake_completed_process(
++                returncode=128, stderr="fatal: Not a valid commit name"
++            ),
++        ):
++            assert branch_is_current(Path("/repo")) is None
++
++    def test_only_exit_one_means_a_rebase_is_needed(
++        self, fake_completed_process
++    ):
++        with patch(
++            "regent.core.spawn.run",
++            return_value=fake_completed_process(returncode=1),
++        ):
++            assert branch_is_current(Path("/repo")) is False
++
++    def test_a_git_timeout_is_distinguishable_from_both(self):
++        def timeout(*a, **k):
++            raise subprocess.TimeoutExpired(["git"], 1)
++
++        with patch("regent.core.spawn.run", timeout):
++            assert branch_is_current(Path("/repo")) is None
++
++    def test_a_filesystem_that_refuses_is_not_a_removed_worktree(
++        self, tmp_path
++    ):
++        target = tmp_path / "wt"
++
++        with patch.object(
++            Path, "stat", side_effect=PermissionError("denied")
++        ):
++            assert worktree_exists(target) is None
++
++    def test_a_genuinely_absent_worktree_is_still_false(self, tmp_path):
++        assert worktree_exists(tmp_path / "gone") is False
++
++
++class TestIdempotentStepCarriesTheThirdState:
++    def test_an_unanswerable_check_runs_the_action(self, caplog):
++        """Re-running is recoverable; a silent skip of an undone step is not."""
++        result = idempotent_step(
++            check=lambda: None,
++            action=lambda: "did it",
++            label="open the PR",
++        )
++
++        assert result == "did it"
++        assert "could not tell" in caplog.text
++
++    def test_a_true_check_still_skips(self):
++        calls = []
++        result = idempotent_step(
++            check=lambda: True,
++            action=lambda: calls.append(1),
++            label="open the PR",
++        )
++
++        assert result is None
++        assert calls == []

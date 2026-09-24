@@ -1,0 +1,20 @@
+{
+ "id": "dao-idempotent-publish",
+ "kind": "bugfix",
+ "start": "c7145ee00180628c87e49e932859aee70f02562f",
+ "ref": "ce363fce754180bcc9edcfe53ddb01e1a65ca6ce",
+ "expected_src": [
+  "tools/orch/dao-cli/dao_cli/task.py",
+  "tools/orch/instrument/instrument/core/milestone.py"
+ ],
+ "ref_tests": [
+  "tools/orch/dao-cli/tests/dao_cli/test_publish_idempotency.py",
+  "tools/orch/dao-cli/tests/dao_cli/test_task_publish.py",
+  "tools/orch/instrument/tests/test_setup_concurrent_milestone.py"
+ ],
+ "suites": [
+  "tools/orch/dao-cli",
+  "tools/orch/instrument"
+ ],
+ "ref_diff_lines": 468
+}

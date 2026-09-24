@@ -1,0 +1,468 @@
+diff --git a/tools/orch/dao-cli/dao_cli/task.py b/tools/orch/dao-cli/dao_cli/task.py
+index c0e6bf6..53c0216 100644
+--- a/tools/orch/dao-cli/dao_cli/task.py
++++ b/tools/orch/dao-cli/dao_cli/task.py
+@@ -1008,6 +1008,68 @@ class PublishOutcome:
+         )
+ 
+ 
++
++def _task_marker(task_name: str) -> str:
++    """Hidden marker tying a GitHub issue to the task that created it."""
++    return f"<!-- continuum-task: {task_name} -->"
++
++
++def _find_existing_issue(repo: str, task_name: str) -> int | None:
++    """Oldest issue whose body carries this task's marker, if any.
++
++    Reads the list API rather than search: search is indexed with a
++    lag, and the retry that most needs this runs seconds after the
++    issue was created.
++    """
++    from dao_cli.core.gh import _clean_env
++
++    marker = _task_marker(task_name)
++    try:
++        result = subprocess.run(
++            [
++                "gh", "issue", "list",
++                "--repo", repo,
++                "--state", "all",
++                "--limit", "300",
++                "--json", "number,body",
++            ],
++            capture_output=True,
++            text=True,
++            timeout=30,
++            env=_clean_env(),
++        )
++    except (OSError, subprocess.TimeoutExpired):
++        return None
++    if result.returncode != 0:
++        return None
++    try:
++        issues = json.loads(result.stdout or "[]")
++    except json.JSONDecodeError:
++        return None
++    matches = [
++        i["number"] for i in issues if marker in (i.get("body") or "")
++    ]
++    return min(matches) if matches else None
++
++
++def _acquire_publish_lock(yaml_path: Path):
++    """Exclusive per-task lock, held across check-then-create.
++
++    Two instrument runs over the same milestone each read a task with
++    no issue and each created one. The lock lives outside the projects
++    tree so it never shows up as a file to commit.
++    """
++    import fcntl
++    import hashlib
++
++    lock_dir = Path.home() / ".cache" / "dao-publish"
++    lock_dir.mkdir(parents=True, exist_ok=True)
++    digest = hashlib.sha256(str(yaml_path.resolve()).encode()).hexdigest()
++    fh = open(lock_dir / f"{digest[:16]}.lock", "w")
++    fcntl.flock(fh, fcntl.LOCK_EX)
++    return fh
++
++
+ def publish_task(
+     task_name: str,
+     *,
+@@ -1051,6 +1113,46 @@ def publish_task(
+         PublishError: If the task, repo, owner or boards cannot be
+             resolved, or GitHub rejects the call.
+     """
++    yaml_path = resolve_task_yaml_path(
++        task_name=task_name,
++        milestone=milestone,
++        initiative=initiative,
++    )
++    if not yaml_path.exists():
++        raise PublishError(f"Task file not found: {yaml_path}")
++
++    lock_fh = _acquire_publish_lock(yaml_path)
++    try:
++        return _publish_task_locked(
++            yaml_path=yaml_path,
++            task_name=task_name,
++            milestone=milestone,
++            initiative=initiative,
++            ms_title=ms_title,
++            ms_description=ms_description,
++            ms_initiative=ms_initiative,
++            priority=priority,
++            size=size,
++            assignee=assignee,
++        )
++    finally:
++        lock_fh.close()
++
++
++def _publish_task_locked(
++    *,
++    yaml_path: Path,
++    task_name: str,
++    milestone: str | None,
++    initiative: str | None,
++    ms_title: str | None,
++    ms_description: str | None,
++    ms_initiative: str | None,
++    priority: str | None,
++    size: str | None,
++    assignee: str | None,
++) -> PublishOutcome:
++    """Body of `publish_task`, run with the per-task lock held."""
+     from dao_cli.board import (
+         create_and_track_issue,
+         set_board_priority,
+@@ -1061,14 +1163,6 @@ def publish_task(
+         resolve_gh_account,
+     )
+ 
+-    yaml_path = resolve_task_yaml_path(
+-        task_name=task_name,
+-        milestone=milestone,
+-        initiative=initiative,
+-    )
+-    if not yaml_path.exists():
+-        raise PublishError(f"Task file not found: {yaml_path}")
+-
+     data = load_yaml(path=yaml_path)
+ 
+     repo = resolve_repo()
+@@ -1095,9 +1189,17 @@ def publish_task(
+         )
+ 
+     issue_number = data.get("issue")
+-    item_ids: dict[int, str] = data.get("item_ids", {})
++    item_ids: dict[int, str] = data.get("item_ids") or {}
+     action = "exists"
+ 
++    if not issue_number:
++        adopted = _find_existing_issue(repo=repo, task_name=task_name)
++        if adopted:
++            issue_number = adopted
++            data["issue"] = adopted
++            save_yaml(path=yaml_path, data=data)
++            print_step(f"Reusing issue #{adopted} (already created)")
++
+     if not issue_number:
+         title = (
+             data.get("summary")
+@@ -1138,6 +1240,7 @@ def publish_task(
+             milestone=ms_name,
+             initiative=initiative,
+         )
++        issue_body = f"{issue_body}\n\n{_task_marker(task_name)}"
+         try:
+             issue_number, url, item_ids = create_and_track_issue(
+                 repo=repo,
+@@ -1156,6 +1259,19 @@ def publish_task(
+                 f"GitHub rejected the issue for {task_name}"
+             ) from e
+ 
++        if not issue_number:
++            # gh printed something other than the issue URL. The issue
++            # exists; find it by marker rather than persisting 0, which
++            # reads as "unpublished" and creates it again next run.
++            issue_number = _find_existing_issue(
++                repo=repo, task_name=task_name,
++            )
++            if not issue_number:
++                raise PublishError(
++                    f"Issue for {task_name} was created but its number "
++                    "could not be read"
++                )
++
+         data["issue"] = issue_number
+         data["item_ids"] = item_ids
+         action = "published"
+diff --git a/tools/orch/dao-cli/tests/dao_cli/test_publish_idempotency.py b/tools/orch/dao-cli/tests/dao_cli/test_publish_idempotency.py
+new file mode 100644
+index 0000000..3a4b96e
+--- /dev/null
++++ b/tools/orch/dao-cli/tests/dao_cli/test_publish_idempotency.py
+@@ -0,0 +1,156 @@
++"""Issue creation must not duplicate across retries or concurrent runs.
++
++Two instrument processes set up the same milestone at once and each
++created every issue; a retry loop elsewhere created one task's issue
++thirty times. The marker in the issue body is what lets a later run
++find the issue an earlier run created but never recorded.
++"""
++
++from contextlib import ExitStack
++from unittest.mock import patch
++
++import pytest
++
++from dao_cli.core.yaml_io import load_yaml, save_yaml
++from dao_cli.task import _task_marker, publish_task
++
++
++@pytest.fixture()
++def task_yaml(tmp_path):
++    path = tmp_path / "task.yaml"
++    save_yaml(
++        path=path,
++        data={
++            "task": "t1-demo",
++            "summary": "Demo task",
++            "issue": None,
++            "item_ids": None,
++        },
++    )
++    return path
++
++
++def _patches(task_yaml):
++    return [
++        patch("dao_cli.task.resolve_task_yaml_path", return_value=task_yaml),
++        patch("dao_cli.task.resolve_repo", return_value="user/repo"),
++        patch("dao_cli.task.resolve_owner", return_value="user"),
++        patch("dao_cli.task.ensure_gh_auth"),
++        patch(
++            "dao_cli.core.project.resolve_board_numbers",
++            return_value=[2],
++        ),
++        patch("dao_cli.core.project.resolve_gh_account", return_value="u"),
++        patch("dao_cli.board.set_board_priority"),
++        patch("dao_cli.board.set_board_size"),
++    ]
++
++
++def _run(task_yaml, extra):
++    with ExitStack() as stack:
++        for p in _patches(task_yaml) + extra:
++            stack.enter_context(p)
++        return publish_task("t1-demo", milestone=None)
++
++
++def test_marker_is_in_created_issue_body(task_yaml):
++    with patch(
++        "dao_cli.board.create_and_track_issue",
++        return_value=(42, "https://github.com/user/repo/issues/42", {2: "X"}),
++    ) as create:
++        _run(
++            task_yaml,
++            [patch("dao_cli.task._find_existing_issue", return_value=None)],
++        )
++    assert _task_marker("t1-demo") in create.call_args.kwargs["body"]
++    assert load_yaml(path=task_yaml)["issue"] == 42
++
++
++def test_failure_after_creation_then_rerun_reuses_issue(task_yaml):
++    """The issue is created, then the call dies before the number is
++    saved. The rerun must adopt that issue, not open a second one."""
++    with (
++        patch(
++            "dao_cli.board.create_and_track_issue",
++            side_effect=RuntimeError("killed after gh issue create"),
++        ) as create,
++        patch("dao_cli.task._find_existing_issue", return_value=None),
++        pytest.raises(RuntimeError),
++    ):
++        _run(task_yaml, [])
++    assert create.call_count == 1
++    assert not load_yaml(path=task_yaml).get("issue")
++
++    with (
++        patch("dao_cli.board.create_and_track_issue") as create_again,
++        patch("dao_cli.core.github.add_to_board", return_value="PVTI_1"),
++    ):
++        outcome = _run(
++            task_yaml,
++            [patch("dao_cli.task._find_existing_issue", return_value=77)],
++        )
++    create_again.assert_not_called()
++    assert outcome.issue_number == 77
++    assert load_yaml(path=task_yaml)["issue"] == 77
++
++
++def test_existing_marked_issue_is_reused(task_yaml):
++    with (
++        patch("dao_cli.board.create_and_track_issue") as create,
++        patch("dao_cli.core.github.add_to_board", return_value="PVTI_1"),
++    ):
++        _run(
++            task_yaml,
++            [patch("dao_cli.task._find_existing_issue", return_value=501)],
++        )
++    create.assert_not_called()
++    data = load_yaml(path=task_yaml)
++    assert data["issue"] == 501
++    assert data["item_ids"] == {2: "PVTI_1"}
++
++
++def test_null_item_ids_does_not_crash(task_yaml):
++    """`item_ids: null` in YAML used to hit `None[bn] = iid`."""
++    data = load_yaml(path=task_yaml)
++    data["issue"] = 9
++    data["item_ids"] = None
++    save_yaml(path=task_yaml, data=data)
++    with patch("dao_cli.core.github.add_to_board", return_value="PVTI_9"):
++        _run(task_yaml, [])
++    assert load_yaml(path=task_yaml)["item_ids"] == {2: "PVTI_9"}
++
++
++def test_unparsable_issue_number_is_resolved_by_marker(task_yaml):
++    """gh returned no URL → number 0. Persisting 0 means "unpublished"
++    and the next run creates it again."""
++    with patch(
++        "dao_cli.board.create_and_track_issue",
++        return_value=(0, "weird output", {2: "X"}),
++    ):
++        _run(
++            task_yaml,
++            [
++                patch(
++                    "dao_cli.task._find_existing_issue",
++                    side_effect=[None, 88],
++                )
++            ],
++        )
++    assert load_yaml(path=task_yaml)["issue"] == 88
++
++
++def test_find_existing_issue_picks_oldest_exact_marker():
++    from dao_cli import task as task_mod
++
++    payload = (
++        '[{"number": 12, "body": "x <!-- continuum-task: t1-demo -->"},'
++        ' {"number": 9, "body": "<!-- continuum-task: t1-demo -->"},'
++        ' {"number": 5, "body": "<!-- continuum-task: t1-demo-2 -->"}]'
++    )
++
++    class R:
++        returncode = 0
++        stdout = payload
++
++    with patch.object(task_mod.subprocess, "run", return_value=R()):
++        assert task_mod._find_existing_issue("user/repo", "t1-demo") == 9
+diff --git a/tools/orch/dao-cli/tests/dao_cli/test_task_publish.py b/tools/orch/dao-cli/tests/dao_cli/test_task_publish.py
+index cb27175..6d7cca4 100644
+--- a/tools/orch/dao-cli/tests/dao_cli/test_task_publish.py
++++ b/tools/orch/dao-cli/tests/dao_cli/test_task_publish.py
+@@ -12,6 +12,13 @@ from dao_cli.main import app
+ runner = CliRunner()
+ 
+ 
++@pytest.fixture(autouse=True)
++def _no_marker_lookup():
++    """These tests start from a repo with no prior issue for the task."""
++    with patch("dao_cli.task._find_existing_issue", return_value=None):
++        yield
++
++
+ def _create_task(project_dir, **overrides):
+     """Create a task YAML in project_dir."""
+     tasks_dir = project_dir / ".project" / "tasks"
+diff --git a/tools/orch/instrument/instrument/core/milestone.py b/tools/orch/instrument/instrument/core/milestone.py
+index b5d6ca2..bc9a85f 100644
+--- a/tools/orch/instrument/instrument/core/milestone.py
++++ b/tools/orch/instrument/instrument/core/milestone.py
+@@ -1110,6 +1110,12 @@ async def setup_milestone(
+             print_setup_resource("created", "milestone YAML", name)
+         ms_data = ms_yaml_data
+ 
++    if ms_data is None and ms_path.exists():
++        # Another setup of this milestone wrote the file after this run
++        # checked for it. Build on what it wrote instead of carrying
++        # None to the final save, which crashed on item assignment.
++        ms_data = load_yaml(path=ms_path) or {"milestone": name}
++
+     workflow = (
+         ms_data.get("workflow", "self-implementation")
+         if ms_data
+@@ -1192,6 +1198,8 @@ async def setup_milestone(
+                 existing_tasks.append(task_entry)
+                 existing_task_names.add(item.name)
+ 
++    if ms_data is None:
++        ms_data = {"milestone": name}
+     ms_data["tasks"] = existing_tasks
+     save_yaml(path=ms_path, data=ms_data)
+ 
+diff --git a/tools/orch/instrument/tests/test_setup_concurrent_milestone.py b/tools/orch/instrument/tests/test_setup_concurrent_milestone.py
+new file mode 100644
+index 0000000..4ee6d2a
+--- /dev/null
++++ b/tools/orch/instrument/tests/test_setup_concurrent_milestone.py
+@@ -0,0 +1,74 @@
++"""A second setup of the same milestone writes milestone.yaml mid-run.
++
++Seen on runner-v2 m6: an initiative-level setup and a single-milestone
++setup ran at once. The single run found no milestone.yaml, the other
++wrote it before this run reached the create step, so this run skipped
++creation and carried `ms_data = None` to the final save:
++`'NoneType' object does not support item assignment`.
++"""
++
++import asyncio
++from pathlib import Path
++from unittest.mock import AsyncMock, patch
++
++import yaml
++from continuum_core.events import EventEmitter
++from continuum_core.models import TaskBreakdownItem
++
++from instrument.core.milestone import setup_milestone
++
++MS = "race-ms"
++INIT = "standalone"
++
++
++def _ms_dir(root: Path) -> Path:
++    return root / "initiatives" / INIT / "milestones" / MS
++
++
++def test_milestone_yaml_written_mid_run_does_not_crash(tmp_path: Path):
++    ms_dir = _ms_dir(tmp_path)
++    (ms_dir / "tasks" / "t1-a").mkdir(parents=True)
++    (ms_dir / "brief.md").write_text("# Milestone: Race\n", encoding="utf-8")
++    (ms_dir / "tasks" / "t1-a" / "brief.md").write_text(
++        "# Task: t1-a\n", encoding="utf-8"
++    )
++    ms_yaml = ms_dir / "milestone.yaml"
++
++    async def other_process_writes_milestone(*_args, **_kwargs):
++        ms_yaml.write_text(
++            yaml.safe_dump(
++                {"milestone": MS, "workflow": "self-implementation",
++                 "tasks": []}
++            ),
++            encoding="utf-8",
++        )
++        return (
++            {"goal": "g", "workflow": "self-implementation"},
++            [TaskBreakdownItem(name="t1-a", summary="s")],
++        )
++
++    with (
++        patch(
++            "dao_cli.core.project.find_project_dir",
++            return_value=tmp_path,
++        ),
++        patch(
++            "instrument.core.milestone._extract_breakdown_via_sdk",
++            new=AsyncMock(side_effect=other_process_writes_milestone),
++        ),
++        patch("instrument.core.milestone._publish_task"),
++        patch(
++            "continuum_core.github.resolve_auth_env", return_value=None
++        ),
++    ):
++        items = asyncio.run(
++            setup_milestone(
++                name=MS,
++                emitter=EventEmitter(task_name=MS),
++            )
++        )
++
++    assert [i.name for i in items] == ["t1-a"]
++    saved = yaml.safe_load(ms_yaml.read_text(encoding="utf-8"))
++    assert saved["milestone"] == MS
++    assert [t["name"] for t in saved["tasks"]] == ["t1-a"]

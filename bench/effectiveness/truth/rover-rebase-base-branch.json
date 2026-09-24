@@ -1,0 +1,19 @@
+{
+ "id": "rover-rebase-base-branch",
+ "kind": "signature",
+ "start": "41a42f822b96ee21f89c47f59000de8c82fbd4d2",
+ "ref": "e8b211a1c12eab474796edc125a2acdb4e1ccfce",
+ "expected_src": [
+  "tools/flow/rover/rover/rebase/services/rebaser.py",
+  "tools/orch/runner/runner/core/engine.py",
+  "tools/orch/runner/runner/core/hooks.py"
+ ],
+ "ref_tests": [
+  "tools/orch/runner/tests/test_pre_hook_rebase.py"
+ ],
+ "suites": [
+  "tools/flow/rover",
+  "tools/orch/runner"
+ ],
+ "ref_diff_lines": 416
+}

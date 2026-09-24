@@ -1,0 +1,19 @@
+{
+ "id": "q-resolve-owner",
+ "kind": "question",
+ "sha": "ce363fce754180bcc9edcfe53ddb01e1a65ca6ce",
+ "symbol": "resolve_owner",
+ "defined_in": [
+  "tools/orch/dao-cli/dao_cli/core/project.py"
+ ],
+ "callers": [
+  "tools/orch/dao-cli/dao_cli/board.py",
+  "tools/orch/dao-cli/dao_cli/project.py",
+  "tools/orch/dao-cli/dao_cli/task.py",
+  "tools/orch/instrument/instrument/core/milestone.py",
+  "tools/orch/runner/runner/core/engine.py",
+  "tools/orch/runner/runner/core/hooks.py",
+  "tools/orch/runner/runner/core/state.py"
+ ],
+ "test_callers": []
+}

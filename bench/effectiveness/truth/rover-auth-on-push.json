@@ -1,0 +1,18 @@
+{
+ "id": "rover-auth-on-push",
+ "kind": "signature",
+ "start": "f944abab0d3c973ad0c9e9847d450d6fd3cb88a6",
+ "ref": "0cfc753b1c1e3d723c17e9aa18e233b6a6ce08c2",
+ "expected_src": [
+  "tools/flow/rover/rover/commit/integrations/git.py",
+  "tools/flow/rover/rover/commit/services/batch_committer.py",
+  "tools/flow/rover/rover/commit/services/committer.py"
+ ],
+ "ref_tests": [
+  "tools/flow/rover/tests/test_batch_committer.py"
+ ],
+ "suites": [
+  "tools/flow/rover"
+ ],
+ "ref_diff_lines": 423
+}

@@ -1,0 +1,420 @@
+# Graphite effectiveness bench — task set (Continuum, Python).
+#
+# Code tasks replay a real Continuum commit: the agent starts at `ref~1` and
+# is asked to deliver what `ref` delivered. The reference diff is the ground
+# truth for the judge; files the reference touched are the coverage target.
+# Question tasks ask "what breaks if I change X" at a pinned commit; the
+# ground-truth caller list is computed by build_truth.py and frozen in
+# truth.json.
+#
+# kind: signature | bugfix | feature | refactor | question
+# difficulty: easy | medium | hard (reference diff size + files + reasoning)
+# suites: tool dirs whose pytest suite must not regress (run with uv)
+
+[defaults]
+start = "parent"   # start commit = ref~1
+
+[[task]]
+id = "rover-rebase-base-branch"
+kind = "signature"
+difficulty = "hard"
+ref = "e8b211a1c1"
+suites = ["tools/flow/rover", "tools/orch/runner"]
+prompt = """
+Runner's pre-hook always rebases a task's worktree onto the repository's
+default branch (via rover). Tasks that belong to an umbrella/integration
+branch (task_data["base_branch"]) therefore never see work their sibling
+tasks already delivered to that branch.
+
+Change it so the pre-hook rebases onto the task's own `base_branch` when it
+has one, and onto the repo default when it does not (current behaviour).
+The git mechanics belong in rover: add a rover function
+`rebase_base_onto_current(base, ...)` and keep `rebase_main_onto_current`
+working for every existing caller as a thin wrapper. The runner engine
+should pass `base_branch` from the task's data to the pre-hook explicitly.
+Calling the pre-hook without a base must keep the old behaviour.
+"""
+
+[[task]]
+id = "marshal-resolve-by-entry"
+kind = "signature"
+difficulty = "hard"
+ref = "efca286a1b"
+suites = ["tools/orch/marshal"]
+prompt = """
+marshal's daemon runs from $HOME under launchd. `read_task_status`,
+`reset_task_to_queued` and `mark_task_failed` resolve the task.yaml through
+dao_cli's cwd-based project detection, which raises outside a repo — and the
+exception is swallowed, so stale-task recovery and death handling silently
+do nothing in daemon mode.
+
+Make these three functions take the `TaskEntry` instead of a bare task name
+and resolve task.yaml from the entry's identity (owner, repo, project,
+initiative, milestone) via the externalized projects base, the same cwd-free
+way dispatch already resolves source roots. Add
+`resolve_task_yaml_for_entry(entry)` for that. Fall back to cwd detection
+only for entries without identity. Replace silent `pass` on failure with
+logged warnings. Update every caller in the marshal run command accordingly.
+"""
+
+[[task]]
+id = "regent-key-files-at-ref"
+kind = "feature"
+difficulty = "hard"
+ref = "60de6dec9c"
+suites = ["tools/orch/regent"]
+prompt = """
+regent's `check_key_files` lint is disabled because it checks declared
+key-file paths with `Path.exists()` against whatever the working copy is —
+a stale checkout reports merged files as missing.
+
+Re-enable it and make it check paths against the repository at a named ref:
+the initiative's declared umbrella branch when briefs declare one,
+`origin/<default branch>` otherwise. Report a path as missing only when it is
+absent from BOTH the ref and the working copy. When no ref resolves, or
+briefs disagree about the umbrella, skip the lint and state why instead of
+guessing. Give `check_key_files` the resolved tree as a parameter (resolve
+it in lint_context, e.g. `resolve_repo_tree(project_dir, item_id)`).
+Also: a key-files row like "Add (minimal, for these unit tests)" is still an
+Add row and must not be reported as missing. Run it from run_all_lints over
+every task, not one.
+"""
+
+[[task]]
+id = "regent-is-ancestor-tristate"
+kind = "bugfix"
+difficulty = "medium"
+ref = "b3fc411912"
+suites = ["tools/orch/regent"]
+prompt = """
+Bug in regent's delivery scoreboard (regent/core/delivery.py): four merged,
+on-main tasks were reported as "delivered nothing". `_is_ancestor` returns
+`returncode == 0`, so git exit 128 (object not available locally) reads the
+same as exit 1 ("not an ancestor"). The pinned tip is also never fetched on
+its own, so ancestry is asked about objects git does not have.
+
+Fix it: fetch the tip once before scoring any task; make `_is_ancestor`
+return True / False / None (None when git errors) and route None to
+"could not read" instead of "delivered nothing"; a git timeout must not be
+reported as exit 1. Measure what a merge delivered against the merge's own
+first parent rather than the tip, and never use `git show` on a merge
+commit. A diff that could not be read must be a skip, not a verdict.
+"""
+
+[[task]]
+id = "regent-tristate-siblings"
+kind = "bugfix"
+difficulty = "medium"
+ref = "c3300fddf6"
+suites = ["tools/orch/regent"]
+prompt = """
+regent has several checks that collapse "the command could not run" into
+"the answer is no":
+- spawn's `branch_is_current` uses `git merge-base --is-ancestor` with
+  `returncode == 0` (exit 128 when origin/main is not fetched reads as
+  "needs rebase");
+- `pr_exists` treats any non-zero gh exit (unauthenticated, rate-limited,
+  offline) as "no PR";
+- `worktree_exists` folds every OSError into False.
+Make them answer True / False / None, never swallow a timeout into an exit
+code, and make the idempotent-step logic run the action (and say why) when
+the answer is None. Apply the same treatment to the equivalent checks in
+regent/core/lenses.py (e.g. `_brief_bodies`) and update their callers.
+"""
+
+[[task]]
+id = "core-consolidate-pin-model"
+kind = "refactor"
+difficulty = "medium"
+ref = "d6555252bf"
+suites = ["tools/orch/continuum-core", "tools/orch/refiner", "tools/orch/intake"]
+prompt = """
+`_pin_model` (model resolution from model_pins.json) is duplicated in
+refiner and intake while continuum-core already has the shared version.
+Consolidate: refiner and intake must use continuum-core's `_pin_model`
+and drop their local copies. refiner's current behaviour resolves its
+default from the "default:refiner" key — preserve that by adding a
+`custom_default_key` parameter to continuum-core's `_pin_model`. Add
+continuum-core as a dependency where needed.
+"""
+
+[[task]]
+id = "rover-auth-on-push"
+kind = "signature"
+difficulty = "medium"
+ref = "0cfc753b1c"
+suites = ["tools/flow/rover"]
+prompt = """
+`rover commit all` fails to push on repos owned by a different GitHub
+account: the commit/push path does not resolve per-repo auth, while the
+pull path already does (owner → gh user → GITHUB_TOKEN via
+`resolve_auth_env`). Thread the resolved auth env through the commit/push
+path — the git integration functions used for push and pull-rebase, the
+single committer and the batch committer — so pushes use the right account,
+following the pattern pull already uses.
+"""
+
+[[task]]
+id = "runner-durable-attempts"
+kind = "feature"
+difficulty = "hard"
+ref = "7553e7eb6e"
+suites = ["tools/orch/runner"]
+prompt = """
+runner's retry protections never fire: the session log is trimmed to 2
+entries per mode, but the FINALIZING guard needs 3 and the fresh-start
+threshold (15) is above what the trimmed log can ever hold.
+
+Add a durable, untrimmed `attempts` block to task.yaml (new module
+runner/core/attempts.py): total, lifetime, fresh_starts, runs per mode, and
+per-gate consecutive failure streaks. A mode run more than
+RUNNER_MAX_MODE_RETRIES (default 3) times, or a gate failing
+RUNNER_GATE_FAIL_MAX (default 3) times in a row, holds the task as
+needs_human. Fresh start reads the durable total and resets to the
+workflow's first mode (not a hardcoded BRIEFING); a second fresh start
+escalates. Remove the session-counting guard from execute_finalizing, and
+don't let the gate_failed requeue overwrite needs_human.
+"""
+
+[[task]]
+id = "runner-pr-base-guard"
+kind = "bugfix"
+difficulty = "medium"
+ref = "4b07891d28"
+suites = ["tools/orch/runner"]
+prompt = """
+runner can merge a PR that targets the wrong base: `post_hook_validate_pr_target`
+returns True on any gh error and the engine ignores its result, so a PR
+aimed at main can merge while the task belongs to an umbrella branch.
+
+Make the validator report ok / fixed / mismatch / unknown and have the
+engine emit that result. In execute_finalizing, re-read the PR's
+baseRefName right before merging: stop on a mismatch (MERGE_FAILED) and
+fail closed (classified failure) when the base cannot be read.
+"""
+
+[[task]]
+id = "runner-gh-timeouts"
+kind = "bugfix"
+difficulty = "medium"
+ref = "900e76143c"
+suites = ["tools/orch/runner"]
+prompt = """
+A stuck `gh` call can hold a whole milestone: gh calls in execute_finalizing,
+remote branch delete and the merge ladder run with no timeout. Route them
+through one helper `_run_gh` with a 30s timeout (60s for merge); a timeout
+must return a failed result whose stderr classifies as auth_or_network.
+Also make `_pr_is_merged` (runner/core/state.py) resolve the task repo's
+auth env the way the hooks do.
+"""
+
+[[task]]
+id = "runner-auto-merge-queued"
+kind = "bugfix"
+difficulty = "medium"
+ref = "24c1aec482"
+suites = ["tools/orch/runner"]
+prompt = """
+`gh pr merge --auto` exits 0 when it only arms auto-merge (checks still
+pending). FINALIZING treats that as merged: it verifies an umbrella that
+doesn't contain the work yet, deletes the remote head (closing the PR and
+killing the armed merge), and marks the task done.
+
+After any merge strategy exits 0, poll the PR state with the task's auth
+env. If it is not merged, return a new AUTO_QUEUED result: no umbrella
+verify, no branch delete; set status queued with finalize_state
+"auto_queued" and the reason in last_action (not a blocker — a blocker
+would stop the queue from re-enqueueing it).
+"""
+
+[[task]]
+id = "dao-idempotent-publish"
+kind = "bugfix"
+difficulty = "hard"
+ref = "ce363fce75"
+suites = ["tools/orch/dao-cli", "tools/orch/instrument"]
+prompt = """
+Duplicate GitHub issues: two setups of one milestone ran at once and each
+created every issue; a retry loop recreated one task's issue thirty times.
+
+Make task publishing in dao-cli idempotent: hold a per-task lock across
+check-and-create, reload the task inside the lock, mark each issue body with
+the task slug, and adopt an existing marked issue instead of creating a new
+one. An unreadable issue number must be resolved by the marker rather than
+persisted as 0. Also: `item_ids: null` must not crash the board-add path,
+and instrument's setup_milestone must survive milestone.yaml appearing
+mid-run.
+"""
+
+[[task]]
+id = "runner-wall-clock"
+kind = "feature"
+difficulty = "medium"
+ref = "ea401cabed"
+suites = ["tools/orch/runner"]
+prompt = """
+Add wall-clock instrumentation to runner's event stream as a baseline for
+speed work:
+- pre_hook_done / post_hooks_done events carry hook_duration_ms;
+- mode_complete carries mode_wall_ms (including the background-task wait
+  that the SDK's duration_ms leaves out) and first_edit_ms (time to the
+  first file edit in the mode);
+- tool_call events carry tool_use_id, and a new tool_result event reports
+  each tool's duration.
+"""
+
+[[task]]
+id = "zen-dedup-relevance"
+kind = "feature"
+difficulty = "hard"
+ref = "e73dae002b"
+suites = ["tools/context/zen-review"]
+prompt = """
+zen-review posts duplicate findings from different reviewers and a lot of
+low-value noise. Add:
+1. Cross-reviewer dedup (new pure module zen_review/orchestration/dedup.py):
+   issues on the same file within ±2 lines merge when their title tokens'
+   Jaccard similarity is >= 0.5 (exclude camelCase-split filename tokens so
+   distinct findings naming the same endpoint don't fuse). The merge keeps
+   the highest severity, the most specific title, the max relevance, and
+   appends "Also flagged by: <reviewer>".
+2. Relevance filter: reviewers rate relevance 1-5 (ReviewIssue.relevance,
+   default 3). Pipeline: dedup -> drop issues below --min-relevance
+   (CLI option, 1-5, default 3) -> summary counted over kept issues only.
+   Keep filtered issues in ReviewResult.filtered_issues with filtered=True
+   (stored in YAML, never posted or displayed).
+"""
+
+[[task]]
+id = "instrument-branch-prefix"
+kind = "feature"
+difficulty = "medium"
+ref = "72f3c8febe"
+suites = ["tools/orch/dao-cli", "tools/orch/instrument"]
+prompt = """
+The umbrella branch prefix `feature/` is hardcoded in instrument. Make it a
+per-repository setting: add `branch_prefix` next to `shared_branch` on the
+dao-cli registry entry, and derive the umbrella as `<prefix><initiative>`.
+Absent means `feature/` (existing projects keep their branch names).
+Normalise once where it is read: `feat` and `feat/` are the same, so neither
+`feat//x` nor `featx` can be derived. A prefix that would derive a branch
+name git rejects must raise instead of being used. The prefix is inert while
+the shared-branch strategy is off.
+"""
+
+[[task]]
+id = "regent-lints-every-task"
+kind = "refactor"
+difficulty = "medium"
+ref = "082b68faaf"
+suites = ["tools/orch/regent"]
+prompt = """
+regent's `slug_consistency` lint always emits "skipped: missing
+task_dir/brief_path" because it takes a single task while a run close has
+many. Make the per-task lints fan out over every task of the run.
+
+Replace the `(name, task.yaml)` tuples that `delivery_verdict` reads with a
+single `TaskTarget` structure (name, task dir, task.yaml, brief) shared by
+both lints in the lint context, instead of parallel lists. Distinguish
+"resolver could not resolve tasks" (None) from "run has no tasks" (empty):
+each must produce an explicit skip with its reason, so silence always means
+"every task checked".
+"""
+
+[[task]]
+id = "sourcerer-monorepo-root"
+kind = "signature"
+difficulty = "easy"
+ref = "41c02e3e6d"
+suites = ["tools/flow/sourcerer"]
+prompt = """
+Bug in sourcerer: for monorepo projects the externalized worktrees root is
+wrong. `_resolve_externalized_worktrees_root` returns the first registry
+match; for continuum (entries: app with path="app", continuum with
+path="") it always picks "app" even when run from the repo root.
+
+Pass the current working directory in and pick the most specific registry
+entry by walking up the cwd-relative path (the same way the worktree tool
+does). Update its callers (`find_worktrees_root` users in the completer and
+navigator services).
+"""
+
+[[task]]
+id = "tools-pin-model-default"
+kind = "feature"
+difficulty = "medium"
+ref = "502651cc84"
+suites = []
+prompt = """
+Tools that are not given --model (refiner launched from the Tauri UI,
+zen-review, slackweave, fireweave, ...) fall back to the Claude SDK's
+default model. Make every SDK-using tool always resolve its model through
+model_pins.json, falling back to a "default" key (add it to
+tools/data/model_pins.json with value "claude-sonnet-4-6") when no model is
+explicitly requested — in each tool's SDK wrapper / agent class that builds
+the SDK options.
+"""
+
+# ---------------------------------------------------------------- questions
+
+[[task]]
+id = "q-resolve-task-yaml-path"
+kind = "question"
+difficulty = "medium"
+ref = "ce363fce75"
+start = "ref"
+symbol = "resolve_task_yaml_path"
+prompt = """
+Do not modify any files. I want to add a required keyword-only parameter
+`owner: str` to dao-cli's `resolve_task_yaml_path`. List every non-test
+Python source file in this repository that calls it (directly or through a
+re-export) and would need to be updated. Finish with a section starting
+with the line `AFFECTED:` followed by one repo-relative path per line and
+nothing else after it.
+"""
+
+[[task]]
+id = "q-resolve-owner"
+kind = "question"
+difficulty = "easy"
+ref = "ce363fce75"
+start = "ref"
+symbol = "resolve_owner"
+prompt = """
+Do not modify any files. I want to change dao-cli's `resolve_owner` to
+return an `Owner` object instead of a string. List every non-test Python
+source file in this repository that calls it and would need to be updated.
+Finish with a section starting with the line `AFFECTED:` followed by one
+repo-relative path per line and nothing else after it.
+"""
+
+[[task]]
+id = "q-find-project-dir"
+kind = "question"
+difficulty = "hard"
+ref = "ce363fce75"
+start = "ref"
+symbol = "find_project_dir"
+prompt = """
+Do not modify any files. I want `find_project_dir` (dao-cli) to stop
+defaulting to the current working directory and require an explicit
+`start: Path` argument. List every non-test Python source file in this
+repository that calls it and would need to be updated. Finish with a
+section starting with the line `AFFECTED:` followed by one repo-relative
+path per line and nothing else after it.
+"""
+
+[[task]]
+id = "q-check-artifacts"
+kind = "question"
+difficulty = "easy"
+ref = "ce363fce75"
+start = "ref"
+symbol = "check_artifacts"
+prompt = """
+Do not modify any files. I want to rename dao-cli's `check_artifacts` to
+`check_gate_artifacts`. List every non-test Python source file in this
+repository that calls it and would need to be updated. Finish with a
+section starting with the line `AFFECTED:` followed by one repo-relative
+path per line and nothing else after it.
+"""

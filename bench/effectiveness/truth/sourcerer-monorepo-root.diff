@@ -1,0 +1,152 @@
+diff --git a/tools/flow/sourcerer/sourcerer/wt/integrations/filesystem.py b/tools/flow/sourcerer/sourcerer/wt/integrations/filesystem.py
+index d4ddb41..02593d0 100644
+--- a/tools/flow/sourcerer/sourcerer/wt/integrations/filesystem.py
++++ b/tools/flow/sourcerer/sourcerer/wt/integrations/filesystem.py
+@@ -37,7 +37,10 @@ def list_real_dirs(path: Path) -> list[Path]:
+     )
+ 
+ 
+-def find_worktrees_root(project: Path) -> Path | None:
++def find_worktrees_root(
++    project: Path,
++    cwd: Path | None = None,
++) -> Path | None:
+     """Find .worktrees directory for a project.
+ 
+     Checks externalized project dir first, then
+@@ -45,12 +48,15 @@ def find_worktrees_root(project: Path) -> Path | None:
+ 
+     Args:
+         project: Project root path (source repo).
++        cwd: Working directory for monorepo matching.
+ 
+     Returns:
+         Path to .worktrees or None if not found.
+     """
+     # Check externalized project dir
+-    ext_root = _resolve_externalized_worktrees_root(project)
++    ext_root = _resolve_externalized_worktrees_root(
++        project, cwd=cwd,
++    )
+     if ext_root and ext_root.is_dir():
+         return ext_root
+ 
+@@ -194,13 +200,17 @@ def find_all_worktree_roots(
+ 
+ def _resolve_externalized_worktrees_root(
+     source_path: Path,
++    cwd: Path | None = None,
+ ) -> Path | None:
+     """Resolve externalized .worktrees from registry.
+ 
+     Lightweight inline resolution — no dao_cli import.
++    For monorepos with multiple registry entries, uses
++    CWD relative path to match the most specific entry.
+ 
+     Args:
+-        source_path: Source project path to look up.
++        source_path: Source project path (git root).
++        cwd: Working directory for monorepo matching.
+ 
+     Returns:
+         Path to externalized .worktrees/, or None.
+@@ -225,23 +235,48 @@ def _resolve_externalized_worktrees_root(
+     if not repo_slug:
+         return None
+ 
+-    # Match against registry entries
+-    for entry in raw:
+-        if not isinstance(entry, dict):
+-            continue
+-        if entry.get("repo") != repo_slug:
+-            continue
+-
+-        parts = repo_slug.split("/", 1)
+-        if len(parts) == 2:
+-            owner, repo_name = parts
+-        else:
+-            owner, repo_name = "unknown", parts[0]
++    # Filter entries for this repo
++    repo_entries = [
++        e for e in raw
++        if isinstance(e, dict)
++        and e.get("repo") == repo_slug
++    ]
++    if not repo_entries:
++        return None
+ 
+-        project_dir = (
+-            _PROJECTS_BASE / owner.lower() / repo_name / entry["name"]
+-        )
+-        return project_dir / ".worktrees"
++    parts = repo_slug.split("/", 1)
++    if len(parts) == 2:
++        owner, repo_name = parts
++    else:
++        owner, repo_name = "unknown", parts[0]
++
++    # Determine CWD-relative path for monorepo matching
++    match_path = ""
++    if cwd:
++        try:
++            rel = cwd.resolve().relative_to(
++                source_path.resolve(),
++            )
++            match_path = str(rel) if str(rel) != "." else ""
++        except ValueError:
++            match_path = ""
++
++    # Walk up match_path for most-specific match
++    check = Path(match_path) if match_path else Path("")
++    while True:
++        check_str = str(check) if str(check) != "." else ""
++        for entry in repo_entries:
++            if entry.get("path", "") == check_str:
++                project_dir = (
++                    _PROJECTS_BASE
++                    / owner.lower()
++                    / repo_name
++                    / entry["name"]
++                )
++                return project_dir / ".worktrees"
++        if not check_str or check == Path(""):
++            break
++        check = check.parent
+ 
+     return None
+ 
+diff --git a/tools/flow/sourcerer/sourcerer/wt/services/completer.py b/tools/flow/sourcerer/sourcerer/wt/services/completer.py
+index 9e90bbc..ddde05e 100644
+--- a/tools/flow/sourcerer/sourcerer/wt/services/completer.py
++++ b/tools/flow/sourcerer/sourcerer/wt/services/completer.py
+@@ -33,7 +33,7 @@ def milestone_completions(
+     if not project:
+         return []
+ 
+-    wt_root = find_worktrees_root(project)
++    wt_root = find_worktrees_root(project, cwd=cwd)
+     if not wt_root:
+         return []
+ 
+@@ -69,7 +69,7 @@ def worktree_completions(
+     if not project:
+         return []
+ 
+-    wt_root = find_worktrees_root(project)
++    wt_root = find_worktrees_root(project, cwd=cwd)
+     if not wt_root:
+         return []
+ 
+diff --git a/tools/flow/sourcerer/sourcerer/wt/services/navigator.py b/tools/flow/sourcerer/sourcerer/wt/services/navigator.py
+index fe21cc7..38d8112 100644
+--- a/tools/flow/sourcerer/sourcerer/wt/services/navigator.py
++++ b/tools/flow/sourcerer/sourcerer/wt/services/navigator.py
+@@ -43,7 +43,7 @@ def get_project_context() -> ProjectContext:
+             f"Not inside a project with .worktrees/. CWD: {cwd}"
+         )
+ 
+-    wt_root = find_worktrees_root(project)
++    wt_root = find_worktrees_root(project, cwd=cwd)
+     if not wt_root:
+         raise NavigationError(f"No .worktrees/ directory in {project}")
+ 

@@ -1,0 +1,48 @@
+{
+ "id": "regent-is-ancestor-tristate",
+ "kind": "bugfix",
+ "start": "8e89575019085174fd5342f4dfa0306c7ea3e917",
+ "ref": "b3fc411912ca3ce7d479c1220ac258ec42752b4b",
+ "expected_src": [
+  "tools/orch/regent/regent/core/delivery.py"
+ ],
+ "ref_tests": [
+  "tools/orch/regent/tests/test_delivery.py"
+ ],
+ "suites": [
+  "tools/orch/regent"
+ ],
+ "ref_diff_lines": 534,
+ "start_failures": {
+  "tools/orch/regent": [
+   "tests.test_cli.TestRunAndClose::test_emits_report_on_success",
+   "tests.test_cli.TestRunAndClose::test_emits_report_and_reraises_on_escalation",
+   "tests.test_cli.TestAutopsyFailure::test_failing_report_is_shown_not_swallowed",
+   "tests.test_cli.TestAutopsyFailure::test_a_plain_crash_is_reported_as_failed_not_completed",
+   "tests.test_cli.TestAutopsyFailure::test_an_interrupt_in_the_pipeline_is_reported_as_failed",
+   "tests.test_cli.TestAutopsyFailure::test_the_escalation_still_names_its_own_stage"
+  ]
+ },
+ "ref_failures": {
+  "tools/orch/regent": [
+   "tests.test_cli.TestRunAndClose::test_emits_report_on_success",
+   "tests.test_cli.TestRunAndClose::test_emits_report_and_reraises_on_escalation",
+   "tests.test_cli.TestAutopsyFailure::test_failing_report_is_shown_not_swallowed",
+   "tests.test_cli.TestAutopsyFailure::test_a_plain_crash_is_reported_as_failed_not_completed",
+   "tests.test_cli.TestAutopsyFailure::test_an_interrupt_in_the_pipeline_is_reported_as_failed",
+   "tests.test_cli.TestAutopsyFailure::test_the_escalation_still_names_its_own_stage"
+  ]
+ },
+ "hidden_at_ref": {
+  "tools/orch/regent": {
+   "passed": 47,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/orch/regent": {
+   "passed": 26,
+   "failed": 21
+  }
+ }
+}

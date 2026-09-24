@@ -1,0 +1,1023 @@
+diff --git a/tools/orch/marshal/marshal_cli/commands/run.py b/tools/orch/marshal/marshal_cli/commands/run.py
+index fdd10c3..296034f 100644
+--- a/tools/orch/marshal/marshal_cli/commands/run.py
++++ b/tools/orch/marshal/marshal_cli/commands/run.py
+@@ -41,12 +41,14 @@ def _filter_name_collisions(
+     """Drop tasks whose name is ambiguous across projects.
+ 
+     --all/partial scope has no qualified task identity end to
+-    end — read_task_status/is_foreman_running/reset_task_to_queued
+-    all key by plain name. If two different projects both have a
+-    ready task sharing a name, dispatch can't tell which one it's
+-    actually running/tracking afterward. Rather than guess, skip
+-    both and warn — narrower fix than requalifying every
+-    name-keyed lookup in the codebase for this one edge case.
++    end in the process-level checks — is_foreman_running and the
++    dispatch claim locks key by plain name (task.yaml access now
++    resolves by full project identity). If two different projects
++    both have a ready task sharing a name, dispatch can't tell
++    which one it's actually running/tracking afterward. Rather
++    than guess, skip both and warn — narrower fix than
++    requalifying every name-keyed lookup in the codebase for this
++    one edge case.
+ 
+     Args:
+         candidates: Ready tasks being considered for dispatch.
+@@ -82,8 +84,31 @@ def _filter_name_collisions(
+     return [t for t in candidates if t.name not in ambiguous]
+ 
+ 
++def _fallback_entry(task_name: str) -> TaskEntry:
++    """Minimal TaskEntry for a name with no loaded entry.
++
++    Only used when a running/adopted task's name can't be found in
++    the current cycle's loaded entries (e.g. its task.yaml vanished
++    between dispatch and death). Carries no project identity, so
++    disk access degrades to dao_cli's cwd-based fallback — better
++    than dropping the death check entirely, and the resolution
++    layer logs loudly if that fallback can't resolve either.
++    """
++    from marshal_cli.core.models import Priority
++
++    return TaskEntry(
++        name=task_name,
++        priority=Priority.P2,
++        created="",
++        workflow="",
++        mode="",
++        status="",
++        size="M",
++    )
++
++
+ def _handle_possible_death(
+-    task_name: str,
++    task: TaskEntry,
+     death_retries: dict[str, int],
+     max_retries: int = MAX_DEATH_RETRIES,
+     exit_code: int | None = None,
+@@ -123,7 +148,9 @@ def _handle_possible_death(
+     as case 3.
+ 
+     Args:
+-        task_name: Task whose process just ended.
++        task: Entry for the task whose process just ended — the
++            full entry (not just the name) so on-disk reads and
++            mutations resolve by project identity instead of cwd.
+         death_retries: Mutable attempt counter, keyed by task name.
+         max_retries: Automatic restarts allowed before giving up.
+         exit_code: Exit code of the process that just ended, if
+@@ -135,7 +162,8 @@ def _handle_possible_death(
+         should skip normal completion reporting. False if status
+         couldn't be read or this was a clean finish (success).
+     """
+-    status_mode = read_task_status(task_name)
++    task_name = task.name
++    status_mode = read_task_status(task)
+     if status_mode is None:
+         return False
+     status, mode = status_mode
+@@ -156,7 +184,7 @@ def _handle_possible_death(
+     attempts = death_retries.get(task_name, 0)
+     if attempts < max_retries:
+         death_retries[task_name] = attempts + 1
+-        reset_task_to_queued(task_name)
++        reset_task_to_queued(task)
+         if is_ambiguous_death:
+             reason = "died unexpectedly"
+         elif is_reported_failure:
+@@ -175,7 +203,7 @@ def _handle_possible_death(
+             # it stays ready-eligible and gets redispatched forever
+             # even past the retry cap (the "exhausted" message
+             # would just repeat every cycle instead of stopping).
+-            mark_task_failed(task_name)
++            mark_task_failed(task)
+         console.print(
+             f"[red]Foreman failed repeatedly — {task_name} "
+             f"exhausted {max_retries} automatic restarts;"
+@@ -410,6 +438,10 @@ def _run_auto(
+     # can't Popen.wait() on a process that isn't our child.
+     adopted: set[str] = set()
+     death_retries: dict[str, int] = {}  # task_name -> attempts used
++    # Latest loaded TaskEntry per name — death/recovery helpers
++    # need the full entry (project identity) to touch task.yaml
++    # without depending on this process's cwd.
++    entry_index: dict[str, TaskEntry] = {}
+ 
+     def _sigint_handler(signum: int, frame: object) -> None:
+         nonlocal stop
+@@ -430,7 +462,9 @@ def _run_auto(
+     try:
+         while not stop:
+             # Poll running processes, collect finished
+-            _collect_finished(running, completed, death_retries)
++            _collect_finished(
++                running, completed, death_retries, entry_index,
++            )
+ 
+             # Reconcile adopted tasks whose foreman has since
+             # exited — not in `running`, so _collect_finished
+@@ -439,9 +473,12 @@ def _run_auto(
+                 if is_foreman_running(name):
+                     continue
+                 adopted.discard(name)
+-                if _handle_possible_death(name, death_retries):
++                entry = entry_index.get(name) or _fallback_entry(
++                    name,
++                )
++                if _handle_possible_death(entry, death_retries):
+                     continue
+-                status_mode = read_task_status(name)
++                status_mode = read_task_status(entry)
+                 success = bool(
+                     status_mode and status_mode[0] == "done",
+                 )
+@@ -478,6 +515,7 @@ def _run_auto(
+ 
+             # Reload task state from disk
+             all_tasks = load_all_tasks(**scope)
++            entry_index = {t.name: t for t in all_tasks}
+ 
+             # Recover stale in_progress tasks (no foreman running) —
+             # the one-shot call before this loop only catches staleness
+@@ -530,7 +568,7 @@ def _run_auto(
+                     and t.name not in adopted
+                     and not is_foreman_running(t.name)
+                 ):
+-                    _handle_possible_death(t.name, death_retries)
++                    _handle_possible_death(t, death_retries)
+ 
+             # Effective WIP is the UNION of disk in_progress and
+             # locally spawned processes — dispatched tasks appear
+@@ -699,6 +737,7 @@ def _collect_finished(
+     running: dict[str, object],
+     completed: dict[str, int] | None = None,
+     death_retries: dict[str, int] | None = None,
++    entries: dict[str, TaskEntry] | None = None,
+ ) -> None:
+     """Poll running processes and remove finished ones.
+ 
+@@ -713,15 +752,22 @@ def _collect_finished(
+             deferred cleanup.
+         death_retries: Optional mutable attempt counter for
+             death-triggered restarts, keyed by task name.
++        entries: Latest loaded TaskEntry per name — lets the death
++            check resolve task.yaml by project identity instead of
++            cwd. Names not present degrade to a cwd-based
++            fallback entry.
+     """
+     finished = []
+     for name, proc in running.items():
+         if proc.poll() is not None:
+             finished.append(name)
++            entry = (entries or {}).get(
++                name,
++            ) or _fallback_entry(name)
+             died = (
+                 death_retries is not None
+                 and _handle_possible_death(
+-                    name, death_retries, exit_code=proc.returncode,
++                    entry, death_retries, exit_code=proc.returncode,
+                 )
+             )
+             if not died:
+diff --git a/tools/orch/marshal/marshal_cli/core/dispatch.py b/tools/orch/marshal/marshal_cli/core/dispatch.py
+index cd1b39d..622456b 100644
+--- a/tools/orch/marshal/marshal_cli/core/dispatch.py
++++ b/tools/orch/marshal/marshal_cli/core/dispatch.py
+@@ -166,42 +166,155 @@ def is_foreman_running(task_name: str) -> bool:
+         return False
+ 
+ 
+-def reset_task_to_queued(
+-    task_name: str,
+-    milestone: str | None = None,
+-) -> bool:
++def resolve_task_yaml_for_entry(
++    task: TaskEntry,
++) -> Path | None:
++    """Resolve a task's task.yaml from its own project identity.
++
++    The recovery/death path helpers below (read_task_status,
++    reset_task_to_queued, mark_task_failed) used to funnel through
++    dao_cli's `resolve_task_yaml_path(name)`, which calls
++    `find_project_dir(start=None→cwd)` — that RAISES
++    FileNotFoundError whenever the caller's cwd isn't inside a
++    project source repo (the daemon runs from $HOME under launchd),
++    and the exceptions were silently swallowed. Net effect: the
++    entire stale-recovery + death-handling subsystem was a silent
++    no-op in daemon mode. This resolves from the TaskEntry's
++    (owner, repo, project) via the same externalized projects base
++    `resolve_source_root`/`_load_tasks_all_projects` already use —
++    zero dependency on cwd.
++
++    Falls back to dao_cli's cwd-based lookup only when the entry
++    carries no project identity (single-project scoped/interactive
++    mode, where cwd IS a valid signal — today's behavior for that
++    path, unchanged).
++
++    Args:
++        task: Task entry carrying name + project identity.
++
++    Returns:
++        Path to an existing task YAML, or None (with a loud
++        warning logged) if it can't be located.
++    """
++    from dao_cli.core.project import PROJECTS_BASE
++
++    if not (task.owner and task.repo and task.project):
++        try:
++            from dao_cli.core.project import (
++                resolve_task_yaml_path,
++            )
++
++            yaml_path = resolve_task_yaml_path(
++                task_name=task.name,
++                milestone=task.milestone,
++            )
++            if yaml_path.exists():
++                return yaml_path
++            logger.warning(
++                "Could not locate task.yaml for %s via cwd "
++                "detection (no owner/repo/project on entry) — "
++                "resolved path %s does not exist.",
++                task.name,
++                yaml_path,
++            )
++            return None
++        except Exception as e:
++            logger.warning(
++                "Could not resolve task.yaml for %s via cwd "
++                "detection (no owner/repo/project on entry): %s",
++                task.name,
++                e,
++            )
++            return None
++
++    # owner lowered to match dao_cli.core.registry._entry_dir's
++    # directory-naming convention (repo/project casing preserved);
++    # fall back to the owner as given for case-sensitive FSes.
++    project_dir: Path | None = None
++    for owner in (task.owner.lower(), task.owner):
++        candidate = PROJECTS_BASE / owner / task.repo / task.project
++        if candidate.is_dir():
++            project_dir = candidate
++            break
++    if project_dir is None:
++        logger.warning(
++            "Could not locate project dir for task %s "
++            "(%s/%s/%s under %s).",
++            task.name,
++            task.owner,
++            task.repo,
++            task.project,
++            PROJECTS_BASE,
++        )
++        return None
++
++    # Direct path first (cheap), then a glob fallback for entries
++    # whose YAML-declared milestone differs from the directory name
++    # (or standalone layouts the fields don't reflect).
++    task_dir = (
++        project_dir
++        / "initiatives"
++        / (task.initiative or "standalone")
++        / "milestones"
++        / (task.milestone or "standalone")
++        / "tasks"
++        / task.name
++    )
++    candidates = [
++        task_dir / "task.yaml",
++        task_dir / f"{task.name}.yaml",
++    ]
++    for scanned_dir in sorted(
++        project_dir.glob(
++            f"initiatives/*/milestones/*/tasks/{task.name}",
++        ),
++    ):
++        candidates.append(scanned_dir / "task.yaml")
++        candidates.append(scanned_dir / f"{task.name}.yaml")
++    for candidate in candidates:
++        if candidate.exists():
++            return candidate
++
++    logger.warning(
++        "Could not locate task.yaml for %s under %s.",
++        task.name,
++        project_dir,
++    )
++    return None
++
++
++def reset_task_to_queued(task: TaskEntry) -> bool:
+     """Reset a task's on-disk status to 'queued'.
+ 
+     Args:
+-        task_name: Task to reset.
+-        milestone: Milestone hint for direct path resolution.
++        task: Task entry to reset (resolved by project identity,
++            not cwd — see resolve_task_yaml_for_entry).
+ 
+     Returns:
+         True if the task YAML was found and updated.
+     """
+-    from dao_cli.core.project import resolve_task_yaml_path
+     from dao_cli.core.yaml_io import load_yaml, save_yaml
+ 
++    yaml_path = resolve_task_yaml_for_entry(task)
++    if yaml_path is None:
++        return False
+     try:
+-        yaml_path = resolve_task_yaml_path(
+-            task_name=task_name,
+-            milestone=milestone,
+-        )
+-        if not yaml_path.exists():
+-            return False
+         data = load_yaml(yaml_path)
+         data["status"] = "queued"
+         data.pop("failed_at", None)
+         save_yaml(path=yaml_path, data=data)
+         return True
+-    except Exception:
++    except Exception as e:
++        logger.warning(
++            "Failed to reset task %s to queued at %s: %s",
++            task.name,
++            yaml_path,
++            e,
++        )
+         return False
+ 
+ 
+-def mark_task_failed(
+-    task_name: str,
+-    milestone: str | None = None,
+-) -> bool:
++def mark_task_failed(task: TaskEntry) -> bool:
+     """Mark a task's on-disk status as 'failed', with a timestamp.
+ 
+     Mirrors foreman's own convention (foreman/core/engine.py,
+@@ -212,24 +325,20 @@ def mark_task_failed(
+     redispatched every cycle even after retries are exhausted.
+ 
+     Args:
+-        task_name: Task to mark.
+-        milestone: Milestone hint for direct path resolution.
++        task: Task entry to mark (resolved by project identity,
++            not cwd — see resolve_task_yaml_for_entry).
+ 
+     Returns:
+         True if the task YAML was found and updated.
+     """
+     from datetime import UTC, datetime
+ 
+-    from dao_cli.core.project import resolve_task_yaml_path
+     from dao_cli.core.yaml_io import load_yaml, save_yaml
+ 
++    yaml_path = resolve_task_yaml_for_entry(task)
++    if yaml_path is None:
++        return False
+     try:
+-        yaml_path = resolve_task_yaml_path(
+-            task_name=task_name,
+-            milestone=milestone,
+-        )
+-        if not yaml_path.exists():
+-            return False
+         data = load_yaml(yaml_path)
+         data["status"] = "failed"
+         data["failed_at"] = datetime.now(UTC).strftime(
+@@ -237,32 +346,44 @@ def mark_task_failed(
+         )
+         save_yaml(path=yaml_path, data=data)
+         return True
+-    except Exception:
++    except Exception as e:
++        logger.warning(
++            "Failed to mark task %s failed at %s: %s",
++            task.name,
++            yaml_path,
++            e,
++        )
+         return False
+ 
+ 
+ def read_task_status(
+-    task_name: str,
++    task: TaskEntry,
+ ) -> tuple[str, str] | None:
+     """Read (status, mode) for a task from its on-disk task.yaml.
+ 
+     Args:
+-        task_name: Task to read.
++        task: Task entry to read (resolved by project identity,
++            not cwd — see resolve_task_yaml_for_entry).
+ 
+     Returns:
+         (status, mode) tuple, or None if the task YAML can't be
+         resolved or read.
+     """
+-    from dao_cli.core.project import resolve_task_yaml_path
+     from dao_cli.core.yaml_io import load_yaml
+ 
++    yaml_path = resolve_task_yaml_for_entry(task)
++    if yaml_path is None:
++        return None
+     try:
+-        yaml_path = resolve_task_yaml_path(task_name=task_name)
+-        if not yaml_path.exists():
+-            return None
+         data = load_yaml(yaml_path)
+         return data.get("status", ""), data.get("mode", "")
+-    except Exception:
++    except Exception as e:
++        logger.warning(
++            "Failed to read task.yaml for %s at %s: %s",
++            task.name,
++            yaml_path,
++            e,
++        )
+         return None
+ 
+ 
+@@ -290,7 +411,7 @@ def recover_stale_tasks(
+         if is_foreman_running(t.name):
+             continue
+ 
+-        if reset_task_to_queued(t.name, milestone=t.milestone):
++        if reset_task_to_queued(t):
+             t.status = "queued"
+             recovered.append(t.name)
+             logger.info(
+diff --git a/tools/orch/marshal/tests/test_dispatch.py b/tools/orch/marshal/tests/test_dispatch.py
+index fdb5e03..aad5efb 100644
+--- a/tools/orch/marshal/tests/test_dispatch.py
++++ b/tools/orch/marshal/tests/test_dispatch.py
+@@ -18,9 +18,12 @@ from marshal_cli.core.dispatch import (
+     dispatch_to_foreman,
+     dispatch_to_foreman_async,
+     is_foreman_running,
++    mark_task_failed,
+     read_task_status,
++    recover_stale_tasks,
+     release_task_lock,
+     reset_task_to_queued,
++    resolve_task_yaml_for_entry,
+ )
+ from marshal_cli.core.models import Priority, TaskEntry
+ from marshal_cli.exceptions import DispatchError
+@@ -30,14 +33,16 @@ def _write_task_yaml(
+     project_dir: Path,
+     task_name: str,
+     data: dict,
++    initiative: str = "standalone",
++    milestone: str = "standalone",
+ ) -> Path:
+-    """Write a task.yaml under the standalone milestone layout."""
++    """Write a real task.yaml under the initiative/milestone layout."""
+     task_dir = (
+         project_dir
+         / "initiatives"
+-        / "standalone"
++        / initiative
+         / "milestones"
+-        / "standalone"
++        / milestone
+         / "tasks"
+         / task_name
+     )
+@@ -51,6 +56,11 @@ def _task(
+     name: str = "t",
+     status: str = "in_progress",
+     mode: str = "IMPLEMENTING",
++    owner: str | None = None,
++    repo: str | None = None,
++    project: str | None = None,
++    initiative: str | None = None,
++    milestone: str | None = None,
+ ) -> TaskEntry:
+     """Build a minimal TaskEntry for dispatch tests."""
+     return TaskEntry(
+@@ -61,9 +71,48 @@ def _task(
+         mode=mode,
+         status=status,
+         size="M",
++        owner=owner,
++        repo=repo,
++        project=project,
++        initiative=initiative,
++        milestone=milestone,
+     )
+ 
+ 
++def _identified_task_on_disk(
++    projects_base: Path,
++    name: str = "my-task",
++    status: str = "in_progress",
++    mode: str = "IMPLEMENTING",
++) -> tuple[TaskEntry, Path]:
++    """Real task.yaml + a TaskEntry carrying full project identity.
++
++    Layout mirrors production exactly:
++    <base>/<owner>/<repo>/<project>/initiatives/.../tasks/<name>/task.yaml
++    """
++    project_dir = (
++        projects_base / "daviguides" / "continuum" / "continuum"
++    )
++    yaml_path = _write_task_yaml(
++        project_dir,
++        name,
++        {"task": name, "status": status, "mode": mode},
++        initiative="demo-init",
++        milestone="m1",
++    )
++    entry = _task(
++        name,
++        status=status,
++        mode=mode,
++        owner="daviguides",
++        repo="continuum",
++        project="continuum",
++        initiative="demo-init",
++        milestone="m1",
++    )
++    return entry, yaml_path
++
++
+ class TestCountWip:
+     """count_wip() tests."""
+ 
+@@ -237,11 +286,70 @@ class TestDispatchToForemanAsync:
+             dispatch_to_foreman_async(task_name="x")
+ 
+ 
+-class TestResetTaskToQueued:
+-    """reset_task_to_queued() tests."""
++class TestResolveTaskYamlForEntry:
++    """resolve_task_yaml_for_entry() — the cwd-independence core.
++
++    THE daemon-mode bug: every name-keyed on-disk mutation funneled
++    through dao_cli's `resolve_task_yaml_path(name)` →
++    `find_project_dir(cwd)`, which raises from a non-repo cwd (the
++    daemon runs from $HOME under launchd) — and the exception was
++    silently swallowed, making the whole stale-recovery/death
++    subsystem a no-op. These tests run against REAL task.yaml files
++    with the cwd pinned to a directory that is NOT a project repo,
++    exactly like the daemon."""
++
++    def test_resolves_by_project_identity_from_non_repo_cwd(
++        self, tmp_path: Path, monkeypatch,
++    ) -> None:
++        base = tmp_path / "projects"
++        entry, yaml_path = _identified_task_on_disk(base)
++        monkeypatch.setattr(
++            "dao_cli.core.project.PROJECTS_BASE", base,
++        )
++        # The daemon's reality: cwd is nowhere near a source repo.
++        monkeypatch.chdir(tmp_path)
++
++        assert resolve_task_yaml_for_entry(entry) == yaml_path
++
++    def test_glob_fallback_when_milestone_field_mismatches_dir(
++        self, tmp_path: Path, monkeypatch,
++    ) -> None:
++        """A YAML-declared milestone can differ from the directory
++        name — the direct path misses, the glob must still find it."""
++        base = tmp_path / "projects"
++        entry, yaml_path = _identified_task_on_disk(base)
++        entry.milestone = "declared-elsewhere"
++        monkeypatch.setattr(
++            "dao_cli.core.project.PROJECTS_BASE", base,
++        )
++        monkeypatch.chdir(tmp_path)
++
++        assert resolve_task_yaml_for_entry(entry) == yaml_path
++
++    def test_missing_task_returns_none(
++        self, tmp_path: Path, monkeypatch,
++    ) -> None:
++        base = tmp_path / "projects"
++        _identified_task_on_disk(base)
++        monkeypatch.setattr(
++            "dao_cli.core.project.PROJECTS_BASE", base,
++        )
++        monkeypatch.chdir(tmp_path)
++
++        ghost = _task(
++            "no-such-task",
++            owner="daviguides",
++            repo="continuum",
++            project="continuum",
++        )
++        assert resolve_task_yaml_for_entry(ghost) is None
+ 
+-    def test_resets_status(self, tmp_path: Path) -> None:
+-        path = _write_task_yaml(
++    def test_no_identity_falls_back_to_cwd_detection(
++        self, tmp_path: Path,
++    ) -> None:
++        """Single-project scoped mode: entries carry no identity —
++        the dao_cli cwd path is still the right (and only) signal."""
++        yaml_path = _write_task_yaml(
+             tmp_path,
+             "my-task",
+             {"task": "my-task", "status": "in_progress"},
+@@ -250,56 +358,195 @@ class TestResetTaskToQueued:
+             "dao_cli.core.project.find_project_dir",
+             return_value=tmp_path,
+         ):
+-            assert reset_task_to_queued("my-task") is True
+-        assert yaml.safe_load(path.read_text())["status"] == "queued"
++            assert (
++                resolve_task_yaml_for_entry(_task("my-task"))
++                == yaml_path
++            )
+ 
+-    def test_missing_task_returns_false(
+-        self, tmp_path: Path,
++    def test_no_identity_unresolvable_cwd_returns_none(
++        self,
+     ) -> None:
+         with patch(
+             "dao_cli.core.project.find_project_dir",
+-            return_value=tmp_path,
++            side_effect=FileNotFoundError,
+         ):
+-            assert reset_task_to_queued("no-such-task") is False
++            assert (
++                resolve_task_yaml_for_entry(_task("my-task"))
++                is None
++            )
++
++
++class TestResetTaskToQueued:
++    """reset_task_to_queued() tests — real files, daemon-like cwd."""
++
++    def test_resets_status_from_non_repo_cwd(
++        self, tmp_path: Path, monkeypatch,
++    ) -> None:
++        base = tmp_path / "projects"
++        entry, yaml_path = _identified_task_on_disk(base)
++        monkeypatch.setattr(
++            "dao_cli.core.project.PROJECTS_BASE", base,
++        )
++        monkeypatch.chdir(tmp_path)
++
++        assert reset_task_to_queued(entry) is True
++        assert (
++            yaml.safe_load(yaml_path.read_text())["status"]
++            == "queued"
++        )
++
++    def test_clears_failed_at(
++        self, tmp_path: Path, monkeypatch,
++    ) -> None:
++        base = tmp_path / "projects"
++        entry, yaml_path = _identified_task_on_disk(base)
++        data = yaml.safe_load(yaml_path.read_text())
++        data["status"] = "failed"
++        data["failed_at"] = "2026-07-15T00:00:00Z"
++        yaml_path.write_text(yaml.safe_dump(data))
++        monkeypatch.setattr(
++            "dao_cli.core.project.PROJECTS_BASE", base,
++        )
++        monkeypatch.chdir(tmp_path)
++
++        assert reset_task_to_queued(entry) is True
++        result = yaml.safe_load(yaml_path.read_text())
++        assert result["status"] == "queued"
++        assert "failed_at" not in result
++
++    def test_missing_task_returns_false(
++        self, tmp_path: Path, monkeypatch,
++    ) -> None:
++        base = tmp_path / "projects"
++        _identified_task_on_disk(base)
++        monkeypatch.setattr(
++            "dao_cli.core.project.PROJECTS_BASE", base,
++        )
++        monkeypatch.chdir(tmp_path)
++
++        ghost = _task(
++            "no-such-task",
++            owner="daviguides",
++            repo="continuum",
++            project="continuum",
++        )
++        assert reset_task_to_queued(ghost) is False
+ 
+     def test_unresolvable_project_returns_false(self) -> None:
+         with patch(
+             "dao_cli.core.project.find_project_dir",
+             side_effect=FileNotFoundError,
+         ):
+-            assert reset_task_to_queued("my-task") is False
++            assert reset_task_to_queued(_task("my-task")) is False
++
++
++class TestMarkTaskFailed:
++    """mark_task_failed() tests — real files, daemon-like cwd."""
++
++    def test_marks_failed_with_timestamp_from_non_repo_cwd(
++        self, tmp_path: Path, monkeypatch,
++    ) -> None:
++        base = tmp_path / "projects"
++        entry, yaml_path = _identified_task_on_disk(base)
++        monkeypatch.setattr(
++            "dao_cli.core.project.PROJECTS_BASE", base,
++        )
++        monkeypatch.chdir(tmp_path)
++
++        assert mark_task_failed(entry) is True
++        data = yaml.safe_load(yaml_path.read_text())
++        assert data["status"] == "failed"
++        assert data["failed_at"]
++
++    def test_missing_task_returns_false(
++        self, tmp_path: Path, monkeypatch,
++    ) -> None:
++        base = tmp_path / "projects"
++        _identified_task_on_disk(base)
++        monkeypatch.setattr(
++            "dao_cli.core.project.PROJECTS_BASE", base,
++        )
++        monkeypatch.chdir(tmp_path)
++
++        ghost = _task(
++            "no-such-task",
++            owner="daviguides",
++            repo="continuum",
++            project="continuum",
++        )
++        assert mark_task_failed(ghost) is False
+ 
+ 
+ class TestReadTaskStatus:
+-    """read_task_status() tests."""
++    """read_task_status() tests — real files, daemon-like cwd."""
+ 
+-    def test_reads_status_and_mode(self, tmp_path: Path) -> None:
+-        _write_task_yaml(
+-            tmp_path,
+-            "my-task",
+-            {
+-                "task": "my-task",
+-                "status": "in_progress",
+-                "mode": "IMPLEMENTING",
+-            },
++    def test_reads_status_and_mode_from_non_repo_cwd(
++        self, tmp_path: Path, monkeypatch,
++    ) -> None:
++        base = tmp_path / "projects"
++        entry, _ = _identified_task_on_disk(
++            base, status="in_progress", mode="IMPLEMENTING",
++        )
++        monkeypatch.setattr(
++            "dao_cli.core.project.PROJECTS_BASE", base,
++        )
++        monkeypatch.chdir(tmp_path)
++
++        assert read_task_status(entry) == (
++            "in_progress",
++            "IMPLEMENTING",
+         )
+-        with patch(
+-            "dao_cli.core.project.find_project_dir",
+-            return_value=tmp_path,
+-        ):
+-            assert read_task_status("my-task") == (
+-                "in_progress",
+-                "IMPLEMENTING",
+-            )
+ 
+     def test_missing_task_returns_none(
+-        self, tmp_path: Path,
++        self, tmp_path: Path, monkeypatch,
+     ) -> None:
+-        with patch(
+-            "dao_cli.core.project.find_project_dir",
+-            return_value=tmp_path,
+-        ):
+-            assert read_task_status("no-such-task") is None
++        base = tmp_path / "projects"
++        _identified_task_on_disk(base)
++        monkeypatch.setattr(
++            "dao_cli.core.project.PROJECTS_BASE", base,
++        )
++        monkeypatch.chdir(tmp_path)
++
++        ghost = _task(
++            "no-such-task",
++            owner="daviguides",
++            repo="continuum",
++            project="continuum",
++        )
++        assert read_task_status(ghost) is None
++
++
++class TestRecoverStaleTasksFromDaemonCwd:
++    """recover_stale_tasks() end-to-end with real files and a
++    non-repo cwd — the exact live failure: zero 'Recovered stale'
++    lines across the daemon's entire 37k-line log because every
++    reset attempt silently raised out of find_project_dir($HOME)."""
++
++    def test_recovers_dead_in_progress_task(
++        self, tmp_path: Path, monkeypatch,
++    ) -> None:
++        base = tmp_path / "projects"
++        entry, yaml_path = _identified_task_on_disk(
++            base,
++            name="pytest-marker-stale-recovery",
++            status="in_progress",
++            mode="IMPLEMENTING",
++        )
++        monkeypatch.setattr(
++            "dao_cli.core.project.PROJECTS_BASE", base,
++        )
++        monkeypatch.chdir(tmp_path)
++
++        # is_foreman_running is the REAL pgrep — no such process
++        # exists, so the task is genuinely stale.
++        recovered = recover_stale_tasks([entry])
++
++        assert recovered == ["pytest-marker-stale-recovery"]
++        assert entry.status == "queued"
++        assert (
++            yaml.safe_load(yaml_path.read_text())["status"]
++            == "queued"
++        )
+ 
+ 
+ class TestResolveDispatchCwd:
+diff --git a/tools/orch/marshal/tests/test_marshal_watching.py b/tools/orch/marshal/tests/test_marshal_watching.py
+index 1bcf646..b3048ab 100644
+--- a/tools/orch/marshal/tests/test_marshal_watching.py
++++ b/tools/orch/marshal/tests/test_marshal_watching.py
+@@ -8,7 +8,6 @@ from pathlib import Path
+ from unittest.mock import patch
+ 
+ import yaml
+-from dao_cli.core.registry import RegistryEntry
+ from typer.testing import CliRunner
+ 
+ from marshal_cli.cli import app
+@@ -209,7 +208,8 @@ class TestRunAutoPeriodicStaleScan:
+ 
+         assert result.exit_code == 0
+         mock_async_dispatch.assert_not_called()
+-        mock_reset.assert_called_once_with("dead-task")
++        mock_reset.assert_called_once()
++        assert mock_reset.call_args[0][0].name == "dead-task"
+         assert "restarting" in result.output
+ 
+     @patch("marshal_cli.commands.run.reset_task_to_queued")
+diff --git a/tools/orch/marshal/tests/test_run_command.py b/tools/orch/marshal/tests/test_run_command.py
+index 871b2b7..0ba8f92 100644
+--- a/tools/orch/marshal/tests/test_run_command.py
++++ b/tools/orch/marshal/tests/test_run_command.py
+@@ -387,14 +387,14 @@ class TestHandlePossibleDeath:
+         self, mock_status,
+     ) -> None:
+         mock_status.return_value = None
+-        assert _handle_possible_death("t", {}) is False
++        assert _handle_possible_death(_task("t"), {}) is False
+ 
+     @patch("marshal_cli.commands.run.read_task_status")
+     def test_done_status_is_not_a_death(
+         self, mock_status,
+     ) -> None:
+         mock_status.return_value = ("done", "FINALIZING")
+-        assert _handle_possible_death("t", {}) is False
++        assert _handle_possible_death(_task("t"), {}) is False
+ 
+     @patch("marshal_cli.commands.run.read_task_status")
+     def test_finalizing_in_progress_is_not_a_death(
+@@ -402,7 +402,7 @@ class TestHandlePossibleDeath:
+     ) -> None:
+         """foreman reached its own wrap-up phase — not a crash."""
+         mock_status.return_value = ("in_progress", "FINALIZING")
+-        assert _handle_possible_death("t", {}) is False
++        assert _handle_possible_death(_task("t"), {}) is False
+ 
+     @patch("marshal_cli.commands.run.reset_task_to_queued")
+     @patch("marshal_cli.commands.run.read_task_status")
+@@ -411,9 +411,10 @@ class TestHandlePossibleDeath:
+     ) -> None:
+         mock_status.return_value = ("in_progress", "IMPLEMENTING")
+         retries: dict[str, int] = {}
++        task = _task("t")
+ 
+-        assert _handle_possible_death("t", retries) is True
+-        mock_reset.assert_called_once_with("t")
++        assert _handle_possible_death(task, retries) is True
++        mock_reset.assert_called_once_with(task)
+         assert retries["t"] == 1
+ 
+     @patch("marshal_cli.commands.run.reset_task_to_queued")
+@@ -424,7 +425,7 @@ class TestHandlePossibleDeath:
+         mock_status.return_value = ("in_progress", "IMPLEMENTING")
+         retries = {"t": MAX_DEATH_RETRIES}
+ 
+-        assert _handle_possible_death("t", retries) is True
++        assert _handle_possible_death(_task("t"), retries) is True
+         mock_reset.assert_not_called()
+         assert retries["t"] == MAX_DEATH_RETRIES
+ 
+@@ -440,9 +441,10 @@ class TestHandlePossibleDeath:
+         not the caller has an exit code to check."""
+         mock_status.return_value = ("failed", "EXPLORING")
+         retries: dict[str, int] = {}
++        task = _task("t")
+ 
+-        assert _handle_possible_death("t", retries) is True
+-        mock_reset.assert_called_once_with("t")
++        assert _handle_possible_death(task, retries) is True
++        mock_reset.assert_called_once_with(task)
+         assert retries["t"] == 1
+ 
+     @patch("marshal_cli.commands.run.reset_task_to_queued")
+@@ -453,7 +455,7 @@ class TestHandlePossibleDeath:
+         mock_status.return_value = ("failed", "EXPLORING")
+         retries = {"t": MAX_DEATH_RETRIES}
+ 
+-        assert _handle_possible_death("t", retries) is True
++        assert _handle_possible_death(_task("t"), retries) is True
+         mock_reset.assert_not_called()
+         assert retries["t"] == MAX_DEATH_RETRIES
+ 
+@@ -467,7 +469,7 @@ class TestHandlePossibleDeath:
+         mock_status.return_value = ("in_progress", "FINALIZING")
+ 
+         assert _handle_possible_death(
+-            "t", {}, exit_code=0,
++            _task("t"), {}, exit_code=0,
+         ) is False
+         mock_reset.assert_not_called()
+ 
+@@ -483,11 +485,12 @@ class TestHandlePossibleDeath:
+         redispatch loop."""
+         mock_status.return_value = ("in_progress", "FINALIZING")
+         retries: dict[str, int] = {}
++        task = _task("t")
+ 
+         assert _handle_possible_death(
+-            "t", retries, exit_code=1,
++            task, retries, exit_code=1,
+         ) is True
+-        mock_reset.assert_called_once_with("t")
++        mock_reset.assert_called_once_with(task)
+         assert retries["t"] == 1
+ 
+     @patch("marshal_cli.commands.run.mark_task_failed")
+@@ -503,12 +506,13 @@ class TestHandlePossibleDeath:
+         this whole fix targets)."""
+         mock_status.return_value = ("in_progress", "FINALIZING")
+         retries = {"t": MAX_DEATH_RETRIES}
++        task = _task("t")
+ 
+         assert _handle_possible_death(
+-            "t", retries, exit_code=1,
++            task, retries, exit_code=1,
+         ) is True
+         mock_reset.assert_not_called()
+-        mock_mark_failed.assert_called_once_with("t")
++        mock_mark_failed.assert_called_once_with(task)
+ 
+     @patch("marshal_cli.commands.run.mark_task_failed")
+     @patch("marshal_cli.commands.run.reset_task_to_queued")
+@@ -522,7 +526,7 @@ class TestHandlePossibleDeath:
+         mock_status.return_value = ("in_progress", "IMPLEMENTING")
+         retries = {"t": MAX_DEATH_RETRIES}
+ 
+-        assert _handle_possible_death("t", retries) is True
++        assert _handle_possible_death(_task("t"), retries) is True
+         mock_mark_failed.assert_not_called()
+ 
+ 
+@@ -543,11 +547,12 @@ class TestCollectFinishedFinalizing:
+         proc.returncode = 1
+         running = {"t": proc}
+         retries: dict[str, int] = {}
++        task = _task("t")
+ 
+-        _collect_finished(running, {}, retries)
++        _collect_finished(running, {}, retries, {"t": task})
+ 
+         assert retries["t"] == 1
+-        mock_reset.assert_called_once_with("t")
++        mock_reset.assert_called_once_with(task)
+         assert "t" not in running
+ 
+ 
+@@ -726,7 +731,8 @@ class TestRunAutoDeathRestart:
+ 
+         result = runner.invoke(app, ["run", "--no-tui"])
+         assert result.exit_code == 0
+-        mock_reset.assert_called_once_with("a")
++        mock_reset.assert_called_once()
++        assert mock_reset.call_args[0][0].name == "a"
+         assert "Completed" not in result.output
+         assert "restarting" in result.output
+ 

@@ -1,0 +1,271 @@
+diff --git a/tools/context/fireweave/fireweave/agents/action_extractor/agent.py b/tools/context/fireweave/fireweave/agents/action_extractor/agent.py
+index 98f1b24..74deacb 100644
+--- a/tools/context/fireweave/fireweave/agents/action_extractor/agent.py
++++ b/tools/context/fireweave/fireweave/agents/action_extractor/agent.py
+@@ -27,6 +27,21 @@ _SETTINGS_PATH = str(
+     Path.home() / "work/sources/continuum/tools/data/headless-claude-settings.json"
+ )
+ 
++_MODEL_PINS_PATH = (
++    Path.home() / "work/sources/continuum/tools/data/model_pins.json"
++)
++
++
++def _pin_model(model: str | None = None) -> str:
++    """Resolve short model name to pinned model ID."""
++    try:
++        pins = json.loads(_MODEL_PINS_PATH.read_text())
++    except (FileNotFoundError, json.JSONDecodeError):
++        return model or "sonnet"
++    if model is None:
++        return pins.get("default", "sonnet")
++    return pins.get(model, model)
++
+ 
+ class ActionExtractionAgent:
+     """Low-level Claude SDK communication for action extraction."""
+@@ -36,6 +51,7 @@ class ActionExtractionAgent:
+ 
+         options = ClaudeAgentOptions(
+             settings=_SETTINGS_PATH,
++            model=_pin_model(),
+             allowed_tools=settings.claude_options.allowed_tools,
+             permission_mode=settings.claude_options.permission_mode,
+             include_partial_messages=settings.claude_options.include_partial_messages,
+diff --git a/tools/context/slackweave/slackweave/agents/topic_extractor/agent.py b/tools/context/slackweave/slackweave/agents/topic_extractor/agent.py
+index 0c50c6b..6b2aa7e 100644
+--- a/tools/context/slackweave/slackweave/agents/topic_extractor/agent.py
++++ b/tools/context/slackweave/slackweave/agents/topic_extractor/agent.py
+@@ -4,6 +4,7 @@ Handles low-level communication with Claude SDK.
+ Pattern: Separation of SDK communication from business logic.
+ """
+ 
++import json
+ import subprocess
+ from pathlib import Path
+ 
+@@ -23,6 +24,21 @@ _SETTINGS_PATH = str(
+     Path.home() / "work/sources/continuum/tools/data/headless-claude-settings.json"
+ )
+ 
++_MODEL_PINS_PATH = (
++    Path.home() / "work/sources/continuum/tools/data/model_pins.json"
++)
++
++
++def _pin_model(model: str | None = None) -> str:
++    """Resolve short model name to pinned model ID."""
++    try:
++        pins = json.loads(_MODEL_PINS_PATH.read_text())
++    except (FileNotFoundError, json.JSONDecodeError):
++        return model or "sonnet"
++    if model is None:
++        return pins.get("default", "sonnet")
++    return pins.get(model, model)
++
+ 
+ class TopicExtractionAgent:
+     """Base agent for Claude SDK communication.
+@@ -44,6 +60,7 @@ class TopicExtractionAgent:
+ 
+         options = ClaudeAgentOptions(
+             settings=_SETTINGS_PATH,
++            model=_pin_model(),
+             allowed_tools=settings.claude_options.allowed_tools,
+             permission_mode=settings.claude_options.permission_mode,
+             include_partial_messages=settings.claude_options.include_partial_messages,
+diff --git a/tools/context/zen-review/zen_review/agents/base_reviewer.py b/tools/context/zen-review/zen_review/agents/base_reviewer.py
+index 56b0a1a..ee288e4 100644
+--- a/tools/context/zen-review/zen_review/agents/base_reviewer.py
++++ b/tools/context/zen-review/zen_review/agents/base_reviewer.py
+@@ -81,6 +81,21 @@ _SETTINGS_PATH = str(
+     Path.home() / "work/sources/continuum/tools/data/headless-claude-settings.json"
+ )
+ 
++_MODEL_PINS_PATH = (
++    Path.home() / "work/sources/continuum/tools/data/model_pins.json"
++)
++
++
++def _pin_model(model: str | None = None) -> str:
++    """Resolve short model name to pinned model ID."""
++    try:
++        pins = json.loads(_MODEL_PINS_PATH.read_text())
++    except (FileNotFoundError, json.JSONDecodeError):
++        return model or "sonnet"
++    if model is None:
++        return pins.get("default", "sonnet")
++    return pins.get(model, model)
++
+ 
+ class BaseReviewer(ABC):
+     """Base class for all code reviewers using Agent SDK.
+@@ -156,6 +171,7 @@ class BaseReviewer(ABC):
+         # Configure Claude Agent SDK options from settings
+         options = ClaudeAgentOptions(
+             settings=_SETTINGS_PATH,
++            model=_pin_model(),
+             allowed_tools=settings.claude_options.allowed_tools,
+             permission_mode=settings.claude_options.permission_mode,
+             include_partial_messages=settings.claude_options.include_partial_messages,
+diff --git a/tools/context/zen-review/zen_review/agents/summary_generator.py b/tools/context/zen-review/zen_review/agents/summary_generator.py
+index 3a1ce68..2c43c11 100644
+--- a/tools/context/zen-review/zen_review/agents/summary_generator.py
++++ b/tools/context/zen-review/zen_review/agents/summary_generator.py
+@@ -63,6 +63,21 @@ _SETTINGS_PATH = str(
+     Path.home() / "work/sources/continuum/tools/data/headless-claude-settings.json"
+ )
+ 
++_MODEL_PINS_PATH = (
++    Path.home() / "work/sources/continuum/tools/data/model_pins.json"
++)
++
++
++def _pin_model(model: str | None = None) -> str:
++    """Resolve short model name to pinned model ID."""
++    try:
++        pins = json.loads(_MODEL_PINS_PATH.read_text())
++    except (FileNotFoundError, json.JSONDecodeError):
++        return model or "sonnet"
++    if model is None:
++        return pins.get("default", "sonnet")
++    return pins.get(model, model)
++
+ 
+ class SummaryGenerator:
+     """Generate executive summaries from review issues using Claude.
+@@ -112,6 +127,7 @@ class SummaryGenerator:
+         # Configure Claude Agent SDK for summary generation
+         options = ClaudeAgentOptions(
+             settings=_SETTINGS_PATH,
++            model=_pin_model(),
+             allowed_tools=[],  # Summary generator doesn't need tools
+             permission_mode=settings.claude_options.permission_mode,
+             include_partial_messages=settings.claude_options.include_partial_messages,
+diff --git a/tools/data/model_pins.json b/tools/data/model_pins.json
+index a8962d8..33e0a52 100644
+--- a/tools/data/model_pins.json
++++ b/tools/data/model_pins.json
+@@ -1,4 +1,5 @@
+ {
++  "default": "claude-sonnet-4-6",
+   "opus": "claude-opus-4-6",
+   "sonnet": "claude-sonnet-4-6",
+   "haiku": "claude-haiku-4-5-20251001"
+diff --git a/tools/observe/gauge/gauge/core/sdk_wrapper.py b/tools/observe/gauge/gauge/core/sdk_wrapper.py
+index 29ec69c..37a4e83 100644
+--- a/tools/observe/gauge/gauge/core/sdk_wrapper.py
++++ b/tools/observe/gauge/gauge/core/sdk_wrapper.py
+@@ -49,15 +49,18 @@ _MODEL_PINS_PATH = (
+ )
+ 
+ 
+-def _pin_model(model: str | None) -> str | None:
+-    """Resolve short model name to pinned model ID."""
+-    if model is None:
+-        return None
++def _pin_model(model: str | None) -> str:
++    """Resolve short model name to pinned model ID.
++
++    Falls back to 'default' pin when model is None.
++    """
+     try:
+         pins = json.loads(_MODEL_PINS_PATH.read_text())
+-        return pins.get(model, model)
+     except (FileNotFoundError, json.JSONDecodeError):
+-        return model
++        return model or "sonnet"
++    if model is None:
++        return pins.get("default", "sonnet")
++    return pins.get(model, model)
+ 
+ 
+ def check_claude_cli() -> None:
+@@ -102,8 +105,7 @@ class GaugeSDKWrapper:
+             system_prompt=system_prompt,
+             max_turns=max_turns,
+         )
+-        if model is not None:
+-            options.model = _pin_model(model)
++        options.model = _pin_model(model)
+ 
+         self._client = ClaudeSDKClient(options=options)
+ 
+diff --git a/tools/orch/foreman/foreman/core/sdk_wrapper.py b/tools/orch/foreman/foreman/core/sdk_wrapper.py
+index c498188..9edd2db 100644
+--- a/tools/orch/foreman/foreman/core/sdk_wrapper.py
++++ b/tools/orch/foreman/foreman/core/sdk_wrapper.py
+@@ -34,15 +34,18 @@ _MODEL_PINS_PATH = (
+ )
+ 
+ 
+-def _pin_model(model: str | None) -> str | None:
+-    """Resolve short model name to pinned model ID."""
+-    if model is None:
+-        return None
++def _pin_model(model: str | None) -> str:
++    """Resolve short model name to pinned model ID.
++
++    Falls back to 'default' pin when model is None.
++    """
+     try:
+         pins = json.loads(_MODEL_PINS_PATH.read_text())
+-        return pins.get(model, model)
+     except (FileNotFoundError, json.JSONDecodeError):
+-        return model
++        return model or "sonnet"
++    if model is None:
++        return pins.get("default", "sonnet")
++    return pins.get(model, model)
+ 
+ 
+ def _resolve_settings() -> str:
+@@ -356,8 +359,7 @@ class SDKWrapper:
+         )
+         if max_turns is not None:
+             options.max_turns = max_turns
+-        if model is not None:
+-            options.model = _pin_model(model)
++        options.model = _pin_model(model)
+ 
+         self._client = ClaudeSDKClient(options=options)
+         self._connected = False
+diff --git a/tools/orch/refiner/refiner/core/sdk_wrapper.py b/tools/orch/refiner/refiner/core/sdk_wrapper.py
+index e7a43da..ae3c5b0 100644
+--- a/tools/orch/refiner/refiner/core/sdk_wrapper.py
++++ b/tools/orch/refiner/refiner/core/sdk_wrapper.py
+@@ -93,15 +93,18 @@ _MODEL_PINS_PATH = (
+ )
+ 
+ 
+-def _pin_model(model: str | None) -> str | None:
+-    """Resolve short model name to pinned model ID."""
+-    if model is None:
+-        return None
++def _pin_model(model: str | None) -> str:
++    """Resolve short model name to pinned model ID.
++
++    Falls back to 'default' pin when model is None.
++    """
+     try:
+         pins = json.loads(_MODEL_PINS_PATH.read_text())
+-        return pins.get(model, model)
+     except (FileNotFoundError, json.JSONDecodeError):
+-        return model
++        return model or "sonnet"
++    if model is None:
++        return pins.get("default", "sonnet")
++    return pins.get(model, model)
+ 
+ 
+ def _tool_detail(name: str, inp: dict) -> str:
+@@ -209,8 +212,7 @@ class SDKWrapper:
+             options.add_dirs = [str(d) for d in add_dirs]
+         if max_turns is not None:
+             options.max_turns = max_turns
+-        if model is not None:
+-            options.model = _pin_model(model)
++        options.model = _pin_model(model)
+         if resume_session_id is not None:
+             options.resume = resume_session_id
+ 

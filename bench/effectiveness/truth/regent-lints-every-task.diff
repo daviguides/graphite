@@ -1,0 +1,450 @@
+diff --git a/tools/orch/regent/regent/core/lint_context.py b/tools/orch/regent/regent/core/lint_context.py
+index 3fd5c6b..bba3af3 100644
+--- a/tools/orch/regent/regent/core/lint_context.py
++++ b/tools/orch/regent/regent/core/lint_context.py
+@@ -37,7 +37,7 @@ from refiner.core.decisions import list_decisions
+ from refiner.core.findings import list_findings
+ from refiner.core.state import load_session, session_dir
+ 
+-from regent.core.lints import LintContext
++from regent.core.lints import LintContext, TaskTarget
+ from regent.core.reconcile import DriftStatus
+ 
+ #: A brief body read for term-overlap, not for display. Guards against a
+@@ -168,8 +168,8 @@ def brief_paths_by_type(
+     return out
+ 
+ 
+-def task_yamls(project_dir: Path, item_id: str) -> list[tuple[str, dict]]:
+-    """Every task.yaml the run set up, in manifest order.
++def task_targets(project_dir: Path, item_id: str) -> list[TaskTarget]:
++    """Every task the run set up, in manifest order.
+ 
+     `task.yaml` sits beside the `brief.md` the manifest names, so the
+     briefs are the index: a task the refinery wrote a brief for is a
+@@ -178,27 +178,41 @@ def task_yamls(project_dir: Path, item_id: str) -> list[tuple[str, dict]]:
+     instrument writes it at setup, so its absence means the run stopped
+     before that, which the ledger already says louder.
+ 
++    Returning fewer tasks than the run has is the failure worth
++    guarding: the lints that read this list report nothing when it is
++    empty, and nothing is exactly what a clean run looks like. That is
++    why run_all_lints treats an empty list as a skip rather than as a
++    pass — a resolver that quietly finds none would otherwise certify
++    work it never opened.
++
+     Args:
+         project_dir: Project directory.
+         item_id: The signal being refined.
+ 
+     Returns:
+-        (task name, loaded task.yaml) pairs.
++        One TaskTarget per task brief with a task.yaml beside it.
+     """
+-    out: list[tuple[str, dict]] = []
++    out: list[TaskTarget] = []
+     for entry in briefs_manifest(project_dir, item_id):
+         if entry.get("type") != "task":
+             continue
+         brief_path = _entry_path(entry, project_dir)
+         if brief_path is None:
+             continue
+-        path = brief_path.parent / "task.yaml"
++        task_dir = brief_path.parent
++        path = task_dir / "task.yaml"
+         if not path.is_file():
+             continue
+         data = load_yaml(path=path)
+         if isinstance(data, dict):
+-            name = str(entry.get("name") or brief_path.parent.name)
+-            out.append((name, data))
++            out.append(
++                TaskTarget(
++                    name=str(entry.get("name") or task_dir.name),
++                    task_dir=task_dir,
++                    task_yaml=data,
++                    brief_path=brief_path,
++                )
++            )
+     return out
+ 
+ 
+@@ -263,7 +277,7 @@ def build_lint_context(
+             project_dir, item_id, "milestone"
+         ),
+         source_drift=source_drift,
+-        task_yamls=task_yamls(project_dir, item_id),
++        tasks=task_targets(project_dir, item_id),
+     )
+ 
+ 
+@@ -273,5 +287,5 @@ __all__ = [
+     "briefs_text",
+     "build_lint_context",
+     "demand_signal_raw",
+-    "task_yamls",
++    "task_targets",
+ ]
+diff --git a/tools/orch/regent/regent/core/lints.py b/tools/orch/regent/regent/core/lints.py
+index c7727c2..8cbc46c 100644
+--- a/tools/orch/regent/regent/core/lints.py
++++ b/tools/orch/regent/regent/core/lints.py
+@@ -93,6 +93,23 @@ class LintFinding:
+     suggestion: str = ""
+ 
+ 
++@dataclass
++class TaskTarget:
++    """One task a run set up, with everything a per-task lint reads.
++
++    One structure rather than one list per check: `delivery_verdict`
++    wants the task.yaml, `slug_consistency` wants the directory, the
++    yaml AND the brief, and they are asking about the same set of
++    tasks. Two parallel lists of "the run's tasks" in one context is
++    how two readings of one thing start disagreeing.
++    """
++
++    name: str
++    task_dir: Path
++    task_yaml: dict
++    brief_path: Path
++
++
+ @dataclass
+ class LintContext:
+     """Bundles the optional paths/data a lint run needs.
+@@ -114,12 +131,15 @@ class LintContext:
+     initiative_brief_path: Path | None = None
+     milestone_brief_paths: list[Path] = field(default_factory=list)
+     source_drift: DriftStatus | None = None
+-    #: (task name, loaded task.yaml) for every task the run set up.
+-    #: A list, unlike the four per-task fields above, because the
+-    #: question it answers is about the run's whole scoreboard —
+-    #: checking one task would report a total computed over a sixth of
+-    #: the work.
+-    task_yamls: list[tuple[str, dict]] | None = None
++    #: Every task the run is answerable for, in manifest order. A list,
++    #: unlike the three single-task fields above, because the questions
++    #: it answers are about the run's whole scoreboard — checking one
++    #: task reports a result computed over a sixth of the work.
++    #:
++    #: None means the tasks could not be resolved at all, which is not
++    #: the same as an empty list, and neither is the same as "no
++    #: problems". run_all_lints keeps those three apart.
++    tasks: list[TaskTarget] | None = None
+ 
+ 
+ def check_finding_refs(
+@@ -493,7 +513,7 @@ def check_slug_consistency(
+ 
+ 
+ def check_delivery_verdict(
+-    tasks: list[tuple[str, dict]],
++    tasks: list[TaskTarget],
+ ) -> list[LintFinding]:
+     """Hold each task's published status against its own verdict.
+ 
+@@ -520,13 +540,14 @@ def check_delivery_verdict(
+     cases where the disk already disagrees with itself.
+ 
+     Args:
+-        tasks: (task name, loaded task.yaml) for every task in the run.
++        tasks: Every task the run set up.
+ 
+     Returns:
+         One LintFinding per task whose status outruns its evidence.
+     """
+     results: list[LintFinding] = []
+-    for name, data in tasks:
++    for task in tasks:
++        name, data = task.name, task.task_yaml
+         status = str(data.get("status") or "").strip().lower()
+         if status != "done":
+             continue
+@@ -682,7 +703,16 @@ def run_all_lints(ctx: LintContext) -> list[LintFinding]:
+     if ctx.brief_path:
+         results.extend(check_key_files(ctx.brief_path))
+     else:
+-        _skip("key_files", "brief_path")
++        # NOT for want of a brief any more — ctx.tasks carries one per
++        # task. It stays out because the question it asks has no stable
++        # answer at run close: it tests whether a declared path exists
++        # in the operator's working copy, and by now the task's worktree
++        # is gone and that copy is whatever it happens to be. Run over
++        # the link-health signal, which delivered all six tasks and
++        # merged them, it reported four files missing — they were in
++        # main, and the checkout was eight commits behind. Wiring it
++        # here would spend that credibility on every clean run.
++        _skip("key_files", "a stable answer at run close (see run_all_lints)")
+ 
+     if ctx.initiative_brief_path:
+         results.extend(
+@@ -694,17 +724,28 @@ def run_all_lints(ctx: LintContext) -> list[LintFinding]:
+     else:
+         _skip("base_branch", "initiative_brief_path")
+ 
+-    if ctx.task_yamls is not None:
+-        results.extend(check_delivery_verdict(ctx.task_yamls))
++    # The per-task lints, over every task rather than an arbitrary one.
++    #
++    # Three states, kept apart on purpose. None means the tasks could
++    # not be resolved, and the skip says so. An EMPTY list means they
++    # resolved to nothing — which is not a clean bill of health, and
++    # would be the most expensive way to be wrong here: silence that
++    # reads as "checked every task" over a set the resolver never
++    # found. Only a non-empty list lets silence mean verified.
++    if ctx.tasks is None:
++        _skip("delivery_verdict", "tasks")
++        _skip("slug_consistency", "tasks")
++    elif not ctx.tasks:
++        _skip("delivery_verdict", "tasks (the manifest named none)")
++        _skip("slug_consistency", "tasks (the manifest named none)")
+     else:
+-        _skip("delivery_verdict", "task_yamls")
+-
+-    if ctx.task_dir and ctx.task_yaml and ctx.brief_path:
+-        results.extend(
+-            check_slug_consistency(ctx.task_dir, ctx.task_yaml, ctx.brief_path)
+-        )
+-    else:
+-        _skip("slug_consistency", "task_dir/task_yaml/brief_path")
++        results.extend(check_delivery_verdict(ctx.tasks))
++        for task in ctx.tasks:
++            results.extend(
++                check_slug_consistency(
++                    task.task_dir, task.task_yaml, task.brief_path
++                )
++            )
+ 
+     # Drift is opt-in per signal: only file-backed context_doc items
+     # pin a source_ref. A None status means "not applicable" (the norm
+diff --git a/tools/orch/regent/tests/test_lint_context.py b/tools/orch/regent/tests/test_lint_context.py
+index a0cfa3c..37f7e7d 100644
+--- a/tools/orch/regent/tests/test_lint_context.py
++++ b/tools/orch/regent/tests/test_lint_context.py
+@@ -18,7 +18,7 @@ from regent.core.lint_context import (
+     briefs_text,
+     build_lint_context,
+     demand_signal_raw,
+-    task_yamls,
++    task_targets,
+ )
+ from regent.core.lints import run_all_lints
+ from regent.core.reconcile import DriftStatus
+@@ -178,9 +178,13 @@ class TestTaskYamls:
+             [{"type": "task", "name": "t1", "path": str(brief)}],
+         )
+ 
+-        got = task_yamls(tmp_path, SESSION)
++        got = task_targets(tmp_path, SESSION)
+ 
+-        assert got == [("t1", {"task": "t1", "status": "done"})]
++        assert len(got) == 1
++        assert got[0].name == "t1"
++        assert got[0].task_yaml == {"task": "t1", "status": "done"}
++        assert got[0].task_dir == brief.parent
++        assert got[0].brief_path == brief
+ 
+     def test_only_task_briefs_are_followed(self, tmp_path) -> None:
+         _make_session(tmp_path)
+@@ -191,7 +195,7 @@ class TestTaskYamls:
+             [{"type": "initiative", "name": "c", "path": str(init)}],
+         )
+ 
+-        assert task_yamls(tmp_path, SESSION) == []
++        assert task_targets(tmp_path, SESSION) == []
+ 
+     def test_a_task_never_set_up_is_skipped_not_reported(
+         self, tmp_path
+@@ -205,7 +209,7 @@ class TestTaskYamls:
+             [{"type": "task", "name": "t1", "path": str(brief)}],
+         )
+ 
+-        assert task_yamls(tmp_path, SESSION) == []
++        assert task_targets(tmp_path, SESSION) == []
+ 
+ 
+ class TestBuildLintContext:
+@@ -317,8 +321,57 @@ class TestLintsActuallyRun:
+         assert "finding_ref" not in skipped
+         assert "signal_brief_coverage" not in skipped
+         assert "base_branch" not in skipped
+-        # The two per-task lints stay skipped by design.
+-        assert skipped == {"key_files", "slug_consistency"}
++        # This manifest names no task brief, so the per-task lints have
++        # nothing to read and say so. key_files stays out for its own
++        # reason — see run_all_lints.
++        assert skipped == {
++            "key_files",
++            "slug_consistency",
++            "delivery_verdict",
++        }
++
++    def test_a_run_with_tasks_runs_the_per_task_lints(self, tmp_path) -> None:
++        """With task briefs on disk, the per-task lints stop skipping."""
++        _make_session(tmp_path)
++        brief = _brief(
++            tmp_path, "initiatives/c/m/ms1/tasks/t1/brief.md", "**Slug**: t1"
++        )
++        save_yaml(path=brief.parent / "task.yaml", data={"task": "t1"})
++        _write_briefs(
++            tmp_path, [{"type": "task", "name": "t1", "path": str(brief)}]
++        )
++
++        skipped = self._skipped_ids(build_lint_context(tmp_path, SESSION))
++
++        assert "slug_consistency" not in skipped
++        assert "delivery_verdict" not in skipped
++
++    def test_zero_resolved_tasks_never_reads_as_verified(
++        self, tmp_path
++    ) -> None:
++        """The expensive way to be wrong here is silence.
++
++        Once the per-task lints fan out, no finding means "every task
++        checked, all clean". If the resolver returns an empty list —
++        a manifest that named no tasks, a path that stopped
++        resolving — the checks produce nothing, and nothing is exactly
++        what a clean run looks like. So an empty list is a skip, and
++        the skip says which.
++        """
++        _make_session(tmp_path)
++        _write_briefs(tmp_path, [])
++
++        ctx = build_lint_context(tmp_path, SESSION)
++        findings = run_all_lints(ctx)
++
++        assert ctx.tasks == []
++        for lint_id in ("slug_consistency", "delivery_verdict"):
++            skip = next(
++                f
++                for f in findings
++                if f.lint_id == lint_id and f.message.startswith("skipped:")
++            )
++            assert "named none" in skip.message
+ 
+     def test_dangling_finding_ref_is_now_caught(self, tmp_path) -> None:
+         _make_session(tmp_path)
+diff --git a/tools/orch/regent/tests/test_lints.py b/tools/orch/regent/tests/test_lints.py
+index 99a43df..954a863 100644
+--- a/tools/orch/regent/tests/test_lints.py
++++ b/tools/orch/regent/tests/test_lints.py
+@@ -10,6 +10,7 @@ from refiner.core.state import session_dir
+ 
+ from regent.core.lints import (
+     LintContext,
++    TaskTarget,
+     check_base_branch_fallback,
+     check_decision_brief_coverage,
+     check_delivery_verdict,
+@@ -376,8 +377,28 @@ class TestCheckDeliveryVerdict:
+         base.update(overrides)
+         return base
+ 
++    def _wrap(self, name: str, task_yaml: dict) -> TaskTarget:
++        """An already-built task.yaml, as the resolver would hand it."""
++        task_dir = Path("/p/initiatives/i/milestones/m/tasks") / name
++        return TaskTarget(
++            name=name,
++            task_dir=task_dir,
++            task_yaml=task_yaml,
++            brief_path=task_dir / "brief.md",
++        )
++
++    def _task(self, name: str, **overrides) -> TaskTarget:
++        """One task as the resolver hands it over."""
++        task_dir = Path("/p/initiatives/i/milestones/m/tasks") / name
++        return TaskTarget(
++            name=name,
++            task_dir=task_dir,
++            task_yaml=self._done(**overrides),
++            brief_path=task_dir / "brief.md",
++        )
++
+     def test_a_delivered_task_is_clean(self) -> None:
+-        results = check_delivery_verdict([("t1-x", self._done())])
++        results = check_delivery_verdict([self._task("t1-x")])
+ 
+         assert results == []
+ 
+@@ -396,7 +417,9 @@ class TestCheckDeliveryVerdict:
+             ),
+         )
+ 
+-        results = check_delivery_verdict([("t2-1-group-create-ls", task)])
++        results = check_delivery_verdict(
++            [self._wrap("t2-1-group-create-ls", task)]
++        )
+ 
+         assert len(results) == 1
+         assert results[0].lint_id == "delivery_verdict"
+@@ -411,7 +434,7 @@ class TestCheckDeliveryVerdict:
+             rejection_reason="first line\nsecond line\nthird line",
+         )
+ 
+-        results = check_delivery_verdict([("t-x", task)])
++        results = check_delivery_verdict([self._wrap("t-x", task)])
+ 
+         assert "first line" in results[0].message
+         assert "second line" not in results[0].message
+@@ -422,7 +445,7 @@ class TestCheckDeliveryVerdict:
+         Both tasks the collections run lost carry `pr: None` — nothing
+         was opened, so nothing could have merged.
+         """
+-        results = check_delivery_verdict([("t-x", self._done(pr=None))])
++        results = check_delivery_verdict([self._task("t-x", pr=None)])
+ 
+         assert len(results) == 1
+         assert "no pull request" in results[0].message
+@@ -433,7 +456,7 @@ class TestCheckDeliveryVerdict:
+         problem."""
+         task = self._done(validation_verdict="rejected", pr=None)
+ 
+-        results = check_delivery_verdict([("t-x", task)])
++        results = check_delivery_verdict([self._wrap("t-x", task)])
+ 
+         assert len(results) == 1
+ 
+@@ -442,8 +465,10 @@ class TestCheckDeliveryVerdict:
+         still in progress has made no claim."""
+         results = check_delivery_verdict(
+             [
+-                ("t-a", {"status": "in_progress", "validation_verdict": ""}),
+-                ("t-b", {"status": "blocked", "pr": None}),
++                self._wrap(
++                    "t-a", {"status": "in_progress", "validation_verdict": ""}
++                ),
++                self._wrap("t-b", {"status": "blocked", "pr": None}),
+             ]
+         )
+ 
+@@ -451,10 +476,10 @@ class TestCheckDeliveryVerdict:
+ 
+     def test_the_whole_run_is_scored_at_once(self) -> None:
+         """The collections scoreboard: eight done, two of them empty."""
+-        tasks = [(f"t{i}", self._done()) for i in range(6)]
++        tasks = [self._task(f"t{i}") for i in range(6)]
+         tasks += [
+-            ("t2-1", self._done(validation_verdict="rejected", pr=None)),
+-            ("t2-2", self._done(validation_verdict="rejected", pr=None)),
++            self._task("t2-1", validation_verdict="rejected", pr=None),
++            self._task("t2-2", validation_verdict="rejected", pr=None),
+         ]
+ 
+         results = check_delivery_verdict(tasks)
+@@ -570,7 +595,14 @@ class TestRunAllLints:
+             brief_path=task_brief,
+             task_dir=task_dir,
+             task_yaml={"task": "my-task"},
+-            task_yamls=[],
++            tasks=[
++                TaskTarget(
++                    name="my-task",
++                    task_dir=task_dir,
++                    task_yaml={"task": "my-task"},
++                    brief_path=task_brief,
++                )
++            ],
+             initiative_brief_path=initiative_brief,
+             milestone_brief_paths=[],
+         )

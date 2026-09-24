@@ -1,0 +1,290 @@
+diff --git a/tools/orch/runner/runner/core/engine.py b/tools/orch/runner/runner/core/engine.py
+index 048cc01..b569e71 100644
+--- a/tools/orch/runner/runner/core/engine.py
++++ b/tools/orch/runner/runner/core/engine.py
+@@ -192,7 +192,10 @@ _FINALIZE_STOPS: dict[FinalizeResult, tuple[str, str]] = {
+ 
+ 
+ def _record_finalize_stop(
+-    task_name: str, status: str, detail: str,
++    task_name: str,
++    status: str,
++    detail: str,
++    finalize_state: str,
+ ) -> None:
+     """Persist a FINALIZING stop: status plus the reason a human reads.
+ 
+@@ -204,6 +207,7 @@ def _record_finalize_stop(
+     """
+     data = load_task_data(task_name)
+     data["status"] = status
++    data["finalize_state"] = finalize_state
+     if detail:
+         if status == "queued":
+             data["last_action"] = detail[:200]
+@@ -634,7 +638,10 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+                     outcome.result
+                 ]
+                 _record_finalize_stop(
+-                    config.task_name, status, outcome.detail,
++                    config.task_name,
++                    status,
++                    outcome.detail,
++                    outcome.result.value,
+                 )
+                 result.sessions.append(
+                     SessionRecord(
+diff --git a/tools/orch/runner/runner/core/hooks.py b/tools/orch/runner/runner/core/hooks.py
+index 8de3a12..02e93f5 100644
+--- a/tools/orch/runner/runner/core/hooks.py
++++ b/tools/orch/runner/runner/core/hooks.py
+@@ -11,6 +11,7 @@ Mode hooks: FINALIZING as code, hybrid VALIDATING.
+ import os
+ import subprocess
+ import tempfile
++import time
+ from pathlib import Path
+ from typing import Any
+ 
+@@ -1479,6 +1480,20 @@ def execute_finalizing(
+                 f"{merge.stderr.strip()}",
+             )
+ 
++        if not _merge_confirmed(pr_number, env):
++            # Armed or enqueued, not merged. Deleting the branch now
++            # would close the PR and kill the pending merge; verifying
++            # the umbrella now would test a tree without this work.
++            print_warning(
++                f"PR #{pr_number}: merge accepted ({label}) but not "
++                f"merged yet — checks pending"
++            )
++            return FinalizeOutcome(
++                FinalizeResult.AUTO_QUEUED,
++                f"PR #{pr_number}: {label} accepted, waiting on "
++                f"required checks / merge queue.",
++            )
++
+         print_success(f"PR #{pr_number} merged")
+ 
+         # The merge landed. Whether what it produced holds up is a
+@@ -1651,8 +1666,6 @@ def _finalize_cleanup(
+     # The PR body has "Closes #N" which auto-closes the issue on merge,
+     # and GitHub board automation moves it to Done. We wait for that
+     # to settle, then override status to In Review (owner reviews first).
+-    import time
+-
+     issue_number = task_data.get("issue")
+     item_ids = task_data.get("item_ids") or {}
+     issue_moved = False
+@@ -1763,23 +1776,54 @@ def _finalize_cleanup(
+     )
+ 
+ 
+-def _verify_pr_merged(pr_number: int | str) -> bool:
++def _verify_pr_merged(
++    pr_number: int | str,
++    env: dict[str, str] | None = None,
++) -> bool:
+     """Check if a PR has been merged via gh CLI.
+ 
+     Args:
+         pr_number: PR number to check.
++        env: Auth env from `resolve_auth_env`; without it gh uses the
++            default account, which may not see the repo.
+ 
+     Returns:
+         True if the PR state is MERGED.
+     """
+     result = subprocess.run(
+         ["gh", "pr", "view", str(pr_number), "--json", "state", "-q", ".state"],
++        env={**os.environ, **env} if env else None,
+         capture_output=True,
+         text=True,
++        timeout=30,
+     )
+     return result.returncode == 0 and result.stdout.strip() == "MERGED"
+ 
+ 
++# A plain squash merge reports MERGED immediately; the short poll only
++# absorbs GitHub's read-after-write lag, it does not wait for checks.
++_MERGE_CONFIRM_ATTEMPTS = 3
++_MERGE_CONFIRM_DELAY_S = 2.0
++
++
++def _merge_confirmed(
++    pr_number: int | str,
++    env: dict[str, str] | None,
++) -> bool:
++    """Whether a merge command that exited 0 actually merged the PR.
++
++    `gh pr merge --auto` exits 0 when it merely arms auto-merge
++    (required checks pending), and a merge queue accepts a PR without
++    merging it. Exit status is not the deliverable; PR state is.
++    """
++    for attempt in range(_MERGE_CONFIRM_ATTEMPTS):
++        if _verify_pr_merged(pr_number, env=env):
++            return True
++        if attempt < _MERGE_CONFIRM_ATTEMPTS - 1:
++            time.sleep(_MERGE_CONFIRM_DELAY_S)
++    return False
++
++
+ def _run_make_target(
+     cwd: Path,
+     target: str,
+diff --git a/tools/orch/runner/tests/test_engine_finalizing.py b/tools/orch/runner/tests/test_engine_finalizing.py
+index b352fbb..19c2e0a 100644
+--- a/tools/orch/runner/tests/test_engine_finalizing.py
++++ b/tools/orch/runner/tests/test_engine_finalizing.py
+@@ -265,6 +265,28 @@ class TestFinalizeResultDispatch:
+         assert "done" not in statuses
+         assert result.sessions[-1].last_text == "FINALIZING failed 3 times"
+ 
++    def test_auto_queued_requeues_without_cleanup_or_blocker(
++        self,
++    ) -> None:
++        """WS1-T4: armed auto-merge is pending, not merged."""
++        config = ExecutionConfig(task_name="test-task")
++        with _finalizing_context(
++            task_data=_TASK,
++            outcome=FinalizeOutcome(
++                FinalizeResult.AUTO_QUEUED, "waiting on checks",
++            ),
++        ) as ctx:
++            result = asyncio.run(run_task(config))
++
++        assert result.stopped_reason == "auto_merge_queued"
++        ctx["cleanup_mock"].assert_not_called()
++        ctx["sdk_wrapper"].assert_not_called()
++        saved = ctx["save_task_data"].call_args_list[-1].args[1]
++        assert saved["status"] == "queued"
++        assert saved["finalize_state"] == "auto_queued"
++        # A blocker would stop queue from re-enqueueing it.
++        assert not saved.get("blockers")
++
+     def test_merged_completes_and_cleans_up(self) -> None:
+         config = ExecutionConfig(task_name="test-task")
+         with _finalizing_context(
+diff --git a/tools/orch/runner/tests/test_execute_finalizing_idempotent.py b/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
+index dc801b6..a43ab46 100644
+--- a/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
++++ b/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
+@@ -115,7 +115,7 @@ class TestExecuteFinalizingAlreadyMerged:
+             ),
+             patch(
+                 "runner.core.hooks._verify_pr_merged",
+-                return_value=False,
++                side_effect=[False, True],
+             ) as mock_verify,
+             patch(
+                 "runner.core.hooks._resolve_project_scope",
+@@ -143,7 +143,7 @@ class TestExecuteFinalizingAlreadyMerged:
+             )
+ 
+         assert result.result == FinalizeResult.MERGED
+-        mock_verify.assert_called_once_with(217)
++        assert mock_verify.call_args_list[0].args == (217,)
+         assert mock_run.called
+         mock_cleanup.assert_called_once()
+         _, kwargs = mock_cleanup.call_args
+@@ -275,3 +275,100 @@ class TestExecuteFinalizingTypedOutcome:
+         assert "3" in outcome.detail
+         # The engine owns status writes; the hook only reports.
+         mock_save.assert_not_called()
++
++
++class TestMergeCommandVerifiedAfterSuccess:
++    """WS1-T4: `gh pr merge --auto` exits 0 when it only ARMS the merge.
++    rc=0 is not a merge; the PR state is."""
++
++    def _run(self, tmp_path: Path, merged_states: list[bool]):
++        task_data = _base_task_data()
++        mock_cleanup = MagicMock(return_value=True)
++        mock_verify_umbrella = MagicMock(return_value=(True, "ok"))
++        calls: list[list[str]] = []
++
++        def _run_side_effect(cmd, **kwargs):
++            calls.append(cmd)
++            result = MagicMock()
++            result.returncode = 0
++            result.stdout = "OPEN" if cmd[:3] == ["gh", "pr", "view"] else ""
++            result.stderr = ""
++            return result
++
++        with (
++            patch(
++                "dao_cli.core.project.resolve_task_yaml_path",
++                return_value=Path("/fake/task.yaml"),
++            ),
++            patch(
++                "dao_cli.core.yaml_io.load_yaml",
++                return_value=task_data,
++            ),
++            patch("dao_cli.core.yaml_io.save_yaml", MagicMock()),
++            patch(
++                "runner.core.hooks.resolve_auth_env",
++                return_value={"GH_TOKEN": "t"},
++            ),
++            patch(
++                "runner.core.hooks._branch_has_commits",
++                return_value=True,
++            ),
++            patch(
++                "runner.core.hooks._work_already_in_base",
++                return_value=False,
++            ),
++            patch(
++                "runner.core.hooks._verify_pr_merged",
++                side_effect=merged_states,
++            ) as mock_verify,
++            patch(
++                "runner.core.hooks._resolve_project_scope",
++                return_value=None,
++            ),
++            patch(
++                "runner.core.hooks._compose_conventional_subject",
++                return_value="subject",
++            ),
++            patch(
++                "runner.core.hooks._compose_conventional_body",
++                return_value="body",
++            ),
++            patch(
++                "runner.core.hooks.verify_umbrella_after_merge",
++                mock_verify_umbrella,
++            ),
++            patch("runner.core.hooks._finalize_cleanup", mock_cleanup),
++            patch("runner.core.hooks.time.sleep"),
++            patch(
++                "runner.core.hooks.subprocess.run",
++                side_effect=_run_side_effect,
++            ),
++        ):
++            outcome = execute_finalizing(
++                cwd=tmp_path, task_name="regent-run-report-emission",
++            )
++        return outcome, mock_cleanup, mock_verify_umbrella, mock_verify, calls
++
++    def test_armed_auto_merge_is_auto_queued(self, tmp_path: Path) -> None:
++        # pre-merge check: not merged; post-merge polls: still not merged
++        outcome, cleanup, umbrella, verify, calls = self._run(
++            tmp_path, [False, False, False, False],
++        )
++        assert outcome.result == FinalizeResult.AUTO_QUEUED
++        assert not outcome.completed
++        cleanup.assert_not_called()
++        umbrella.assert_not_called()
++        assert not any(
++            c[:3] == ["gh", "api", "repos/{owner}/{repo}/git/refs/heads"]
++            for c in calls
++        )
++        # The post-merge check runs with the task's auth env.
++        assert verify.call_args.kwargs.get("env") == {"GH_TOKEN": "t"}
++
++    def test_merge_confirmed_proceeds(self, tmp_path: Path) -> None:
++        outcome, cleanup, umbrella, _, _ = self._run(
++            tmp_path, [False, True],
++        )
++        assert outcome.result == FinalizeResult.MERGED
++        umbrella.assert_called_once()
++        cleanup.assert_called_once()

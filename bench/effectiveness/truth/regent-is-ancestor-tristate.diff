@@ -1,0 +1,534 @@
+diff --git a/tools/orch/regent/regent/core/delivery.py b/tools/orch/regent/regent/core/delivery.py
+index cb86159..609f501 100644
+--- a/tools/orch/regent/regent/core/delivery.py
++++ b/tools/orch/regent/regent/core/delivery.py
+@@ -101,6 +101,10 @@ _MAX_PATCH_CHARS = 20_000
+ #: The brief is the ask. Same ceiling lenses.py uses on the same files.
+ _MAX_BRIEF_CHARS = 12_000
+ 
++#: git's empty tree — the baseline for a root commit, which has no
++#: parent to diff against.
++_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
++
+ #: A rejection reason is prose written for a human mid-run; only its
+ #: opening sentence belongs in a table row. The full text stays in the
+ #: task's own file, which is where a reader who wants it should go.
+@@ -155,7 +159,14 @@ class RemoteRef:
+ 
+ @dataclass(frozen=True)
+ class Landed:
+-    """What one merged commit actually changed on the remote ref."""
++    """What one merge introduced, measured against its own first parent.
++
++    Attributes:
++        read_ok: Whether git answered at all. Without this an empty
++            `files` had to stand for both "this merge changed nothing"
++            and "the diff could not be computed", and the second was
++            being reported as the first — with a verdict on it.
++    """
+ 
+     merge_commit: str
+     files: tuple[str, ...] = ()
+@@ -164,6 +175,7 @@ class Landed:
+     subjects: tuple[str, ...] = ()
+     patch: str = ""
+     patch_truncated: bool = False
++    read_ok: bool = True
+ 
+ 
+ @dataclass(frozen=True)
+@@ -289,6 +301,13 @@ def _require_sha(value: str) -> str:
+     return candidate
+ 
+ 
++#: What `_git` reports when git never ran at all. Deliberately not 1:
++#: `merge-base --is-ancestor` uses exit 1 to mean a definite "no", and
++#: this wrapper used to return 1 for a timeout, which handed a caller
++#: git's answer for "no" when the real answer was "never asked".
++_NOT_RUN = -1
++
++
+ def _git(
+     args: list[str], *, cwd: Path, timeout: float = _GIT_TIMEOUT
+ ) -> tuple[int, str, str]:
+@@ -296,7 +315,7 @@ def _git(
+     try:
+         result = spawn.run(["git", *args], cwd=cwd, timeout=timeout)
+     except Exception as exc:  # TimeoutExpired, OSError
+-        return 1, "", str(exc)
++        return _NOT_RUN, "", str(exc)
+     return result.returncode, result.stdout, result.stderr
+ 
+ 
+@@ -384,8 +403,26 @@ def _ensure_commit(sha: str, *, cwd: Path, remote: str, ref: str) -> bool:
+     return _have_commit(sha, cwd=cwd)
+ 
+ 
+-def _is_ancestor(sha: str, of: str, *, cwd: Path) -> bool:
+-    """Is `sha` reachable from the pinned remote sha?"""
++def _is_ancestor(sha: str, of: str, *, cwd: Path) -> bool | None:
++    """Is `sha` reachable from the pinned remote sha?
++
++    Three answers, not two — and the missing third one is what made this
++    module report four merged tasks as `delivered-nothing` on a run
++    where every one of them was on main.
++
++    `git merge-base --is-ancestor` documents its exit codes precisely:
++    0 is yes, 1 is no, "errors are signaled by a non-zero status that is
++    not 1". The commonest error is 128, "Not a valid commit name", when
++    one of the two objects is not in the local store. This returned
++    `code == 0`, so 128 read as a confident "not reachable" — an absence
++    of evidence rendered as evidence of absence, then printed under
++    "publish 'done' against the evidence". The evidence had never been
++    fetched.
++
++    Returns:
++        True/False when git answered, None when it could not — which the
++        caller must carry to could-not-read, never to a verdict.
++    """
+     code, _, _ = _git(
+         [
+             "merge-base",
+@@ -395,31 +432,78 @@ def _is_ancestor(sha: str, of: str, *, cwd: Path) -> bool:
+         ],
+         cwd=cwd,
+     )
+-    return code == 0
++    if code == 0:
++        return True
++    if code == 1:
++        return False
++    return None
++
++
++def _first_parent(sha: str, *, cwd: Path) -> str | None:
++    """The commit this merge landed ON — what its diff is taken against.
++
++    Returns:
++        The first parent's sha; "" for a root commit, which legitimately
++        has none; None when the parents could not be read at all.
++    """
++    code, out, _ = _git(
++        ["rev-list", "--parents", "-n", "1", _require_sha(sha)], cwd=cwd
++    )
++    if code != 0 or not out.strip():
++        return None
++    parts = out.split()
++    return parts[1] if len(parts) > 1 else ""
+ 
+ 
+ def _read_landed(merge_commit: str, *, cwd: Path) -> Landed:
+-    """What one merged commit changed, read at its sha."""
++    """What one merged commit introduced, against its OWN first parent.
++
++    Not against the pinned tip. Pinning the read is what makes the
++    answer reproducible and stale-checkout-proof; it is not what the
++    diff is taken against. A merge that is now twenty commits behind the
++    tip still delivered exactly what it delivered on the day it landed.
++
++    `git show` was the wrong tool for the second reason too: on a merge
++    commit it prints a COMBINED diff, which by design omits every file
++    that came unchanged from one parent — so a true merge (as opposed to
++    a squash) can show a fraction of what the PR actually brought in, or
++    nothing at all. `git diff <first-parent> <sha>` is the whole of it.
++
++    Sets `read_ok=False` when git could not answer, so an empty file
++    list never has to stand for both "changed nothing" and "could not
++    tell".
++    """
+     sha = _require_sha(merge_commit)
++    parent = _first_parent(sha, cwd=cwd)
++    if parent is None:
++        return Landed(merge_commit=sha, read_ok=False)
++
++    # A root commit has no parent to diff against; git's empty tree is
++    # the honest baseline for one.
++    base = parent or _EMPTY_TREE
++    numstat_args = ["diff", "--numstat", base, sha]
++    patch_args = ["diff", base, sha]
++
+     files: list[str] = []
+     insertions = deletions = 0
+-    code, out, _ = _git(
+-        ["show", "--numstat", "--format=", sha], cwd=cwd
+-    )
+-    if code == 0:
+-        for line in out.splitlines():
+-            parts = line.split("\t")
+-            if len(parts) != 3:
+-                continue
+-            added, removed, path = parts
+-            files.append(path)
+-            insertions += int(added) if added.isdigit() else 0
+-            deletions += int(removed) if removed.isdigit() else 0
++    code, out, _ = _git(numstat_args, cwd=cwd)
++    if code != 0:
++        return Landed(merge_commit=sha, read_ok=False)
++    for line in out.splitlines():
++        parts = line.split("\t")
++        if len(parts) != 3:
++            continue
++        added, removed, path = parts
++        files.append(path)
++        insertions += int(added) if added.isdigit() else 0
++        deletions += int(removed) if removed.isdigit() else 0
+ 
+     _, subjects_out, _ = _git(
+         ["log", "-1", "--format=%s%n%b", sha], cwd=cwd
+     )
+-    _, patch_out, _ = _git(["show", "--format=", sha], cwd=cwd)
++    patch_code, patch_out, _ = _git(patch_args, cwd=cwd)
++    if patch_code != 0:
++        return Landed(merge_commit=sha, read_ok=False)
+     truncated = len(patch_out) > _MAX_PATCH_CHARS
+ 
+     return Landed(
+@@ -757,8 +841,18 @@ def _score_task(
+     ref: RemoteRef,
+     source_dir: Path,
+     model: str | None,
++    tip_local: bool,
+ ) -> TaskScore:
+-    """Judge one task's delivery, or say why it could not be judged."""
++    """Judge one task's delivery, or say why it could not be judged.
++
++    Args:
++        tip_local: Whether the pinned tip's objects are in this store.
++            Resolved once by the caller, not per task — and it must be,
++            because it used to be resolved by accident: the tip was only
++            ever fetched when it happened to BE some task's merge
++            commit, so every task checked before that one failed its
++            ancestry call and scored `delivered-nothing`.
++    """
+     status = str(task.task_yaml.get("status") or "").strip()
+     pr_number = _pr_number(task.task_yaml)
+     own_verdict, own_reason = _own_account(task.task_yaml)
+@@ -817,16 +911,39 @@ def _score_task(
+             pr=pr_number,
+         )
+ 
+-    if not _is_ancestor(pr.merge_commit, ref.sha, cwd=source_dir):
++    if not tip_local:
++        return skipped(
++            f"the pinned tip {ref.sha[:12]} is not in this object store "
++            "and could not be fetched, so nothing can be said about what "
++            "is on it.",
++            pr=pr_number,
++        )
++
++    reachable = _is_ancestor(pr.merge_commit, ref.sha, cwd=source_dir)
++    if reachable is None:
++        return skipped(
++            f"whether {pr.merge_commit[:12]} is on {ref.label} could not "
++            "be computed — git errored rather than answering.",
++            pr=pr_number,
++        )
++    if reachable is False:
+         return landed_nothing(
+             f"merge commit {pr.merge_commit[:12]} is not reachable from "
+             f"{ref.label} — merged somewhere else, or reverted"
+         )
+ 
+     landed = _read_landed(pr.merge_commit, cwd=source_dir)
++    if not landed.read_ok:
++        return skipped(
++            f"the diff {pr.merge_commit[:12]} introduced could not be "
++            "computed — its parents or its patch were unreadable.",
++            pr=pr_number,
++            landed=landed,
++        )
+     if not landed.files:
+         return landed_nothing(
+-            f"merge commit {pr.merge_commit[:12]} changed no files",
++            f"merge commit {pr.merge_commit[:12]} introduced no change "
++            f"against its own first parent",
+             landed=landed,
+         )
+ 
+@@ -956,10 +1073,24 @@ def score_signal(
+     ref = resolve_remote_head(source_dir, remote=remote)
+     tasks = lint_context.task_targets(project_dir, item_id)
+ 
++    # Fetch the pinned tip ONCE, before any task is scored. Every
++    # ancestry question is asked against it, and a question asked about
++    # an object git does not have is not answered — it errors, and that
++    # error used to read as "not reachable". Doing it here rather than
++    # per task is the fix: it no longer depends on which task's merge
++    # commit happens to coincide with the tip.
++    tip_local = _ensure_commit(
++        ref.sha, cwd=source_dir, remote=ref.remote, ref=ref.ref
++    )
++
+     scores: list[TaskScore] = []
+     for task in tasks:
+         score = _score_task(
+-            task, ref=ref, source_dir=source_dir, model=model
++            task,
++            ref=ref,
++            source_dir=source_dir,
++            model=model,
++            tip_local=tip_local,
+         )
+         path = _write_record(
+             score,
+diff --git a/tools/orch/regent/tests/test_delivery.py b/tools/orch/regent/tests/test_delivery.py
+index bc45fbb..51e8a98 100644
+--- a/tools/orch/regent/tests/test_delivery.py
++++ b/tools/orch/regent/tests/test_delivery.py
+@@ -24,6 +24,7 @@ from regent.exceptions import RegentError
+ REMOTE_SHA = "a" * 40
+ MERGE_SHA = "b" * 40
+ LOCAL_SHA = "c" * 40
++PARENT_SHA = "e" * 40
+ 
+ 
+ def _ref() -> RemoteRef:
+@@ -138,15 +139,28 @@ class _Recorder:
+         if sub == "fetch":
+             return _completed(0)
+         if sub == "merge-base":
+-            return _completed(0 if self.answers.get("ancestor", True) else 1)
+-        if sub == "show" and "--numstat" in cmd:
++            return _completed(self.answers.get("ancestor_code", 0))
++        if sub == "rev-list":
+             return _completed(
+-                0, self.answers.get("numstat", "12\t0\tsrc/collection.rs\n")
++                self.answers.get("rev_list_code", 0),
++                self.answers.get("parents", f"{MERGE_SHA} {PARENT_SHA}\n"),
++            )
++        if sub == "diff" and "--numstat" in cmd:
++            return _completed(
++                self.answers.get("numstat_code", 0),
++                self.answers.get("numstat", "12\t0\tsrc/collection.rs\n"),
++            )
++        if sub == "diff":
++            return _completed(
++                self.answers.get("patch_code", 0),
++                self.answers.get("patch", "+ fn collection"),
+             )
+-        if sub == "show":
+-            return _completed(0, self.answers.get("patch", "+ fn collection"))
+         if sub == "log":
+             return _completed(0, "feat: add collection command\n")
++        # `git show` is deliberately unhandled: on a merge commit it
++        # prints a COMBINED diff, which omits files that came unchanged
++        # from one parent. If it ever comes back, these tests fail loudly
++        # rather than quietly measuring a fraction of the merge.
+         raise AssertionError(f"unexpected git: {cmd}")
+ 
+     @property
+@@ -258,7 +272,7 @@ class TestThreeStates:
+         self, recorder, tmp_path
+     ):
+         _signal(tmp_path, tasks=[{"name": "t1"}])
+-        recorder(ancestor=False)
++        recorder(ancestor_code=1)
+         board = delivery.score_signal(
+             tmp_path, "idea-x", source_dir=tmp_path
+         )
+@@ -286,7 +300,7 @@ class TestThreeStates:
+             tmp_path, "idea-x", source_dir=tmp_path
+         )
+         assert board.scores[0].verdict is Verdict.NOTHING
+-        assert "changed no files" in board.scores[0].detail
++        assert "introduced no change" in board.scores[0].detail
+ 
+     def test_the_three_are_distinguishable_in_one_board(
+         self, monkeypatch, tmp_path
+@@ -404,6 +418,187 @@ class TestCouldNotRead:
+         assert not Verdict.COULD_NOT_READ.is_reading
+ 
+ 
++class TestTheDiffIsTakenFromItsOwnMerge:
++    """A merge N commits behind the tip still scores off its own merge.
++
++    The 2026-08-11 14:09Z run of idea-have-bookmarks-three-8fa2 scored
++    four merged, approved, on-main tasks as `delivered-nothing` and
++    printed "4 task(s) publish 'done' against the evidence". Every one
++    of them was on main. Two defects stacked:
++
++    the pinned tip was only ever fetched when it happened to BE some
++    task's merge commit, so for every task checked before that one
++    `git merge-base --is-ancestor` was asked about an object git did not
++    have; and it answers that with exit 128, which this module read as
++    the exit-1 "no". The single task that scored `delivered` was the one
++    whose own merge commit was the tip.
++    """
++
++    def test_the_tip_is_fetched_once_before_any_task_is_scored(
++        self, recorder, tmp_path
++    ):
++        _signal(
++            tmp_path,
++            tasks=[{"name": "t1"}, {"name": "t2"}, {"name": "t3"}],
++        )
++        rec = recorder(have=False)
++        delivery.score_signal(tmp_path, "idea-x", source_dir=tmp_path)
++
++        # The tip is ensured before the first PR is even queried, so no
++        # task's answer depends on another task having fetched it.
++        first_gh = next(
++            i for i, c in enumerate(rec.calls) if c[0] == "gh"
++        )
++        tip_fetches = [
++            i
++            for i, c in enumerate(rec.calls)
++            if c[0] == "git" and c[1] == "fetch" and REMOTE_SHA in c
++        ]
++        assert tip_fetches and tip_fetches[0] < first_gh
++
++    def test_an_ancestry_error_is_a_skip_not_delivered_nothing(
++        self, recorder, tmp_path
++    ):
++        """Exit 128 is git failing to answer, not git answering no."""
++        _signal(tmp_path, tasks=[{"name": "t1"}])
++        recorder(ancestor_code=128)
++        board = delivery.score_signal(
++            tmp_path, "idea-x", source_dir=tmp_path
++        )
++        score = board.scores[0]
++
++        assert score.verdict is Verdict.COULD_NOT_READ
++        assert board.count(Verdict.NOTHING) == 0
++        assert "could not be computed" in score.detail
++
++    def test_only_exit_one_means_not_reachable(self, recorder, tmp_path):
++        _signal(tmp_path, tasks=[{"name": "t1"}])
++        recorder(ancestor_code=1)
++        board = delivery.score_signal(
++            tmp_path, "idea-x", source_dir=tmp_path
++        )
++        assert board.scores[0].verdict is Verdict.NOTHING
++
++    def test_a_task_behind_the_tip_still_scores_off_its_own_merge(
++        self, recorder, tmp_path
++    ):
++        """The whole bug, end to end.
++
++        Five tasks, all merged and reachable; only the last one's merge
++        commit equals the tip. Before the fix the first four errored
++        their ancestry call and read `delivered-nothing`.
++        """
++        _signal(
++            tmp_path,
++            tasks=[{"name": f"t1-{n}"} for n in range(1, 6)],
++        )
++        recorder()
++        board = delivery.score_signal(
++            tmp_path, "idea-x", source_dir=tmp_path
++        )
++
++        assert [s.verdict for s in board.scores] == [Verdict.DELIVERED] * 5
++        assert board.count(Verdict.NOTHING) == 0
++
++    def test_the_diff_is_against_the_first_parent_not_the_tip(
++        self, recorder, tmp_path
++    ):
++        """Pinning the read is not the same as diffing against the pin."""
++        _signal(tmp_path, tasks=[{"name": "t1"}])
++        rec = recorder()
++        delivery.score_signal(tmp_path, "idea-x", source_dir=tmp_path)
++
++        diffs = [
++            c for c in rec.git_calls if c[1] == "diff" and "--numstat" in c
++        ]
++        assert diffs, "the merge's own diff was never computed"
++        assert diffs[0][-2:] == [PARENT_SHA, MERGE_SHA]
++        # The tip is what the read is pinned to, never what it subtracts.
++        assert REMOTE_SHA not in diffs[0]
++
++    def test_git_show_is_never_used_on_a_merge(self, recorder, tmp_path):
++        """Its combined diff omits files unchanged from one parent."""
++        _signal(tmp_path, tasks=[{"name": "t1"}])
++        rec = recorder()
++        delivery.score_signal(tmp_path, "idea-x", source_dir=tmp_path)
++        assert not [c for c in rec.git_calls if c[1] == "show"]
++
++
++class TestAnUnreadableDiffIsNeverAZero:
++    """`delivered-nothing` requires seeing a diff and finding nothing."""
++
++    def test_unreadable_parents_is_a_skip(self, recorder, tmp_path):
++        _signal(tmp_path, tasks=[{"name": "t1"}])
++        recorder(rev_list_code=128, parents="")
++        board = delivery.score_signal(
++            tmp_path, "idea-x", source_dir=tmp_path
++        )
++
++        assert board.scores[0].verdict is Verdict.COULD_NOT_READ
++        assert board.count(Verdict.NOTHING) == 0
++        assert "could not be computed" in board.scores[0].detail
++
++    def test_a_failed_numstat_is_a_skip(self, recorder, tmp_path):
++        _signal(tmp_path, tasks=[{"name": "t1"}])
++        recorder(numstat_code=128, numstat="")
++        board = delivery.score_signal(
++            tmp_path, "idea-x", source_dir=tmp_path
++        )
++        assert board.scores[0].verdict is Verdict.COULD_NOT_READ
++        assert board.count(Verdict.NOTHING) == 0
++
++    def test_a_failed_patch_read_is_a_skip(self, recorder, tmp_path):
++        _signal(tmp_path, tasks=[{"name": "t1"}])
++        recorder(patch_code=128, patch="")
++        board = delivery.score_signal(
++            tmp_path, "idea-x", source_dir=tmp_path
++        )
++        assert board.scores[0].verdict is Verdict.COULD_NOT_READ
++
++    def test_an_empty_diff_that_git_answered_is_still_a_verdict(
++        self, recorder, tmp_path
++    ):
++        """The distinction: git said "nothing", not "I cannot say"."""
++        _signal(tmp_path, tasks=[{"name": "t1"}])
++        recorder(numstat="")
++        board = delivery.score_signal(
++            tmp_path, "idea-x", source_dir=tmp_path
++        )
++        assert board.scores[0].verdict is Verdict.NOTHING
++        assert board.scores[0].landed.read_ok
++
++    def test_an_unfetchable_tip_skips_every_row(self, recorder, tmp_path):
++        """No tip, no ancestry — and no invented zeros for five tasks."""
++        _signal(
++            tmp_path, tasks=[{"name": f"t{n}"} for n in range(1, 6)]
++        )
++        # cat-file always fails: nothing can be brought local.
++        recorder(have=False)
++        board = delivery.score_signal(
++            tmp_path, "idea-x", source_dir=tmp_path
++        )
++
++        assert board.count(Verdict.NOTHING) == 0
++        assert board.skipped == 5
++        assert board.checked == 0
++
++    def test_a_timeout_is_not_read_as_gits_answer(self, monkeypatch):
++        """`_git` must not hand back exit 1 for a call that never ran."""
++
++        def explode(cmd, **kwargs):
++            raise subprocess.TimeoutExpired(cmd, 1)
++
++        monkeypatch.setattr(delivery.spawn, "run", explode)
++        code, _, _ = delivery._git(["merge-base"], cwd=Path("/repo"))
++
++        assert code == delivery._NOT_RUN
++        assert code != 1, "exit 1 is git's definite 'no'"
++        assert (
++            delivery._is_ancestor(REMOTE_SHA, MERGE_SHA, cwd=Path("/r"))
++            is None
++        )
++
++
+ #: The file `check_delivery_verdict`'s docstring is written about, as it
+ #: sits on disk: the empty field the first version of this reported, and
+ #: the two beside it that already answer the question.
+@@ -605,7 +800,7 @@ class TestPublishedStatusRidesAlong:
+             tmp_path,
+             tasks=[{"name": "t1", "task_yaml": {"status": "done", "pr": 9}}],
+         )
+-        recorder(ancestor=False)
++        recorder(ancestor_code=1)
+         score = delivery.score_signal(
+             tmp_path, "idea-x", source_dir=tmp_path
+         ).scores[0]

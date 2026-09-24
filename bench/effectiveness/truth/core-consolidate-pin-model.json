@@ -1,0 +1,72 @@
+{
+ "id": "core-consolidate-pin-model",
+ "kind": "refactor",
+ "start": "08c6497b5f07fd8bf4c59c6c76d469a5cb261946",
+ "ref": "d6555252bf6c915b3c8966084183a5f0fbdc0dcf",
+ "expected_src": [
+  "tools/orch/continuum-core/continuum_core/sdk.py",
+  "tools/orch/intake/intake/core/digest.py",
+  "tools/orch/refiner/refiner/core/sdk_wrapper.py"
+ ],
+ "ref_tests": [
+  "tools/orch/continuum-core/tests/test_sdk.py"
+ ],
+ "suites": [
+  "tools/orch/continuum-core",
+  "tools/orch/refiner",
+  "tools/orch/intake"
+ ],
+ "ref_diff_lines": 220,
+ "start_failures": {
+  "tools/orch/continuum-core": [],
+  "tools/orch/refiner": [],
+  "tools/orch/intake": [
+   "tests.test_triage.TestCountActiveRouted::test_counts_routed_refinery_items"
+  ]
+ },
+ "ref_failures": {
+  "tools/orch/continuum-core": [],
+  "tools/orch/refiner": [],
+  "tools/orch/intake": [
+   "tests.test_digest.TestDigestAgent::test_digest_success",
+   "tests.test_digest.TestDigestAgent::test_digest_with_code_block",
+   "tests.test_digest.TestDigestAgent::test_digest_retry_on_bad_json",
+   "tests.test_digest.TestDigestAgent::test_digest_fails_after_retries",
+   "tests.test_digest.TestDigestAgent::test_digest_validates_destination",
+   "tests.test_digest.TestTryParseDigest::test_valid_json",
+   "tests.test_digest.TestTryParseDigest::test_invalid_json",
+   "tests.test_digest.TestTryParseDigest::test_missing_summary",
+   "tests.test_digest.TestTryParseDigest::test_code_fence_wrapped",
+   "tests.test_digest.TestTryParseDigest::test_invalid_destination_defaults",
+   "tests.test_triage.TestCountActiveRouted::test_counts_routed_refinery_items"
+  ]
+ },
+ "hidden_at_ref": {
+  "tools/orch/continuum-core": {
+   "passed": 22,
+   "failed": 0
+  },
+  "tools/orch/refiner": {
+   "passed": 0,
+   "failed": 0
+  },
+  "tools/orch/intake": {
+   "passed": 0,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/orch/continuum-core": {
+   "passed": 20,
+   "failed": 2
+  },
+  "tools/orch/refiner": {
+   "passed": 0,
+   "failed": 0
+  },
+  "tools/orch/intake": {
+   "passed": 0,
+   "failed": 0
+  }
+ }
+}

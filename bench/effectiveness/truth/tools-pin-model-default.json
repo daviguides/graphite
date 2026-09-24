@@ -1,0 +1,18 @@
+{
+ "id": "tools-pin-model-default",
+ "kind": "feature",
+ "start": "8d4e7d16da0d77703e8ec5900bb6cb9210803d37",
+ "ref": "502651cc846287f3c91589f478689a01e16a6c19",
+ "expected_src": [
+  "tools/context/fireweave/fireweave/agents/action_extractor/agent.py",
+  "tools/context/slackweave/slackweave/agents/topic_extractor/agent.py",
+  "tools/context/zen-review/zen_review/agents/base_reviewer.py",
+  "tools/context/zen-review/zen_review/agents/summary_generator.py",
+  "tools/observe/gauge/gauge/core/sdk_wrapper.py",
+  "tools/orch/foreman/foreman/core/sdk_wrapper.py",
+  "tools/orch/refiner/refiner/core/sdk_wrapper.py"
+ ],
+ "ref_tests": [],
+ "suites": [],
+ "ref_diff_lines": 271
+}

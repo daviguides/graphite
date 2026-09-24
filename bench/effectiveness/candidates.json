@@ -1,0 +1,722 @@
+[
+ {
+  "sha": "bcfccb9db9b59f6deb282be894e119f0f9fc27df",
+  "changed_defs": [
+   "_load_workflow_config"
+  ],
+  "callers": [
+   [
+    "_load_workflow_config",
+    [
+     "tools/orch/refiner/refiner/core/engine.py",
+     "tools/orch/refiner/tests/test_engine.py",
+     "tools/orch/refiner/tests/test_workflow_loading.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/orch/refiner/refiner/core/engine.py"
+  ],
+  "test_files": [
+   "tools/orch/refiner/tests/test_engine.py",
+   "tools/orch/refiner/tests/test_workflow_loading.py"
+  ],
+  "n_files": 3,
+  "subject": "chore(continuum): Create deep-refinery.yaml workflow config with level-conditional skill loading",
+  "n_caller_files": 3
+ },
+ {
+  "sha": "577161083736d5041d3ba65dfd9f2e8751dfca65",
+  "changed_defs": [
+   "_build_json_instruction"
+  ],
+  "callers": [
+   [
+    "_build_json_instruction",
+    [
+     "tools/context/zen-review/tests/unit/test_baseline_profile.py",
+     "tools/context/zen-review/zen_review/orchestration/orchestrator.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/context/zen-review/zen_review/agents/summary_generator.py",
+   "tools/context/zen-review/zen_review/cli/main.py",
+   "tools/context/zen-review/zen_review/collectors/pr.py",
+   "tools/context/zen-review/zen_review/core/baseline.py",
+   "tools/context/zen-review/zen_review/core/github_client.py",
+   "tools/context/zen-review/zen_review/models/__init__.py",
+   "tools/context/zen-review/zen_review/orchestration/dedup.py",
+   "tools/context/zen-review/zen_review/orchestration/orchestrator.py",
+   "tools/context/zen-review/zen_review/posting/poster.py"
+  ],
+  "test_files": [
+   "tools/context/zen-review/tests/unit/test_baseline_profile.py",
+   "tools/context/zen-review/tests/unit/test_dedup.py"
+  ],
+  "n_files": 11,
+  "subject": "feat(zen-review): baseline awareness, review profiles, PR-body acknowledgment",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "0ea80340003ddf155c7e93e35e26746d79982ac6",
+  "changed_defs": [
+   "_build_prompt",
+   "_calculate_zen_score"
+  ],
+  "callers": [
+   [
+    "_build_prompt",
+    [
+     "tools/context/zen-review/zen_review/agents/summary_generator.py"
+    ]
+   ],
+   [
+    "_calculate_zen_score",
+    [
+     "tools/context/zen-review/tests/unit/test_poster.py",
+     "tools/context/zen-review/zen_review/posting/poster.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/context/zen-review/zen_review/agents/summary_generator.py",
+   "tools/context/zen-review/zen_review/cli/main.py",
+   "tools/context/zen-review/zen_review/posting/poster.py"
+  ],
+  "test_files": [
+   "tools/context/zen-review/tests/unit/test_poster.py"
+  ],
+  "n_files": 4,
+  "subject": "fix(zen-review): route PR comments by diff membership + holistic zen score",
+  "n_caller_files": 3
+ },
+ {
+  "sha": "d6555252bf6c915b3c8966084183a5f0fbdc0dcf",
+  "changed_defs": [
+   "_pin_model"
+  ],
+  "callers": [
+   [
+    "_pin_model",
+    [
+     "tools/orch/continuum-core/tests/test_sdk.py",
+     "tools/orch/refiner/refiner/core/sdk_wrapper.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/orch/continuum-core/continuum_core/sdk.py",
+   "tools/orch/intake/intake/core/digest.py",
+   "tools/orch/refiner/refiner/core/sdk_wrapper.py"
+  ],
+  "test_files": [
+   "tools/orch/continuum-core/tests/test_sdk.py"
+  ],
+  "n_files": 4,
+  "subject": "refactor(core): consolidate _pin_model into continuum-core",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "e8b211a1c12eab474796edc125a2acdb4e1ccfce",
+  "changed_defs": [
+   "pre_hook_rebase"
+  ],
+  "callers": [
+   [
+    "pre_hook_rebase",
+    [
+     "tools/orch/runner/runner/core/engine.py",
+     "tools/orch/runner/tests/test_pre_hook_rebase.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/flow/rover/rover/rebase/services/rebaser.py",
+   "tools/orch/runner/runner/core/engine.py",
+   "tools/orch/runner/runner/core/hooks.py"
+  ],
+  "test_files": [
+   "tools/orch/runner/tests/test_pre_hook_rebase.py"
+  ],
+  "n_files": 4,
+  "subject": "fix(runner): a task rebased onto master and never saw its siblings",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "c3300fddf6d75db28c98ab58d2898dd87035509f",
+  "changed_defs": [
+   "_brief_bodies",
+   "pr_exists",
+   "worktree_exists"
+  ],
+  "callers": [
+   [
+    "_brief_bodies",
+    [
+     "tools/orch/regent/regent/core/lenses.py",
+     "tools/orch/regent/tests/test_lenses.py"
+    ]
+   ],
+   [
+    "pr_exists",
+    [
+     "tools/orch/regent/tests/test_spawn.py"
+    ]
+   ],
+   [
+    "worktree_exists",
+    [
+     "tools/orch/regent/tests/test_spawn.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/orch/regent/regent/core/lenses.py",
+   "tools/orch/regent/regent/core/spawn.py"
+  ],
+  "test_files": [
+   "tools/orch/regent/tests/test_lenses.py",
+   "tools/orch/regent/tests/test_spawn.py"
+  ],
+  "n_files": 4,
+  "subject": "fix(regent): a process that could not run is not a process that said no",
+  "n_caller_files": 3
+ },
+ {
+  "sha": "b3fc411912ca3ce7d479c1220ac258ec42752b4b",
+  "changed_defs": [
+   "_is_ancestor"
+  ],
+  "callers": [
+   [
+    "_is_ancestor",
+    [
+     "tools/orch/regent/regent/core/delivery.py",
+     "tools/orch/regent/tests/test_delivery.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/orch/regent/regent/core/delivery.py"
+  ],
+  "test_files": [
+   "tools/orch/regent/tests/test_delivery.py"
+  ],
+  "n_files": 2,
+  "subject": "fix(regent): git failing to answer is not git answering no",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "60de6dec9cf6803917067a4ee2c97ed1a4a38ede",
+  "changed_defs": [
+   "check_key_files"
+  ],
+  "callers": [
+   [
+    "check_key_files",
+    [
+     "tools/orch/regent/regent/core/lints.py",
+     "tools/orch/regent/tests/test_lints.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/orch/regent/regent/core/lint_context.py",
+   "tools/orch/regent/regent/core/lints.py"
+  ],
+  "test_files": [
+   "tools/orch/regent/tests/test_lint_context.py",
+   "tools/orch/regent/tests/test_lints.py"
+  ],
+  "n_files": 4,
+  "subject": "fix(regent): a declared path is checked against the repository, not the operator's disk",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "8db6904f3501d4298fc46bcb4d40506ee06afed4",
+  "changed_defs": [
+   "_umbrella_line"
+  ],
+  "callers": [
+   [
+    "_umbrella_line",
+    [
+     "tools/orch/regent/regent/core/outward_gate.py",
+     "tools/orch/regent/tests/test_outward_gate.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/orch/regent/regent/core/outward_gate.py"
+  ],
+  "test_files": [
+   "tools/orch/regent/tests/test_outward_gate.py"
+  ],
+  "n_files": 2,
+  "subject": "fix(regent): the gate names the branch before the push it authorizes",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "db80241feef018c2aeb17da1c69a1467df173363",
+  "changed_defs": [
+   "_umbrella_line"
+  ],
+  "callers": [
+   [
+    "_umbrella_line",
+    [
+     "tools/orch/regent/regent/core/outward_gate.py",
+     "tools/orch/regent/tests/test_outward_gate.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/orch/regent/regent/core/counsel.py",
+   "tools/orch/regent/regent/core/judgment.py",
+   "tools/orch/regent/regent/core/outward_gate.py"
+  ],
+  "test_files": [
+   "tools/orch/regent/tests/test_counsel.py",
+   "tools/orch/regent/tests/test_outward_gate.py"
+  ],
+  "n_files": 5,
+  "subject": "fix(regent): the verdict on the outside readings can be reopened too",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "3a6c9f0e776fe5a9e8fc6bfccd14647451cccbfe",
+  "changed_defs": [
+   "_headless_why"
+  ],
+  "callers": [
+   [
+    "_headless_why",
+    [
+     "tools/orch/regent/regent/core/outward_gate.py",
+     "tools/orch/regent/tests/test_outward_gate.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/orch/regent/regent/core/lints.py",
+   "tools/orch/regent/regent/core/outward_gate.py"
+  ],
+  "test_files": [
+   "tools/orch/regent/tests/test_lints.py",
+   "tools/orch/regent/tests/test_outward_gate.py"
+  ],
+  "n_files": 4,
+  "subject": "feat(regent): the gate names the branch it pushes, and the lint reads the initiative",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "a13fbb85d2b600e35f2c2aca4db1f781c6503067",
+  "changed_defs": [
+   "_action_refiner_attach"
+  ],
+  "callers": [
+   [
+    "_action_refiner_attach",
+    [
+     "tools/orch/regent/regent/core/pipeline.py",
+     "tools/orch/regent/tests/test_headless.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/orch/regent/regent/cli.py",
+   "tools/orch/regent/regent/core/handoff.py",
+   "tools/orch/regent/regent/core/outward_gate.py",
+   "tools/orch/regent/regent/core/pipeline.py",
+   "tools/orch/regent/regent/core/targets.py",
+   "tools/orch/regent/regent/integrations/telegram.py"
+  ],
+  "test_files": [
+   "tools/orch/regent/tests/test_headless.py",
+   "tools/orch/regent/tests/test_targets.py"
+  ],
+  "n_files": 8,
+  "subject": "feat(regent): headless mode hands the TTY steps to the app",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "efca286a1bcc1885b2fb93b8b80787af51f2601a",
+  "changed_defs": [
+   "reset_task_to_queued",
+   "mark_task_failed"
+  ],
+  "callers": [
+   [
+    "reset_task_to_queued",
+    [
+     "tools/orch/marshal/marshal_cli/commands/run.py",
+     "tools/orch/marshal/marshal_cli/core/dispatch.py",
+     "tools/orch/marshal/tests/test_dispatch.py"
+    ]
+   ],
+   [
+    "mark_task_failed",
+    [
+     "tools/orch/marshal/marshal_cli/commands/run.py",
+     "tools/orch/marshal/tests/test_dispatch.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/orch/marshal/marshal_cli/commands/run.py",
+   "tools/orch/marshal/marshal_cli/core/dispatch.py"
+  ],
+  "test_files": [
+   "tools/orch/marshal/tests/test_dispatch.py",
+   "tools/orch/marshal/tests/test_marshal_watching.py",
+   "tools/orch/marshal/tests/test_run_command.py"
+  ],
+  "n_files": 5,
+  "subject": "fix(marshal): resolve task mutations by project entry, not cwd",
+  "n_caller_files": 3
+ },
+ {
+  "sha": "9713774ee571ffa83f53da90f7b6a212a38370ad",
+  "changed_defs": [
+   "stop",
+   "uninstall"
+  ],
+  "callers": [
+   [
+    "stop",
+    [
+     "tools/orch/marshal/marshal_cli/core/daemon.py",
+     "tools/orch/marshal/tests/test_daemon.py"
+    ]
+   ],
+   [
+    "uninstall",
+    [
+     "tools/orch/marshal/marshal_cli/commands/daemon.py",
+     "tools/orch/marshal/tests/test_daemon.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/orch/marshal/marshal_cli/commands/daemon.py",
+   "tools/orch/marshal/marshal_cli/commands/run.py",
+   "tools/orch/marshal/marshal_cli/core/daemon.py",
+   "tools/orch/marshal/marshal_cli/core/dispatch.py",
+   "tools/orch/marshal/marshal_cli/tui/app.py"
+  ],
+  "test_files": [
+   "tools/orch/marshal/tests/test_daemon.py",
+   "tools/orch/marshal/tests/test_dispatch.py",
+   "tools/orch/marshal/tests/test_run_command.py"
+  ],
+  "n_files": 8,
+  "subject": "fix(marshal): atomic dispatch lock, daemon-stop waits for real exit, SIGTERM handler",
+  "n_caller_files": 3
+ },
+ {
+  "sha": "502651cc846287f3c91589f478689a01e16a6c19",
+  "changed_defs": [
+   "_pin_model"
+  ],
+  "callers": [
+   [
+    "_pin_model",
+    [
+     "tools/context/fireweave/fireweave/agents/action_extractor/agent.py",
+     "tools/context/slackweave/slackweave/agents/topic_extractor/agent.py",
+     "tools/context/zen-review/zen_review/agents/base_reviewer.py",
+     "tools/context/zen-review/zen_review/agents/summary_generator.py",
+     "tools/observe/gauge/gauge/core/sdk_wrapper.py",
+     "tools/orch/foreman/foreman/core/sdk_wrapper.py",
+     "tools/orch/refiner/refiner/core/sdk_wrapper.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/context/fireweave/fireweave/agents/action_extractor/agent.py",
+   "tools/context/slackweave/slackweave/agents/topic_extractor/agent.py",
+   "tools/context/zen-review/zen_review/agents/base_reviewer.py",
+   "tools/context/zen-review/zen_review/agents/summary_generator.py",
+   "tools/observe/gauge/gauge/core/sdk_wrapper.py",
+   "tools/orch/foreman/foreman/core/sdk_wrapper.py",
+   "tools/orch/refiner/refiner/core/sdk_wrapper.py"
+  ],
+  "test_files": [],
+  "n_files": 7,
+  "subject": "fix(tools): always set pinned model \u2014 cover no-model-specified case",
+  "n_caller_files": 7
+ },
+ {
+  "sha": "41c02e3e6df95a0e3b936430af1ac73def71569b",
+  "changed_defs": [
+   "find_worktrees_root"
+  ],
+  "callers": [
+   [
+    "find_worktrees_root",
+    [
+     "tools/flow/sourcerer/sourcerer/wt/services/completer.py",
+     "tools/flow/sourcerer/sourcerer/wt/services/navigator.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/flow/sourcerer/sourcerer/wt/integrations/filesystem.py",
+   "tools/flow/sourcerer/sourcerer/wt/services/completer.py",
+   "tools/flow/sourcerer/sourcerer/wt/services/navigator.py"
+  ],
+  "test_files": [],
+  "n_files": 3,
+  "subject": "fix(sourcerer): resolve correct worktrees_root for monorepo projects",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "2f51e049a9656d57386e448baf90f5f77a9e87e4",
+  "changed_defs": [
+   "_tool_detail",
+   "_add_tool_line",
+   "print_mode",
+   "check_installed"
+  ],
+  "callers": [
+   [
+    "_tool_detail",
+    [
+     "tools/orch/foreman/foreman/core/sdk_wrapper.py"
+    ]
+   ],
+   [
+    "_add_tool_line",
+    [
+     "tools/orch/foreman/foreman/core/sdk_wrapper.py"
+    ]
+   ],
+   [
+    "print_mode",
+    [
+     "tools/orch/foreman/foreman/core/engine.py"
+    ]
+   ],
+   [
+    "check_installed",
+    []
+   ]
+  ],
+  "src_files": [
+   "tools/orch/dao-cli/dao_cli/core/completer.py",
+   "tools/orch/dao-cli/dao_cli/core/git.py",
+   "tools/orch/dao-cli/dao_cli/core/project.py",
+   "tools/orch/dao-cli/dao_cli/project.py",
+   "tools/orch/dao-cli/dao_cli/task.py",
+   "tools/orch/foreman/foreman/core/engine.py",
+   "tools/orch/foreman/foreman/core/hooks.py",
+   "tools/orch/foreman/foreman/core/sdk_wrapper.py",
+   "tools/orch/foreman/foreman/display.py",
+   "tools/substrate/ita/src/ita/recipes/macos.py"
+  ],
+  "test_files": [
+   "tools/orch/dao-cli/tests/dao_cli/test_completer.py",
+   "tools/orch/dao-cli/tests/dao_cli/test_core_utils.py",
+   "tools/orch/dao-cli/tests/dao_cli/test_hook.py",
+   "tools/orch/dao-cli/tests/dao_cli/test_project.py"
+  ],
+  "n_files": 14,
+  "subject": "feat: migrate .project YAMLs to directory format, enhance dao-cli/foreman/ita",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "79cf2c81a71a98be7301b6c8271707c878c804ed",
+  "changed_defs": [
+   "_push_force_with_lease",
+   "_push_force",
+   "rebase_main_onto_current",
+   "rebase_branch_onto_main"
+  ],
+  "callers": [
+   [
+    "_push_force_with_lease",
+    [
+     "tools/flow/rover/rover/rebase/services/rebaser.py"
+    ]
+   ],
+   [
+    "_push_force",
+    [
+     "tools/flow/rover/rover/rebase/services/rebaser.py"
+    ]
+   ],
+   [
+    "rebase_main_onto_current",
+    [
+     "tools/flow/rover/rover/rebase/commands/rebase.py"
+    ]
+   ],
+   [
+    "rebase_branch_onto_main",
+    []
+   ]
+  ],
+  "src_files": [
+   "tools/flow/rover/rover/core/services/worktree.py",
+   "tools/flow/rover/rover/rebase/commands/rebase.py",
+   "tools/flow/rover/rover/rebase/services/rebaser.py"
+  ],
+  "test_files": [],
+  "n_files": 3,
+  "subject": "fix(rover): fix rebase all \u2014 skip stale worktrees, thread auth env",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "0cfc753b1c1e3d723c17e9aa18e233b6a6ce08c2",
+  "changed_defs": [
+   "git_push",
+   "git_pull_rebase",
+   "push",
+   "_recover_and_push"
+  ],
+  "callers": [
+   [
+    "git_push",
+    [
+     "tools/flow/rover/rover/commit/services/committer.py"
+    ]
+   ],
+   [
+    "git_pull_rebase",
+    [
+     "tools/flow/rover/rover/commit/services/committer.py"
+    ]
+   ],
+   [
+    "push",
+    [
+     "tools/flow/rover/rover/commit/services/batch_committer.py"
+    ]
+   ],
+   [
+    "_recover_and_push",
+    [
+     "tools/flow/rover/rover/commit/services/committer.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/flow/rover/rover/commit/integrations/git.py",
+   "tools/flow/rover/rover/commit/services/batch_committer.py",
+   "tools/flow/rover/rover/commit/services/committer.py"
+  ],
+  "test_files": [
+   "tools/flow/rover/tests/test_batch_committer.py"
+  ],
+  "n_files": 4,
+  "subject": "feat(rover): thread resolve_auth_env into commit/push path",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "a0aa52548bfae2dbf3d2274a45f3a5d3e6c9e1f4",
+  "changed_defs": [
+   "run_git",
+   "fetch",
+   "pull_main",
+   "has_remote_changes"
+  ],
+  "callers": [
+   [
+    "run_git",
+    [
+     "tools/flow/rover/rover/integrations/git.py"
+    ]
+   ],
+   [
+    "fetch",
+    [
+     "tools/flow/rover/rover/services/puller.py"
+    ]
+   ],
+   [
+    "pull_main",
+    [
+     "tools/flow/rover/rover/services/puller.py"
+    ]
+   ],
+   [
+    "has_remote_changes",
+    [
+     "tools/flow/rover/rover/services/puller.py"
+    ]
+   ]
+  ],
+  "src_files": [
+   "tools/flow/rover/rover/integrations/git.py",
+   "tools/flow/rover/rover/schemas/config.py",
+   "tools/flow/rover/rover/services/discovery.py",
+   "tools/flow/rover/rover/services/puller.py"
+  ],
+  "test_files": [
+   "tools/flow/rover/tests/test_config_schema.py",
+   "tools/flow/rover/tests/test_discovery.py",
+   "tools/flow/rover/tests/test_puller.py"
+  ],
+  "n_files": 7,
+  "subject": "feat(rover): per-repo auth via owner \u2192 gh user mapping",
+  "n_caller_files": 2
+ },
+ {
+  "sha": "11d0a5cbf406cfae5166b7783afd27d93532ee19",
+  "changed_defs": [
+   "stop",
+   "is_running",
+   "_create_pod",
+   "_wait_for_pod_ready",
+   "_cleanup_existing_pod",
+   "list_tunnels"
+  ],
+  "callers": [
+   [
+    "stop",
+    [
+     "plumber/src/plumber/cli.py"
+    ]
+   ],
+   [
+    "is_running",
+    [
+     "plumber/src/plumber/cli.py"
+    ]
+   ],
+   [
+    "_create_pod",
+    [
+     "plumber/src/plumber/adapters/k8s.py"
+    ]
+   ],
+   [
+    "_wait_for_pod_ready",
+    [
+     "plumber/src/plumber/adapters/k8s.py"
+    ]
+   ],
+   [
+    "_cleanup_existing_pod",
+    [
+     "plumber/src/plumber/adapters/k8s.py"
+    ]
+   ],
+   [
+    "list_tunnels",
+    []
+   ]
+  ],
+  "src_files": [
+   "plumber/src/plumber/adapters/k8s.py",
+   "plumber/src/plumber/cli.py",
+   "plumber/src/plumber/config.py",
+   "plumber/src/plumber/models.py"
+  ],
+  "test_files": [],
+  "n_files": 4,
+  "subject": "feat(plumber): add multi-cluster support with port prefix",
+  "n_caller_files": 2
+ }
+]

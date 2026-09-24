@@ -1,0 +1,19 @@
+{
+ "id": "instrument-branch-prefix",
+ "kind": "feature",
+ "start": "75c53d9241211a2fcbd3899f4d8f346b11f59042",
+ "ref": "72f3c8febe86f8dadeb7b8493db68e1ad3ac6910",
+ "expected_src": [
+  "tools/orch/dao-cli/dao_cli/core/registry.py",
+  "tools/orch/instrument/instrument/core/initiative.py"
+ ],
+ "ref_tests": [
+  "tools/orch/dao-cli/tests/dao_cli/test_registry.py",
+  "tools/orch/instrument/tests/test_base_branch.py"
+ ],
+ "suites": [
+  "tools/orch/dao-cli",
+  "tools/orch/instrument"
+ ],
+ "ref_diff_lines": 572
+}

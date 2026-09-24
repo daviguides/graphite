@@ -1,0 +1,19 @@
+{
+ "id": "marshal-resolve-by-entry",
+ "kind": "signature",
+ "start": "1dcd421f51f428fb5e1df61f16f7a192e2620351",
+ "ref": "efca286a1bcc1885b2fb93b8b80787af51f2601a",
+ "expected_src": [
+  "tools/orch/marshal/marshal_cli/commands/run.py",
+  "tools/orch/marshal/marshal_cli/core/dispatch.py"
+ ],
+ "ref_tests": [
+  "tools/orch/marshal/tests/test_dispatch.py",
+  "tools/orch/marshal/tests/test_marshal_watching.py",
+  "tools/orch/marshal/tests/test_run_command.py"
+ ],
+ "suites": [
+  "tools/orch/marshal"
+ ],
+ "ref_diff_lines": 1023
+}

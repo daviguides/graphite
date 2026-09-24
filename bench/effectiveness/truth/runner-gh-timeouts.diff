@@ -1,0 +1,297 @@
+diff --git a/tools/orch/runner/runner/core/hooks.py b/tools/orch/runner/runner/core/hooks.py
+index 45e40d0..d009abb 100644
+--- a/tools/orch/runner/runner/core/hooks.py
++++ b/tools/orch/runner/runner/core/hooks.py
+@@ -25,6 +25,38 @@ from runner.display import (
+     print_warning,
+ )
+ 
++# Every gh call is bounded: a stuck gh would otherwise hold the whole
++# sequential milestone. Merge gets longer because GitHub may run
++# mergeability checks inline.
++_GH_TIMEOUT_S = 30
++_GH_MERGE_TIMEOUT_S = 60
++
++
++def _run_gh(
++    cmd: list[str],
++    run_env: dict[str, str] | None,
++    timeout: float = _GH_TIMEOUT_S,
++) -> subprocess.CompletedProcess:
++    """Run a gh command with auth env and a timeout.
++
++    A timeout comes back as a failed CompletedProcess whose stderr says
++    "timed out", so callers classify it like any network failure
++    instead of handling a second exception type.
++    """
++    try:
++        return subprocess.run(
++            cmd,
++            env=run_env,
++            capture_output=True,
++            text=True,
++            timeout=timeout,
++        )
++    except subprocess.TimeoutExpired:
++        return subprocess.CompletedProcess(
++            cmd, 124, stdout="",
++            stderr=f"gh timed out after {timeout:.0f}s",
++        )
++
+ 
+ def _default_base_ref(cwd: Path | None = None) -> str:
+     """Remote ref of the repo's default branch: origin/main or origin/master.
+@@ -1280,11 +1312,10 @@ def _merge_with_retries(
+     for attempt in range(len(_MERGE_RETRY_BACKOFF_S) + 1):
+         for extra_flags, label in _MERGE_STRATEGIES:
+             print_step(f"gh pr merge {label}")
+-            merge = subprocess.run(
++            merge = _run_gh(
+                 [*merge_base, *extra_flags],
+-                env=run_env,
+-                capture_output=True,
+-                text=True,
++                run_env,
++                timeout=_GH_MERGE_TIMEOUT_S,
+             )
+             if merge.returncode == 0:
+                 return label, ""
+@@ -1450,7 +1481,7 @@ def execute_finalizing(
+         # merge` on an already-merged PR always fails, which would
+         # otherwise loop forever. Treat it as success and proceed
+         # straight to cleanup, same as the zero-diff skip above.
+-        if _verify_pr_merged(pr_number):
++        if _verify_pr_merged(pr_number, env=env):
+             print_step(
+                 f"PR #{pr_number} already merged — skipping merge"
+             )
+@@ -1478,21 +1509,14 @@ def execute_finalizing(
+ 
+         # 1. Mark PR as ready (if draft)
+         print_step("gh pr ready")
+-        subprocess.run(
+-            ["gh", "pr", "ready", str(pr_number)],
+-            env=run_env,
+-            capture_output=True,
+-            text=True,
+-        )
++        _run_gh(["gh", "pr", "ready", str(pr_number)], run_env)
+         # Ignore errors: PR may already be ready
+ 
+         # Fix 1: check if PR was closed by force-push and reopen
+-        pr_state = subprocess.run(
++        pr_state = _run_gh(
+             ["gh", "pr", "view", str(pr_number),
+              "--json", "state", "-q", ".state"],
+-            env=run_env,
+-            capture_output=True,
+-            text=True,
++            run_env,
+         )
+         if (
+             pr_state.returncode == 0
+@@ -1502,12 +1526,7 @@ def execute_finalizing(
+                 f"PR #{pr_number} was closed (likely by "
+                 f"force-push). Reopening."
+             )
+-            reopen = subprocess.run(
+-                ["gh", "pr", "reopen", str(pr_number)],
+-                env=run_env,
+-                capture_output=True,
+-                text=True,
+-            )
++            reopen = _run_gh(["gh", "pr", "reopen", str(pr_number)], run_env)
+             if reopen.returncode != 0:
+                 print_error(
+                     f"failed to reopen PR #{pr_number}: "
+@@ -1520,12 +1539,7 @@ def execute_finalizing(
+                 )
+             # Mark as ready again after reopen (reopen
+             # restores draft state)
+-            subprocess.run(
+-                ["gh", "pr", "ready", str(pr_number)],
+-                env=run_env,
+-                capture_output=True,
+-                text=True,
+-            )
++            _run_gh(["gh", "pr", "ready", str(pr_number)], run_env)
+             print_success(
+                 f"PR #{pr_number} reopened and ready"
+             )
+@@ -1741,7 +1755,7 @@ def _finalize_cleanup(
+     branch_deleted = False
+     if branch:
+         print_step(f"deleting remote branch {branch}")
+-        result = subprocess.run(
++        result = _run_gh(
+             [
+                 "gh",
+                 "api",
+@@ -1750,9 +1764,7 @@ def _finalize_cleanup(
+                 "-X",
+                 "DELETE",
+             ],
+-            env=run_env,
+-            capture_output=True,
+-            text=True,
++            run_env,
+         )
+         if result.returncode == 0:
+             branch_deleted = True
+diff --git a/tools/orch/runner/runner/core/state.py b/tools/orch/runner/runner/core/state.py
+index 8de15f2..63e1bf5 100644
+--- a/tools/orch/runner/runner/core/state.py
++++ b/tools/orch/runner/runner/core/state.py
+@@ -10,6 +10,7 @@ import time
+ from pathlib import Path
+ from typing import Any
+ 
++from continuum_core.github import resolve_auth_env
+ from dao_cli.core.git import (
+     detect_task_name,
+     find_worktree_path,
+@@ -302,14 +303,21 @@ def _pr_is_merged(task_name: str) -> bool:
+             # No PR at all: allow cleanup if task is done
+             return task_status == "done"
+ 
++        # Same account resolution as the hooks: bare gh uses the
++        # default account, which may not see this repo, and a merged PR
++        # would read as unmerged.
++        auth = resolve_auth_env(
++            repo_path=find_worktree_path(task=task_name),
++        )
+         result = subprocess.run(
+             [
+                 "gh", "pr", "view", str(pr_number),
+                 "--json", "state", "-q", ".state",
+             ],
++            env={**os.environ, **auth} if auth else None,
+             capture_output=True,
+             text=True,
+-            timeout=10,
++            timeout=30,
+         )
+         if result.returncode == 0:
+             state = result.stdout.strip()
+diff --git a/tools/orch/runner/tests/test_execute_finalizing_idempotent.py b/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
+index e00a934..67a5be3 100644
+--- a/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
++++ b/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
+@@ -72,7 +72,7 @@ class TestExecuteFinalizingAlreadyMerged:
+             )
+ 
+         assert result.result == FinalizeResult.MERGED
+-        mock_verify.assert_called_once_with(217)
++        mock_verify.assert_called_once_with(217, env={})
+         # No `gh pr ready` / `gh pr merge` attempt at all.
+         mock_subprocess_run.assert_not_called()
+         mock_cleanup.assert_called_once()
+diff --git a/tools/orch/runner/tests/test_gh_hygiene.py b/tools/orch/runner/tests/test_gh_hygiene.py
+new file mode 100644
+index 0000000..ea0257a
+--- /dev/null
++++ b/tools/orch/runner/tests/test_gh_hygiene.py
+@@ -0,0 +1,103 @@
++"""Every gh subprocess carries auth env and a timeout (WS1-T10, R06)."""
++
++import ast
++import subprocess
++from pathlib import Path
++from unittest.mock import MagicMock, patch
++
++import pytest
++
++from runner.core import hooks
++
++CORE = Path(hooks.__file__).parent
++FILES = [CORE / "hooks.py", CORE / "state.py"]
++
++
++def _is_gh_command(node: ast.AST, source: str) -> bool:
++    if isinstance(node, ast.List) and node.elts:
++        first = node.elts[0]
++        return isinstance(first, ast.Constant) and first.value == "gh"
++    return False
++
++
++def _gh_subprocess_calls():
++    for path in FILES:
++        source = path.read_text()
++        tree = ast.parse(source)
++        for node in ast.walk(tree):
++            if not isinstance(node, ast.Call):
++                continue
++            func = node.func
++            if not (
++                isinstance(func, ast.Attribute)
++                and func.attr == "run"
++                and isinstance(func.value, ast.Name)
++                and func.value.id == "subprocess"
++            ):
++                continue
++            if node.args and _is_gh_command(node.args[0], source):
++                yield path.name, node
++
++
++@pytest.mark.parametrize(
++    "kwarg", ["timeout", "env"],
++)
++def test_every_literal_gh_call_has(kwarg):
++    missing = [
++        f"{name}:{node.lineno}"
++        for name, node in _gh_subprocess_calls()
++        if kwarg not in {k.arg for k in node.keywords}
++    ]
++    assert missing == [], f"gh subprocess without {kwarg}= at {missing}"
++
++
++def test_run_gh_timeout_classifies_as_auth_or_network():
++    with patch.object(
++        hooks.subprocess, "run",
++        side_effect=subprocess.TimeoutExpired(cmd=["gh"], timeout=30),
++    ):
++        result = hooks._run_gh(["gh", "pr", "view", "1"], {}, timeout=30)
++    assert result.returncode != 0
++    assert hooks._classify_merge_failure(result.stderr) == "auth_or_network"
++
++
++def test_merge_ladder_uses_long_timeout():
++    calls = []
++
++    def fake_run(cmd, **kwargs):
++        calls.append(kwargs.get("timeout"))
++        return MagicMock(returncode=0, stdout="", stderr="")
++
++    with patch.object(hooks.subprocess, "run", side_effect=fake_run):
++        label, _ = hooks._merge_with_retries(
++            ["gh", "pr", "merge", "1", "--squash"], {},
++        )
++    assert label is not None
++    assert calls and all(t == hooks._GH_MERGE_TIMEOUT_S for t in calls)
++
++
++def test_pr_is_merged_passes_auth_env(tmp_path):
++    from runner.core import state
++
++    yaml_path = tmp_path / "task.yaml"
++    yaml_path.write_text("pr: 7\nstatus: in_progress\n")
++    seen = {}
++
++    def fake_run(cmd, **kwargs):
++        seen.update(kwargs)
++        return MagicMock(returncode=0, stdout="MERGED\n", stderr="")
++
++    with (
++        patch(
++            "dao_cli.core.project.resolve_task_yaml_path",
++            return_value=yaml_path,
++        ),
++        patch.object(state, "find_worktree_path", return_value=tmp_path),
++        patch.object(
++            state, "resolve_auth_env", return_value={"GH_TOKEN": "t"},
++        ),
++        patch.object(state.subprocess, "run", side_effect=fake_run),
++    ):
++        assert state._pr_is_merged("t1") is True
++    assert seen["env"]["GH_TOKEN"] == "t"
++    assert seen["timeout"]

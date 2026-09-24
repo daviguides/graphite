@@ -1,0 +1,423 @@
+diff --git a/tools/flow/rover/rover/commit/integrations/git.py b/tools/flow/rover/rover/commit/integrations/git.py
+index 04c06c1..8d6f97c 100644
+--- a/tools/flow/rover/rover/commit/integrations/git.py
++++ b/tools/flow/rover/rover/commit/integrations/git.py
+@@ -8,10 +8,12 @@ from pathlib import Path
+ def run_git(
+     *args: str,
+     cwd: Path | None = None,
++    extra_env: dict[str, str] | None = None,
+ ) -> subprocess.CompletedProcess[str]:
+     """Execute git command and return result.
+ 
+-    Strips GITHUB_TOKEN to let gh credential helper handle auth.
++    Strips GITHUB_TOKEN by default, then overlays extra_env
++    (e.g. a resolved token for a specific owner).
+ 
+     Raises:
+         subprocess.CalledProcessError: If git exits non-zero.
+@@ -21,6 +23,8 @@ def run_git(
+         for k, v in os.environ.items()
+         if k != "GITHUB_TOKEN"
+     }
++    if extra_env:
++        run_env.update(extra_env)
+ 
+     return subprocess.run(
+         ["git", *args],
+@@ -147,9 +151,14 @@ def commit_with_editor(
+     return ""
+ 
+ 
+-def git_push() -> str:
++def git_push(
++    extra_env: dict[str, str] | None = None,
++) -> str:
+     """Push current branch to origin.
+ 
++    Args:
++        extra_env: Additional env vars (e.g. resolved GITHUB_TOKEN).
++
+     Returns:
+         Git push stderr (push output goes to stderr).
+     """
+@@ -158,7 +167,10 @@ def git_push() -> str:
+     )
+     branch = branch_result.stdout.strip()
+ 
+-    result = run_git("push", "-u", "origin", branch)
++    result = run_git(
++        "push", "-u", "origin", branch,
++        extra_env=extra_env,
++    )
+     return result.stderr
+ 
+ 
+@@ -170,13 +182,18 @@ def is_non_fast_forward(stderr: str) -> bool:
+     return "non-fast-forward" in stderr
+ 
+ 
+-def git_pull_rebase() -> subprocess.CompletedProcess[str]:
++def git_pull_rebase(
++    extra_env: dict[str, str] | None = None,
++) -> subprocess.CompletedProcess[str]:
+     """Pull with rebase.
+ 
++    Args:
++        extra_env: Additional env vars (e.g. resolved GITHUB_TOKEN).
++
+     Raises:
+         subprocess.CalledProcessError: On conflicts or errors.
+     """
+-    return run_git("pull", "--rebase")
++    return run_git("pull", "--rebase", extra_env=extra_env)
+ 
+ 
+ def get_conflict_files() -> list[str]:
+diff --git a/tools/flow/rover/rover/commit/services/batch_committer.py b/tools/flow/rover/rover/commit/services/batch_committer.py
+index dd2b454..2dbe8fb 100644
+--- a/tools/flow/rover/rover/commit/services/batch_committer.py
++++ b/tools/flow/rover/rover/commit/services/batch_committer.py
+@@ -2,6 +2,7 @@
+ 
+ Uses CWD-centric commit workflow: chdir into each repo,
+ generate AI message, commit, and push.
++Resolves per-repo auth from owner → gh_user mapping.
+ """
+ 
+ import os
+@@ -12,6 +13,11 @@ from pathlib import Path
+ 
+ from rover.commit.services.committer import execute_commit, push
+ from rover.commit.services.generator import generate_message
++from rover.core.services.discovery import load_cache, load_config
++from rover.core.services.puller import (
++    _build_owner_index,
++    resolve_auth_env,
++)
+ from rover.display import print_commit_panel, print_info
+ 
+ 
+@@ -52,6 +58,9 @@ def batch_commit(
+ ) -> BatchReport:
+     """Commit and push each dirty repo/worktree.
+ 
++    Resolves per-repo auth from owner → gh_user mapping
++    so repos owned by different GitHub accounts push correctly.
++
+     Args:
+         dirty_paths: Paths to dirty repos/worktrees.
+         no_push: Skip push after commit.
+@@ -59,6 +68,13 @@ def batch_commit(
+     Returns:
+         BatchReport with per-path results.
+     """
++    config = load_config()
++    try:
++        cache = load_cache()
++        owner_index = _build_owner_index(cache.repos)
++    except FileNotFoundError:
++        owner_index = {}
++
+     report = BatchReport()
+ 
+     for path in dirty_paths:
+@@ -66,6 +82,9 @@ def batch_commit(
+         print_info(f"Processing {name} ({path})...")
+ 
+         try:
++            owner = owner_index.get(path)
++            env = resolve_auth_env(owner, config)
++
+             with _working_dir(path):
+                 msg = generate_message(amend=False)
+                 print_commit_panel(msg)
+@@ -73,7 +92,7 @@ def batch_commit(
+                 execute_commit(msg.format(), amend=False)
+ 
+                 if not no_push:
+-                    push()
++                    push(env=env)
+ 
+             status = "committed"
+             report.results.append(
+diff --git a/tools/flow/rover/rover/commit/services/committer.py b/tools/flow/rover/rover/commit/services/committer.py
+index a3f6a3d..0bb43ba 100644
+--- a/tools/flow/rover/rover/commit/services/committer.py
++++ b/tools/flow/rover/rover/commit/services/committer.py
+@@ -63,15 +63,20 @@ def execute_commit_editor(
+         ) from e
+ 
+ 
+-def push() -> str:
++def push(
++    env: dict[str, str] | None = None,
++) -> str:
+     """Push current branch with auto-recovery.
+ 
++    Args:
++        env: Extra env vars for git (e.g. resolved GITHUB_TOKEN).
++
+     Raises:
+         GitError: If push fails after recovery.
+         ConflictError: If conflicts can't be resolved.
+     """
+     try:
+-        return git_push()
++        return git_push(extra_env=env)
+     except subprocess.CalledProcessError as e:
+         if not is_non_fast_forward(e.stderr):
+             raise GitError(
+@@ -80,15 +85,17 @@ def push() -> str:
+                 )
+             ) from e
+ 
+-        return _recover_and_push()
++        return _recover_and_push(env)
+ 
+ 
+-def _recover_and_push() -> str:
++def _recover_and_push(
++    env: dict[str, str] | None = None,
++) -> str:
+     """Pull --rebase, resolve conflicts if needed, push."""
+     print_info("Remote ahead, pulling with rebase...")
+ 
+     try:
+-        git_pull_rebase()
++        git_pull_rebase(extra_env=env)
+     except subprocess.CalledProcessError as e:
+         conflicts = get_conflict_files()
+         if not conflicts:
+@@ -103,7 +110,7 @@ def _recover_and_push() -> str:
+ 
+     print_info("Retrying push...")
+     try:
+-        return git_push()
++        return git_push(extra_env=env)
+     except subprocess.CalledProcessError as e:
+         raise GitError(
+             ERROR_GIT_PUSH_FAILED.format(
+diff --git a/tools/flow/rover/tests/test_batch_committer.py b/tools/flow/rover/tests/test_batch_committer.py
+new file mode 100644
+index 0000000..bcf5c8a
+--- /dev/null
++++ b/tools/flow/rover/tests/test_batch_committer.py
+@@ -0,0 +1,217 @@
++"""Tests for batch_committer auth env threading."""
++
++from datetime import UTC, datetime
++from pathlib import Path
++from unittest.mock import MagicMock, patch
++
++from rover.commit.services.batch_committer import batch_commit
++from rover.core.schemas.config import RepoCache, RepoEntry, RoverConfig
++
++AUTH_CONFIG = RoverConfig(
++    owners=["daviguides", "bespinus"],
++    auth={
++        "daviguides": "daviguides",
++        "bespinus": "davi-andrade-bespin",
++    },
++)
++
++
++def _make_cache(
++    repos: list[tuple[Path, str | None]],
++) -> RepoCache:
++    """Build a RepoCache from (path, owner) pairs."""
++    return RepoCache(
++        root=repos[0][0].parent if repos else Path("/tmp"),
++        updated_at=datetime.now(tz=UTC),
++        repos=[
++            RepoEntry(name=p.name, path=p, owner=owner)
++            for p, owner in repos
++        ],
++    )
++
++
++class TestBatchCommitAuthEnv:
++    """Verify auth env is resolved per repo and threaded to push."""
++
++    def test_push_receives_resolved_env(
++        self, tmp_path: Path,
++    ) -> None:
++        repo_a = tmp_path / "repo-a"
++        repo_a.mkdir()
++        token_env = {"GITHUB_TOKEN": "ghp_bespin123"}
++
++        cache = _make_cache([(repo_a, "bespinus")])
++
++        mock_push = MagicMock()
++
++        with (
++            patch(
++                "rover.commit.services.batch_committer.load_config",
++                return_value=AUTH_CONFIG,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.load_cache",
++                return_value=cache,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.resolve_auth_env",
++                return_value=token_env,
++            ) as mock_resolve,
++            patch(
++                "rover.commit.services.batch_committer.generate_message",
++            ) as mock_gen,
++            patch(
++                "rover.commit.services.batch_committer.execute_commit",
++            ),
++            patch(
++                "rover.commit.services.batch_committer.push",
++                mock_push,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.print_commit_panel",
++            ),
++            patch(
++                "rover.commit.services.batch_committer.print_info",
++            ),
++        ):
++            mock_gen.return_value.format.return_value = "msg"
++            report = batch_commit([repo_a])
++
++        assert report.results[0].status == "committed"
++        mock_resolve.assert_called_once_with("bespinus", AUTH_CONFIG)
++        mock_push.assert_called_once_with(env=token_env)
++
++    def test_push_receives_none_for_no_owner(
++        self, tmp_path: Path,
++    ) -> None:
++        repo_a = tmp_path / "repo-a"
++        repo_a.mkdir()
++
++        cache = _make_cache([(repo_a, None)])
++
++        mock_push = MagicMock()
++
++        with (
++            patch(
++                "rover.commit.services.batch_committer.load_config",
++                return_value=AUTH_CONFIG,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.load_cache",
++                return_value=cache,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.resolve_auth_env",
++                return_value=None,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.generate_message",
++            ) as mock_gen,
++            patch(
++                "rover.commit.services.batch_committer.execute_commit",
++            ),
++            patch(
++                "rover.commit.services.batch_committer.push",
++                mock_push,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.print_commit_panel",
++            ),
++            patch(
++                "rover.commit.services.batch_committer.print_info",
++            ),
++        ):
++            mock_gen.return_value.format.return_value = "msg"
++            batch_commit([repo_a])
++
++        mock_push.assert_called_once_with(env=None)
++
++    def test_no_push_skips_auth_resolution_call(
++        self, tmp_path: Path,
++    ) -> None:
++        repo_a = tmp_path / "repo-a"
++        repo_a.mkdir()
++
++        cache = _make_cache([(repo_a, "bespinus")])
++
++        mock_push = MagicMock()
++
++        with (
++            patch(
++                "rover.commit.services.batch_committer.load_config",
++                return_value=AUTH_CONFIG,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.load_cache",
++                return_value=cache,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.resolve_auth_env",
++            ),
++            patch(
++                "rover.commit.services.batch_committer.generate_message",
++            ) as mock_gen,
++            patch(
++                "rover.commit.services.batch_committer.execute_commit",
++            ),
++            patch(
++                "rover.commit.services.batch_committer.push",
++                mock_push,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.print_commit_panel",
++            ),
++            patch(
++                "rover.commit.services.batch_committer.print_info",
++            ),
++        ):
++            mock_gen.return_value.format.return_value = "msg"
++            batch_commit([repo_a], no_push=True)
++
++        mock_push.assert_not_called()
++
++    def test_missing_cache_graceful(
++        self, tmp_path: Path,
++    ) -> None:
++        """No cache → owner_index empty → env=None."""
++        repo_a = tmp_path / "repo-a"
++        repo_a.mkdir()
++
++        mock_push = MagicMock()
++
++        with (
++            patch(
++                "rover.commit.services.batch_committer.load_config",
++                return_value=AUTH_CONFIG,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.load_cache",
++                side_effect=FileNotFoundError,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.resolve_auth_env",
++                return_value=None,
++            ) as mock_resolve,
++            patch(
++                "rover.commit.services.batch_committer.generate_message",
++            ) as mock_gen,
++            patch(
++                "rover.commit.services.batch_committer.execute_commit",
++            ),
++            patch(
++                "rover.commit.services.batch_committer.push",
++                mock_push,
++            ),
++            patch(
++                "rover.commit.services.batch_committer.print_commit_panel",
++            ),
++            patch(
++                "rover.commit.services.batch_committer.print_info",
++            ),
++        ):
++            mock_gen.return_value.format.return_value = "msg"
++            report = batch_commit([repo_a])
++
++        assert report.results[0].status == "committed"
++        mock_resolve.assert_called_once_with(None, AUTH_CONFIG)
++        mock_push.assert_called_once_with(env=None)

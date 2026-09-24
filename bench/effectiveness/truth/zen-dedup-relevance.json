@@ -1,0 +1,19 @@
+{
+ "id": "zen-dedup-relevance",
+ "kind": "feature",
+ "start": "0ea80340003ddf155c7e93e35e26746d79982ac6",
+ "ref": "e73dae002bdd9c8bd167ec5bf44cf02a2f84ae3d",
+ "expected_src": [
+  "tools/context/zen-review/zen_review/cli/main.py",
+  "tools/context/zen-review/zen_review/models/review.py",
+  "tools/context/zen-review/zen_review/orchestration/dedup.py",
+  "tools/context/zen-review/zen_review/orchestration/orchestrator.py"
+ ],
+ "ref_tests": [
+  "tools/context/zen-review/tests/unit/test_dedup.py"
+ ],
+ "suites": [
+  "tools/context/zen-review"
+ ],
+ "ref_diff_lines": 745
+}

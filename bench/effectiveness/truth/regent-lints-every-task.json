@@ -1,0 +1,18 @@
+{
+ "id": "regent-lints-every-task",
+ "kind": "refactor",
+ "start": "6df389926453ee076d91e0ea26ddd99de8f3f6d5",
+ "ref": "082b68faafd52f942cad709b599ae799fb1e3dd0",
+ "expected_src": [
+  "tools/orch/regent/regent/core/lint_context.py",
+  "tools/orch/regent/regent/core/lints.py"
+ ],
+ "ref_tests": [
+  "tools/orch/regent/tests/test_lint_context.py",
+  "tools/orch/regent/tests/test_lints.py"
+ ],
+ "suites": [
+  "tools/orch/regent"
+ ],
+ "ref_diff_lines": 450
+}

@@ -1,0 +1,19 @@
+{
+ "id": "runner-durable-attempts",
+ "kind": "feature",
+ "start": "be26f0a09d15f9da7258a292ef11c0fb4bd74aa7",
+ "ref": "7553e7eb6e1a14320e43be4e6699e80dd8be44af",
+ "expected_src": [
+  "tools/orch/runner/runner/core/attempts.py",
+  "tools/orch/runner/runner/core/engine.py",
+  "tools/orch/runner/runner/core/hooks.py"
+ ],
+ "ref_tests": [
+  "tools/orch/runner/tests/test_attempt_counters.py",
+  "tools/orch/runner/tests/test_execute_finalizing_idempotent.py"
+ ],
+ "suites": [
+  "tools/orch/runner"
+ ],
+ "ref_diff_lines": 575
+}

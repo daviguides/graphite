@@ -1,0 +1,348 @@
+diff --git a/tools/orch/runner/runner/core/engine.py b/tools/orch/runner/runner/core/engine.py
+index 47f1dfa..8a701bd 100644
+--- a/tools/orch/runner/runner/core/engine.py
++++ b/tools/orch/runner/runner/core/engine.py
+@@ -6,6 +6,7 @@ driving mode transitions automatically or with manual pauses.
+ 
+ import asyncio
+ import os
++import time
+ from datetime import UTC, datetime
+ from pathlib import Path
+ 
+@@ -84,6 +85,11 @@ MAX_TRANSIENT_RETRIES = 3
+ TRANSIENT_RETRY_BACKOFF_SECONDS = (2, 8, 20)
+ 
+ 
++
++def _elapsed_ms(started: float) -> int:
++    """Milliseconds since a time.monotonic() reading."""
++    return int((time.monotonic() - started) * 1000)
++
+ def _is_transient_error(error_text: str) -> bool:
+     """Check whether an SDK error looks like a transient failure.
+ 
+@@ -515,6 +521,7 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+         # GitHub close the PR in the finalizing loop incident.
+         if current_mode != "FINALIZING":
+             emitter.emit("pre_hook", hook="rebase")
++            rebase_started = time.monotonic()
+             # Capture both runner console and rover console output
+             import io as _io
+ 
+@@ -533,6 +540,11 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+                     )
+             finally:
+                 rover_console.file = _rover_orig_file
++            emitter.emit(
++                "pre_hook_done",
++                hook="rebase",
++                hook_duration_ms=_elapsed_ms(rebase_started),
++            )
+             runner_output = pre_capture.get().strip()
+             rover_output = _rover_buf.getvalue().strip()
+             # Combine: rover output first, then runner output
+@@ -606,6 +618,7 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+ 
+                 # Post-hooks panel
+                 emitter.emit("post_hooks_start", mode=current_mode)
++                post_hooks_started = time.monotonic()
+                 with console.capture() as post_fin:
+                     post_hook_dao_update(
+                         task_name=config.task_name,
+@@ -634,7 +647,11 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+                             border_style="dim",
+                         )
+                     )
+-                emitter.emit("post_hooks_done", mode=current_mode)
++                emitter.emit(
++                    "post_hooks_done",
++                    mode=current_mode,
++                    hook_duration_ms=_elapsed_ms(post_hooks_started),
++                )
+ 
+                 # Cleanup worktree
+                 if not config.skip_cleanup:
+@@ -685,6 +702,7 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+         validation_results = None
+         if current_mode == "VALIDATING":
+             emitter.emit("pre_hook", hook="validation")
++            validation_started = time.monotonic()
+             validation_results = pre_hook_validation(
+                 cwd=cwd,
+                 task_name=config.task_name,
+@@ -693,6 +711,7 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+             emitter.emit(
+                 "pre_hook_result",
+                 hook="validation",
++                hook_duration_ms=_elapsed_ms(validation_started),
+                 test_passed=validation_results.get("test_passed"),
+                 check_passed=validation_results.get("check_passed"),
+                 checkboxes_marked=validation_results.get(
+@@ -884,6 +903,7 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+ 
+         # Post-hooks: deterministic state + git ops
+         emitter.emit("post_hooks_start", mode=current_mode)
++        post_hooks_started = time.monotonic()
+         with console.capture() as post_capture:
+             post_hook_dao_update(
+                 task_name=config.task_name,
+@@ -920,7 +940,11 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+                 task_name=config.task_name,
+                 cwd=cwd,
+             )
+-        emitter.emit("post_hooks_done", mode=current_mode)
++        emitter.emit(
++            "post_hooks_done",
++            mode=current_mode,
++            hook_duration_ms=_elapsed_ms(post_hooks_started),
++        )
+         post_output = post_capture.get().strip()
+         if post_output:
+             console.print(
+@@ -1030,6 +1054,8 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+             turns=record.num_turns,
+             cost_usd=round(record.total_cost_usd, 4),
+             session_id=record.session_id,
++            mode_wall_ms=record.wall_ms,
++            first_edit_ms=record.first_edit_ms,
+         )
+         emitter.emit(
+             "session_metrics",
+diff --git a/tools/orch/runner/runner/core/models.py b/tools/orch/runner/runner/core/models.py
+index 0c68abd..bb0bfb3 100644
+--- a/tools/orch/runner/runner/core/models.py
++++ b/tools/orch/runner/runner/core/models.py
+@@ -107,6 +107,8 @@ class SessionRecord:
+     last_text: str = ""
+     continues_session: bool = False
+     mode_records: list[ModeRecord] = field(default_factory=list)
++    wall_ms: int = 0
++    first_edit_ms: int | None = None
+ 
+ 
+ @dataclass
+diff --git a/tools/orch/runner/runner/core/sdk_wrapper.py b/tools/orch/runner/runner/core/sdk_wrapper.py
+index 8934c07..d13ac6d 100644
+--- a/tools/orch/runner/runner/core/sdk_wrapper.py
++++ b/tools/orch/runner/runner/core/sdk_wrapper.py
+@@ -12,6 +12,7 @@ configured plugins, permissions, and model settings.
+ import asyncio
+ import json
+ import os
++import time
+ from pathlib import Path
+ from typing import TYPE_CHECKING, Literal
+ 
+@@ -27,6 +28,7 @@ from claude_agent_sdk import (  # type: ignore[import-untyped]
+     ThinkingBlock,
+     ToolResultBlock,
+     ToolUseBlock,
++    UserMessage,
+ )
+ from continuum_core.sdk import (
+     _pin_model,
+@@ -187,6 +189,9 @@ _TOOL_ICON_MAP: dict[str, str] = {
+ }
+ _DEFAULT_TOOL_ICON = "→"
+ 
++# Tools whose first use marks "time to first edit" for a mode.
++_EDIT_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
++
+ _WRAP_THRESHOLD = 80
+ 
+ 
+@@ -428,6 +433,8 @@ class SDKWrapper:
+ 
+         # Snapshot cumulative cost before this mode
+         cost_before = self._cumulative_cost
++        started = time.monotonic()
++        tool_started: dict[str, tuple[str, float]] = {}
+ 
+         await self._client.query(prompt)
+ 
+@@ -556,6 +563,15 @@ class SDKWrapper:
+                         elif isinstance(block, ThinkingBlock):
+                             pass  # silent
+                         elif isinstance(block, ToolUseBlock):
++                            now = time.monotonic()
++                            tool_started[block.id] = (block.name, now)
++                            if (
++                                record.first_edit_ms is None
++                                and block.name in _EDIT_TOOLS
++                            ):
++                                record.first_edit_ms = int(
++                                    (now - started) * 1000
++                                )
+                             if self._emitter:
+                                 key = _TOOL_KEY_MAP.get(block.name)
+                                 detail_val = (
+@@ -566,6 +582,7 @@ class SDKWrapper:
+                                 self._emitter.emit(
+                                     "tool_call",
+                                     tool=block.name,
++                                    tool_use_id=block.id,
+                                     detail=detail_val,
+                                 )
+                             if self._verbose:
+@@ -591,6 +608,9 @@ class SDKWrapper:
+                                         f"[red]✗[/] {str(block.content)[:100]}"
+                                     )
+ 
++                elif isinstance(message, UserMessage):
++                    self._emit_tool_results(message, tool_started)
++
+                 elif isinstance(message, TaskStartedMessage):
+                     pending_task_ids.add(message.task_id)
+                     if self._emitter:
+@@ -676,11 +696,38 @@ class SDKWrapper:
+ 
+         _flush_tool_panel()
+ 
++        # Includes the wait for background tasks after ResultMessage,
++        # which the SDK's own duration_ms does not.
++        record.wall_ms = int((time.monotonic() - started) * 1000)
++
+         if text_blocks:
+             record.last_text = text_blocks[-1]
+ 
+         return record
+ 
++    def _emit_tool_results(
++        self,
++        message: UserMessage,
++        tool_started: dict[str, tuple[str, float]],
++    ) -> None:
++        """Emit per-tool duration for each tool result in a user turn."""
++        if not self._emitter or not isinstance(message.content, list):
++            return
++        for block in message.content:
++            if not isinstance(block, ToolResultBlock):
++                continue
++            started = tool_started.pop(block.tool_use_id, None)
++            if started is None:
++                continue
++            name, t0 = started
++            self._emitter.emit(
++                "tool_result",
++                tool=name,
++                tool_use_id=block.tool_use_id,
++                duration_ms=int((time.monotonic() - t0) * 1000),
++                is_error=bool(block.is_error),
++            )
++
+     async def send_pause(self) -> None:
+         """Send pause prompt for non-deterministic summary only.
+ 
+diff --git a/tools/orch/runner/tests/test_wall_clock_instrumentation.py b/tools/orch/runner/tests/test_wall_clock_instrumentation.py
+new file mode 100644
+index 0000000..0fd360f
+--- /dev/null
++++ b/tools/orch/runner/tests/test_wall_clock_instrumentation.py
+@@ -0,0 +1,106 @@
++"""Wall-clock instrumentation (Q01): the baseline every speed change is
++measured against. Hook durations, mode wall time (including the
++background-task wait), per-tool duration, and time to first edit."""
++
++import asyncio
++from pathlib import Path
++from unittest.mock import MagicMock
++
++from claude_agent_sdk import (
++    AssistantMessage,
++    ResultMessage,
++    ToolResultBlock,
++    ToolUseBlock,
++    UserMessage,
++)
++from test_engine_resilience import (
++    BASE_TASK_DATA,
++    _single_mode_context,
++    _success_record,
++)
++
++from runner.core.engine import run_task
++from runner.core.models import ExecutionConfig
++from runner.core.sdk_wrapper import SDKWrapper
++
++
++class _Stream:
++    def __init__(self, messages: list[object]) -> None:
++        self._messages = list(messages)
++
++    def __aiter__(self) -> _Stream:
++        return self
++
++    async def __anext__(self) -> object:
++        if not self._messages:
++            raise StopAsyncIteration
++        return self._messages.pop(0)
++
++
++async def _noop(*args: object, **kwargs: object) -> None:
++    return None
++
++
++def _wrapper(emitter: MagicMock, messages: list[object]) -> SDKWrapper:
++    w = SDKWrapper.__new__(SDKWrapper)
++    w._verbose = False
++    w._cwd = Path("/tmp")
++    w._emitter = emitter
++    w._stderr_lines = []
++    w._connected = True
++    w._cumulative_cost = 0.0
++    w._session_id = None
++    w._client = MagicMock()
++    w._client.query = _noop
++    w._client.receive_messages = lambda: _Stream(messages)
++    return w
++
++
++def _events(emitter: MagicMock, kind: str) -> list[dict]:
++    return [c.kwargs for c in emitter.emit.call_args_list if c.args[0] == kind]
++
++
++def test_sdk_records_tool_duration_first_edit_and_wall_time() -> None:
++    emitter = MagicMock()
++    messages = [
++        AssistantMessage(
++            content=[
++                ToolUseBlock(
++                    id="tu1", name="Edit", input={"file_path": "a.py"},
++                ),
++            ],
++            model="m",
++        ),
++        UserMessage(content=[ToolResultBlock(tool_use_id="tu1", content="ok")]),
++        ResultMessage(
++            subtype="result", duration_ms=5, duration_api_ms=5,
++            is_error=False, num_turns=1, session_id="s", total_cost_usd=0.0,
++        ),
++    ]
++    wrapper = _wrapper(emitter, messages)
++    record = asyncio.run(wrapper.execute("p", mode="IMPLEMENTING"))
++
++    [call] = _events(emitter, "tool_call")
++    assert call["tool_use_id"] == "tu1"
++    [result] = _events(emitter, "tool_result")
++    assert result["tool_use_id"] == "tu1"
++    assert result["tool"] == "Edit"
++    assert result["duration_ms"] >= 0
++    assert record.first_edit_ms is not None and record.first_edit_ms >= 0
++    assert record.wall_ms >= 0
++
++
++def test_engine_emits_hook_and_mode_wall_durations() -> None:
++    config = ExecutionConfig(task_name="test-task")
++    with _single_mode_context(
++        task_data=BASE_TASK_DATA,
++        execute_side_effect=[_success_record()],
++    ) as ctx:
++        asyncio.run(run_task(config))
++        emit = ctx["create_emitter"].return_value.emit
++
++    kinds = {c.args[0]: c.kwargs for c in emit.call_args_list}
++    assert kinds["pre_hook_done"]["hook"] == "rebase"
++    assert kinds["pre_hook_done"]["hook_duration_ms"] >= 0
++    assert kinds["post_hooks_done"]["hook_duration_ms"] >= 0
++    assert kinds["mode_complete"]["mode_wall_ms"] >= 0

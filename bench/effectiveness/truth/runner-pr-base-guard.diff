@@ -1,0 +1,309 @@
+diff --git a/tools/orch/runner/runner/core/engine.py b/tools/orch/runner/runner/core/engine.py
+index 42def4c..4cd7aa1 100644
+--- a/tools/orch/runner/runner/core/engine.py
++++ b/tools/orch/runner/runner/core/engine.py
+@@ -995,11 +995,20 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+                     task_name=config.task_name,
+                     cwd=cwd,
+                 )
+-            # Layer 4: validate PR targets correct base
+-            post_hook_validate_pr_target(
++            # Layer 4: validate PR targets correct base. Reported
++            # here; the merge boundary re-reads the base and refuses.
++            pr_target = post_hook_validate_pr_target(
+                 task_name=config.task_name,
+                 cwd=cwd,
+             )
++            emitter.emit(
++                "pr_target", mode=current_mode, state=pr_target,
++            )
++            if pr_target in ("mismatch", "unknown"):
++                print_warning(
++                    f"PR base check: {pr_target} — FINALIZING will "
++                    f"refuse to merge until the base is right"
++                )
+         emitter.emit(
+             "post_hooks_done",
+             mode=current_mode,
+diff --git a/tools/orch/runner/runner/core/hooks.py b/tools/orch/runner/runner/core/hooks.py
+index b313d4b..0d9decf 100644
+--- a/tools/orch/runner/runner/core/hooks.py
++++ b/tools/orch/runner/runner/core/hooks.py
+@@ -862,7 +862,7 @@ def post_hook_ensure_draft_pr(
+ def post_hook_validate_pr_target(
+     task_name: str,
+     cwd: Path | None = None,
+-) -> bool:
++) -> str:
+     """Validate that existing PR targets the correct base.
+ 
+     If task has base_branch and PR targets a different
+@@ -873,7 +873,10 @@ def post_hook_validate_pr_target(
+         cwd: Working directory.
+ 
+     Returns:
+-        True if PR target is correct (or was fixed).
++        "ok" (correct, or nothing to check), "fixed" (retargeted),
++        "mismatch" (wrong base, retarget failed) or "unknown" (could
++        not read the base). This hook only reports; the merge
++        boundary in execute_finalizing is what refuses to merge.
+     """
+     try:
+         from dao_cli.core.project import (
+@@ -885,14 +888,14 @@ def post_hook_validate_pr_target(
+             task_name=task_name,
+         )
+         if not yaml_path.exists():
+-            return True
++            return "ok"
+ 
+         task_data = load_yaml(path=yaml_path)
+         pr_number = task_data.get("pr")
+         base_branch = task_data.get("base_branch")
+ 
+         if not pr_number or not base_branch:
+-            return True
++            return "ok"
+ 
+         env = resolve_auth_env(repo_path=cwd)
+         run_env = {**os.environ, **(env or {})}
+@@ -910,11 +913,11 @@ def post_hook_validate_pr_target(
+         )
+ 
+         if result.returncode != 0:
+-            return True
++            return "unknown"
+ 
+         actual_base = result.stdout.strip()
+         if actual_base == base_branch:
+-            return True
++            return "ok"
+ 
+         print_warning(
+             f"PR #{pr_number} targets `{actual_base}` "
+@@ -935,17 +938,17 @@ def post_hook_validate_pr_target(
+                 f"PR #{pr_number} retargeted → "
+                 f"`{base_branch}`"
+             )
+-            return True
++            return "fixed"
+ 
+         print_error(
+             f"failed to fix PR base: "
+             f"{fix.stderr.strip()}"
+         )
+-        return False
++        return "mismatch"
+ 
+     except Exception as e:
+         print_warning(f"PR target validation: {e}")
+-        return True
++        return "unknown"
+ 
+ 
+ def post_hook_milestone_update(
+@@ -1391,6 +1394,44 @@ def _remote_pr_head(
+     return view.stdout.strip() or None, ""
+ 
+ 
++def _check_pr_base(
++    pr_number: int | str,
++    task_data: dict[str, Any],
++    cwd: Path,
++    run_env: dict[str, str] | None,
++) -> FinalizeOutcome | None:
++    """None if the PR targets the task's base, else why not to merge.
++
++    Read at the merge boundary, not trusted from an earlier hook: a
++    PR aimed at main while the task belongs to an umbrella would land
++    the work on main, and the umbrella check afterwards would pass on
++    a branch that never received it.
++    """
++    expected = task_data.get("base_branch") or (
++        _default_base_ref(cwd).removeprefix("origin/")
++    )
++    view = _run_gh(
++        ["gh", "pr", "view", str(pr_number),
++         "--json", "baseRefName", "-q", ".baseRefName"],
++        run_env,
++    )
++    if view.returncode != 0:
++        error = view.stderr.strip()
++        return _merge_failure_outcome(
++            _classify_merge_failure(error), pr_number,
++            f"could not read PR base: {error}",
++        )
++    actual = view.stdout.strip()
++    if actual != expected:
++        return FinalizeOutcome(
++            FinalizeResult.MERGE_FAILED,
++            f"PR #{pr_number} targets `{actual}`, task expects "
++            f"`{expected}`. Retarget the PR (gh pr edit --base "
++            f"{expected}) and re-queue.",
++        )
++    return None
++
++
+ def _bind_merge_head(
+     cwd: Path,
+     pr_number: int | str,
+@@ -1693,6 +1734,11 @@ def execute_finalizing(
+                     f"work already in {base_ref}",
+                 )
+ 
++        wrong_base = _check_pr_base(pr_number, task_data, cwd, run_env)
++        if wrong_base is not None:
++            print_error(wrong_base.detail)
++            return wrong_base
++
+         # The merge may land only the head VALIDATING approved.
+         bound = _bind_merge_head(cwd, pr_number, task_data, run_env)
+         if isinstance(bound, FinalizeOutcome):
+diff --git a/tools/orch/runner/tests/test_execute_finalizing_idempotent.py b/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
+index 33209db..16ae59b 100644
+--- a/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
++++ b/tools/orch/runner/tests/test_execute_finalizing_idempotent.py
+@@ -19,9 +19,12 @@ from runner.core.models import FinalizeResult
+ 
+ @pytest.fixture(autouse=True)
+ def _merge_head_bound():
+-    """Head binding has its own tests (test_finalize_head_binding)."""
+-    with patch(
+-        "runner.core.hooks._bind_merge_head", return_value="a" * 40,
++    """Head binding and base check have their own test modules."""
++    with (
++        patch(
++            "runner.core.hooks._bind_merge_head", return_value="a" * 40,
++        ),
++        patch("runner.core.hooks._check_pr_base", return_value=None),
+     ):
+         yield
+ 
+diff --git a/tools/orch/runner/tests/test_pr_base_boundary.py b/tools/orch/runner/tests/test_pr_base_boundary.py
+new file mode 100644
+index 0000000..ae7e094
+--- /dev/null
++++ b/tools/orch/runner/tests/test_pr_base_boundary.py
+@@ -0,0 +1,122 @@
++"""PR base is checked at the merge boundary (WS1-T7, B09)."""
++
++from pathlib import Path
++from unittest.mock import MagicMock, patch
++
++from runner.core import hooks
++from runner.core.hooks import execute_finalizing, post_hook_validate_pr_target
++from runner.core.models import FinalizeResult
++
++
++def _proc(rc: int = 0, stdout: str = "", stderr: str = "") -> MagicMock:
++    return MagicMock(returncode=rc, stdout=stdout, stderr=stderr)
++
++
++class TestCheckPrBase:
++    def test_matching_umbrella_passes(self):
++        with patch.object(hooks, "_run_gh", return_value=_proc(0, "feat/x\n")):
++            assert hooks._check_pr_base(
++                7, {"base_branch": "feat/x"}, Path("/wt"), {},
++            ) is None
++
++    def test_mismatch_blocks(self):
++        with patch.object(hooks, "_run_gh", return_value=_proc(0, "main\n")):
++            out = hooks._check_pr_base(
++                7, {"base_branch": "feat/x"}, Path("/wt"), {},
++            )
++        assert out.result == FinalizeResult.MERGE_FAILED
++        assert "feat/x" in out.detail and "main" in out.detail
++
++    def test_no_umbrella_expects_default_branch(self):
++        with (
++            patch.object(hooks, "_default_base_ref", return_value="origin/main"),
++            patch.object(hooks, "_run_gh", return_value=_proc(0, "main\n")),
++        ):
++            assert hooks._check_pr_base(7, {}, Path("/wt"), {}) is None
++
++    def test_unknown_base_on_network_error_is_transient(self):
++        with patch.object(
++            hooks, "_run_gh",
++            return_value=_proc(1, stderr="error connecting to api.github.com"),
++        ):
++            out = hooks._check_pr_base(
++                7, {"base_branch": "feat/x"}, Path("/wt"), {},
++            )
++        assert out.result == FinalizeResult.TRANSIENT_FAILURE
++
++    def test_unknown_base_otherwise_fails_closed(self):
++        with patch.object(
++            hooks, "_run_gh", return_value=_proc(1, stderr="no pull requests"),
++        ):
++            out = hooks._check_pr_base(
++                7, {"base_branch": "feat/x"}, Path("/wt"), {},
++            )
++        assert out.result == FinalizeResult.MERGE_FAILED
++
++
++def test_execute_finalizing_never_merges_into_wrong_base(tmp_path):
++    task_data = {"pr": 7, "branch": "feature/t", "base_branch": "feat/x"}
++    calls: list[list[str]] = []
++
++    def fake_run(cmd, **kwargs):
++        calls.append(cmd)
++        if cmd[:3] == ["gh", "pr", "view"] and "baseRefName" in cmd:
++            return _proc(0, "main\n")
++        return _proc(0, "OPEN\n")
++
++    bind = MagicMock(return_value="a" * 40)
++    with (
++        patch(
++            "dao_cli.core.project.resolve_task_yaml_path",
++            return_value=Path("/fake/task.yaml"),
++        ),
++        patch("dao_cli.core.yaml_io.load_yaml", return_value=task_data),
++        patch("dao_cli.core.yaml_io.save_yaml", MagicMock()),
++        patch.object(hooks, "resolve_auth_env", return_value={}),
++        patch.object(hooks, "_branch_has_commits", return_value=True),
++        patch.object(hooks, "_verify_pr_merged", return_value=False),
++        patch.object(hooks, "_work_already_in_base", return_value=False),
++        patch.object(hooks, "_bind_merge_head", bind),
++        patch.object(hooks.subprocess, "run", side_effect=fake_run),
++    ):
++        out = execute_finalizing(cwd=tmp_path, task_name="t")
++
++    assert out.result == FinalizeResult.MERGE_FAILED
++    assert not any(c[:3] == ["gh", "pr", "merge"] for c in calls)
++    bind.assert_not_called()
++
++
++class TestValidatorTriState:
++    def _run(self, tmp_path, responses, task_data=None):
++        yaml_path = tmp_path / "task.yaml"
++        yaml_path.write_text("x: 1\n")
++        data = task_data or {"pr": 7, "base_branch": "feat/x"}
++        with (
++            patch(
++                "dao_cli.core.project.resolve_task_yaml_path",
++                return_value=yaml_path,
++            ),
++            patch("dao_cli.core.yaml_io.load_yaml", return_value=data),
++            patch.object(hooks, "resolve_auth_env", return_value={}),
++            patch.object(hooks.subprocess, "run", side_effect=responses),
++        ):
++            return post_hook_validate_pr_target("t", tmp_path)
++
++    def test_ok(self, tmp_path):
++        assert self._run(tmp_path, [_proc(0, "feat/x\n")]) == "ok"
++
++    def test_fixed(self, tmp_path):
++        assert self._run(
++            tmp_path, [_proc(0, "main\n"), _proc(0)],
++        ) == "fixed"
++
++    def test_mismatch_when_retarget_fails(self, tmp_path):
++        assert self._run(
++            tmp_path, [_proc(0, "main\n"), _proc(1, stderr="denied")],
++        ) == "mismatch"
++
++    def test_unknown_when_view_fails(self, tmp_path):
++        assert self._run(tmp_path, [_proc(1, stderr="boom")]) == "unknown"
++
++    def test_nothing_to_check_is_ok(self, tmp_path):
++        assert self._run(tmp_path, [], task_data={"pr": None}) == "ok"
