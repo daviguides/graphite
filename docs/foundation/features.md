@@ -32,16 +32,14 @@ Every wave is a vertical slice: usable end-to-end by an agent and measurable on 
 - **Goal:** the agent stops exploring. It gets the change's blast radius, the code and the covering tests in one call or before it greps or edits, from a graph that is always current.
 - **Shipped as four waves** (v1.0 → v1.3, below). 62 features (the language row is split in two: Python in v1.0, the rest in v1.1).
 - **Depends on:** nothing.
-- **Exit criteria (v1 as a whole, checked at the end of v1.3):** (1) effectiveness bench on real tasks in Continuum and sensemesh shows fewer turns and less wall-clock with Graphite than without; (2) incremental == full rebuild on both repos; (3) depth-10 blast radius < 10 ms on real graphs; (4) routing bench above threshold; (5) hooks show measurable conversion (graph answer used instead of grep/Read).
+- **Exit criteria (v1 as a whole, checked at the end of v1.3):** (1) effectiveness bench on real tasks in Continuum (Python, Rust and TS/Tauri tools) shows fewer turns and less wall-clock with Graphite than without; (2) incremental == full rebuild on Continuum; (3) depth-10 blast radius < 10 ms on real graphs; (4) routing bench above threshold; (5) hooks show measurable conversion (graph answer used instead of grep/Read).
 
 #### v1.0 — Thesis slice *(proposal)*
 
 - **Goal:** prove or refute the thesis with the thinnest usable slice — **does the agent finish real tasks faster with Graphite than without?** Speed first; correctness must not regress.
-- **Language: Python** *(proposal for the user)*. Reasoning:
-  - **Python (recommended):** 909 of Continuum's 1,146 files, and Continuum is where runner and dao tasks run — the bench uses real tasks on a real repo the user works in daily. It is also the hardest of the three to resolve (dynamic, duck typing), so v1.0 exercises confidence, `lower-bound` and `causes` for real instead of hiding them.
-  - **Rust:** simplest resolution and it's Graphite's own language, but Continuum has only 60 Rust files and Graphite has no code yet — no realistic task set.
-  - **Go:** sensemesh is production and resolution is clean, but runner doesn't run there and the Go part is only 1,385 of 3,131 files (TS is as large).
-  - If Python's resolution noise makes the bench inconclusive, Go on sensemesh is the fallback thesis repo.
+- **Language: Python** *(confirmed by the user 2026-09-24)*. Language priority for analyzed code: **Python → Rust → TypeScript**.
+  - **Python:** 909 of Continuum's 1,146 files, and Continuum is where runner and dao tasks run — the bench uses real tasks on a real repo the user works in daily. It is also the hardest to resolve (dynamic, duck typing), so v1.0 exercises confidence, `lower-bound` and `causes` for real instead of hiding them.
+  - If Python's resolution noise makes the bench inconclusive, narrow the task set to Continuum's statically clearer Python modules before changing language.
 - **Features (34):**
   - *Extraction:* Python grammar, `.scm` captures, single AST pass, deterministic IDs, import-bound calls, `<external>`/`<module>` sentinels, test detection, unresolved refs recorded.
   - *Graph:* core edge kinds, three-tier confidence + provenance, confidence derived by rule, `covers`.
@@ -61,10 +59,10 @@ Every wave is a vertical slice: usable end-to-end by an agent and measurable on 
 
 #### v1.1 — Full agent surface
 
-- **Goal:** the agent gets graph answers everywhere it would otherwise explore — on every language of both test repos, at the moment it greps or edits, and through MCP where the host prefers it.
-- **Features (17):** Rust / TS-JS / Go grammars, callee qualifiers, parse-parallel/write-serial pipeline; `context`, lexical symbol search, AST-context grep; disambiguation in the envelope; MCP shim, ≤5 listed tools, tool schema limits; pre-grep hook (block and answer), pre-edit hook (impact + covering tests), hook fail-open in settings.json, post-edit nudge; trace relation, conversion metric, routing bench.
+- **Goal:** the agent gets graph answers everywhere it would otherwise explore — on every language of Continuum (Python, Rust, TS/Tauri), at the moment it greps or edits, and through MCP where the host prefers it.
+- **Features (17):** Rust / TS-JS grammars (in that order), callee qualifiers, parse-parallel/write-serial pipeline; `context`, lexical symbol search, AST-context grep; disambiguation in the envelope; MCP shim, ≤5 listed tools, tool schema limits; pre-grep hook (block and answer), pre-edit hook (impact + covering tests), hook fail-open in settings.json, post-edit nudge; trace relation, conversion metric, routing bench.
 - **Depends on:** v1.0 (daemon, `diff_impact`, response envelope).
-- **Exit criteria:** effectiveness bench rerun on Continuum and on sensemesh (Go/TS) shows turns and wall-clock at least as good as v1.0, with a further drop from hooks; conversion metric shows the hooks' answers are used instead of the grep/Read they replaced; routing bench above threshold; incremental == full on sensemesh.
+- **Exit criteria:** effectiveness bench rerun on Continuum including its Rust and TS/Tauri tools shows turns and wall-clock at least as good as v1.0, with a further drop from hooks; conversion metric shows the hooks' answers are used instead of the grep/Read they replaced; routing bench above threshold; incremental == full across all three languages.
 
 #### v1.2 — Runner integration
 
@@ -136,7 +134,7 @@ Every wave is a vertical slice: usable end-to-end by an agent and measurable on 
 | Feature | What | Target | Version | Sources | Why this version |
 |---|---|---|---|---|---|
 | Language: Python | Tree-sitter grammar compiled in | S C | **v1.0** | RG, RI | Proposed first language: 909 of Continuum's 1,146 files, and the repo where runner runs — the thesis bench runs on real tasks. See [v1.0](#v10--thesis-slice-proposal). |
-| Languages Rust / TS-JS / Go | Remaining grammars compiled in | S C | **v1.1** | vision, RG | Brings in sensemesh (Go/TS) and Graphite itself (Rust). |
+| Languages Rust / TS-JS | Remaining grammars compiled in, Rust first | S C | **v1.1** | vision, RG | User priority Python → Rust → TypeScript. Brings in Graphite itself and Continuum's Rust tools, then Continuum's TS/Tauri parts. |
 | `.scm` query files with unified capture tags | One query set per language, shared capture names; downstream never branches on language | C | **v1.0** | GN, CGM | CGM's top recurring bug is "a missing match arm is a silently absent edge"; data-driven captures + wiring tests prevent it. |
 | Single AST pass emitting node + reference facts | Definitions, unresolved references with qualifiers, imports — per file | S C | **v1.0** | CGM | Per-file facts are the basis of incremental == full. |
 | Deterministic symbol IDs | From path + qualified name + kind + arity | C | **v1.0** | CGM, GN, CT | Rowid/position IDs caused CGM's renumbering class and fg's instability. |
@@ -301,6 +299,7 @@ Not scheduled because no measured effect on the targets justifies them now. Each
 
 | Item | Source | Why parked | Revisit when |
 |---|---|---|---|
+| Go grammar | RG, vision | No active Go repo (sensemesh was only a reference and is no longer active). | A Go repo becomes an active target for agent work. |
 | `rename` tool (graph + regex multi-file edit) | GN | Editing is the agent's job; v2 references give it the sites. | Agents repeatedly miss sites in multi-file renames despite references. |
 | Many listed tools (~90 / 17) | CT (ig), GN | Measured to cost turns and context every session. | Routing bench shows a specific extra tool is picked correctly and saves turns. |
 | Two-step `symbol_id` lookups | CT (ig) | Costs a turn; v1 disambiguates in the envelope. | Disambiguation in the envelope measurably fails. |
@@ -320,4 +319,4 @@ Not scheduled because no measured effect on the targets justifies them now. Each
 
 ## Counts
 
-110 features after deduplication (the v1 language row is split in two) — v1: 62 (v1.0: 34 · v1.1: 17 · v1.2: 4 · v1.3: 7) · v2: 18 · v3: 7 · v4: 10 · v5: 3 · v6: 2 · v7: 4 · v8: 4 · parking lot: 14
+110 features after deduplication (the v1 language row is split in two) — v1: 62 (v1.0: 34 · v1.1: 17 · v1.2: 4 · v1.3: 7) · v2: 18 · v3: 7 · v4: 10 · v5: 3 · v6: 2 · v7: 4 · v8: 4 · parking lot: 15 (Go grammar moved to the parking lot on 2026-09-24; the v1.1 language row now covers Rust and TS-JS)

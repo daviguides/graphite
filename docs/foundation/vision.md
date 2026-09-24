@@ -37,13 +37,13 @@ The agent starts every session already knowing the architecture. It acts immedia
 Every feature is placed on the versioned [roadmap in features.md](features.md#roadmap) (v1–v8, each with goal, dependencies and exit criteria; v1 and its waves are a proposal pending confirmation). v1 ships in four vertical waves, each usable and measured on its own:
 
 - **v1.0 — thesis slice:** Python extractor, daemon + watcher, `diff_impact` + blast radius with source inline and confidence, CLI `--json`, with-vs-without bench on real Continuum tasks. Go / no-go on "the agent finishes faster".
-- **v1.1 — full agent surface:** Rust / TS / Go, `context` + search + grep, pre-grep and pre-edit hooks, MCP shim, routing bench.
+- **v1.1 — full agent surface:** Rust, then TypeScript, `context` + search + grep, pre-grep and pre-edit hooks, MCP shim, routing bench.
 - **v1.2 — runner integration:** socket bridge, per-mode injection, targeted tests.
 - **v1.3 — contract completion:** compression, risk verdict, depth labels, CLI fallback without daemon.
 
 v1 as a whole covers:
 
-- Tree-sitter extraction for Rust, TypeScript, Python, Go: symbols, calls, imports, inheritance, references, tests
+- Tree-sitter extraction for Python, Rust, TypeScript (in that priority): symbols, calls, imports, inheritance, references, tests
 - Edge confidence (EXTRACTED / INFERRED / AMBIGUOUS) with provenance, derived by rule
 - One daemon per repo: CozoDB (`mnestic`, RocksDB) facts + in-memory adjacency, eager watcher, freshness barrier, `graph_rev` watermark
 - Queries: `diff_impact`, `context`, blast radius, search — source inline, honest disclosure, risk verdict

@@ -43,7 +43,7 @@ Source code (any language)
 │                                                  │
 │  ┌──────────────┐     ┌──────────────────┐      │
 │  │  Tree-sitter  │     │  Language Grammars│      │
-│  │  Parser       │────▶│  Rust/TS/Py/Go   │      │
+│  │  Parser       │────▶│  Py / Rust / TS  │      │
 │  └──────┬───────┘     └──────────────────┘      │
 │         │                                        │
 │         ▼                                        │
@@ -117,7 +117,7 @@ pub trait LanguageExtractor {
 }
 ```
 
-**Supported (v1)**: Rust, TypeScript/JavaScript, Python, Go
+**Supported (v1)**: Python (v1.0), then Rust and TypeScript/JavaScript (v1.1). Go is in the parking lot until a Go repo becomes an active target.
 **Extensible**: implement `LanguageExtractor` for any Tree-sitter grammar
 
 ### 2. Symbol Model
@@ -285,8 +285,7 @@ graphite/
 │   │   ├── extractor.rs      # LanguageExtractor trait
 │   │   ├── rust.rs           # Rust extractor
 │   │   ├── typescript.rs     # TypeScript/JS extractor
-│   │   ├── python.rs         # Python extractor
-│   │   └── go.rs             # Go extractor
+│   │   └── python.rs         # Python extractor
 │   ├── store/
 │   │   ├── mod.rs            # GraphStore trait + CozoDB (mnestic, RocksDB) impl
 │   │   ├── schema.rs         # Relation definitions + schema fingerprint
