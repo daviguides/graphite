@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "query": "lookup",
+  "graph_rev": 8,
+  "stale": false,
+  "tier": "full",
+  "completeness": {
+    "status": "complete",
+    "causes": {
+      "ambiguous_refs": 0,
+      "unresolved_refs": 0,
+      "parse_failures": 0,
+      "source_changed": 0,
+      "ref_scope": "none"
+    }
+  },
+  "disclosures": [],
+  "result": {
+    "query": "app.core.Config",
+    "status": "found",
+    "symbol": {
+      "id": "564fdc27814e26049eb081baa0613d65",
+      "qualified": "app.core.Config",
+      "kind": "class",
+      "path": "app/core.py",
+      "start_line": 9,
+      "end_line": 14,
+      "signature": "class Config",
+      "role": "prod"
+    },
+    "candidates": []
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "query": "blast_radius",
+  "graph_rev": 8,
+  "stale": false,
+  "tier": "full",
+  "completeness": {
+    "status": "lower_bound",
+    "causes": {
+      "ambiguous_refs": 0,
+      "unresolved_refs": 1,
+      "parse_failures": 0,
+      "source_changed": 0,
+      "ref_scope": "target"
+    }
+  },
+  "disclosures": [],
+  "result": {
+    "target": {
+      "query": "app.jobs.run",
+      "status": "found",
+      "symbol": {
+        "id": "c91d862dd072295d080562efc3f5a651",
+        "qualified": "app.jobs.run",
+        "kind": "function",
+        "path": "app/jobs.py",
+        "start_line": 1,
+        "end_line": 2,
+        "signature": "def run()",
+        "role": "prod"
+      },
+      "candidates": []
+    },
+    "source": {
+      "state": "fresh",
+      "start_line": 1,
+      "text": "1| def run():\n2|     return \"jobs\"\n",
+      "truncated": false
+    },
+    "risk": {
+      "level": "unknown",
+      "prod_direct": 0,
+      "prod_total": 0,
+      "test_total": 0,
+      "reason": "no production dependents found, but 1 unresolved/ambiguous references with this name could hide some"
+    },
+    "dependents": {
+      "summary": {
+        "total": 0,
+        "prod": 0,
+        "test": 0,
+        "by_depth": [
+          0,
+          0,
+          0
+        ],
+        "depth_limit": 3,
+        "more_beyond_depth": 0
+      },
+      "items": [],
+      "by_file": [],
+      "by_directory": []
+    }
+  }
+}

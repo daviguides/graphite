@@ -1,0 +1,210 @@
+{
+  "schema": 1,
+  "query": "blast_radius",
+  "graph_rev": 8,
+  "stale": false,
+  "tier": "full",
+  "completeness": {
+    "status": "complete",
+    "causes": {
+      "ambiguous_refs": 0,
+      "unresolved_refs": 0,
+      "parse_failures": 0,
+      "source_changed": 0,
+      "ref_scope": "target"
+    }
+  },
+  "disclosures": [],
+  "result": {
+    "target": {
+      "query": "app.core.Config",
+      "status": "found",
+      "symbol": {
+        "id": "564fdc27814e26049eb081baa0613d65",
+        "qualified": "app.core.Config",
+        "kind": "class",
+        "path": "app/core.py",
+        "start_line": 9,
+        "end_line": 14,
+        "signature": "class Config",
+        "role": "prod"
+      },
+      "candidates": []
+    },
+    "source": {
+      "state": "fresh",
+      "start_line": 9,
+      "text": "9| class Config:\n10|     def __init__(self, path):\n11|         self.data = parse(load(path))\n12| \n13|     def get(self, key):\n14|         return self.data\n",
+      "truncated": false
+    },
+    "risk": {
+      "level": "low",
+      "prod_direct": 2,
+      "prod_total": 4,
+      "test_total": 2,
+      "reason": "2 direct / 4 total production dependents"
+    },
+    "dependents": {
+      "summary": {
+        "total": 6,
+        "prod": 4,
+        "test": 2,
+        "by_depth": [
+          2,
+          4,
+          0
+        ],
+        "depth_limit": 3,
+        "more_beyond_depth": 0
+      },
+      "items": [
+        {
+          "symbol": {
+            "id": "9f04bd83ed7c05d98f035140c3fe6ca5",
+            "qualified": "app.service.build",
+            "kind": "function",
+            "path": "app/service.py",
+            "start_line": 4,
+            "end_line": 6,
+            "signature": "def build(path)",
+            "role": "prod"
+          },
+          "depth": 1,
+          "via": "app.core.Config",
+          "edge": "calls",
+          "edge_confidence": "extracted",
+          "confidence": "extracted",
+          "fan_in": 4,
+          "source": {
+            "state": "fresh",
+            "start_line": 4,
+            "text": "4| def build(path):\n5|     cfg = Config(path)\n6|     return cfg\n",
+            "truncated": false
+          }
+        },
+        {
+          "symbol": {
+            "id": "3fa36408b86c7cae266ee042ae8e4298",
+            "qualified": "app.service",
+            "kind": "module",
+            "path": "app/service.py",
+            "start_line": 1,
+            "end_line": 10,
+            "signature": "",
+            "role": "prod"
+          },
+          "depth": 1,
+          "via": "app.core.Config",
+          "edge": "imports",
+          "edge_confidence": "extracted",
+          "confidence": "extracted",
+          "fan_in": 1,
+          "source": {
+            "state": "fresh",
+            "start_line": 1,
+            "text": "1| from app.core import Config, load\n2| \n3| \n4| def build(path):\n5|     cfg = Config(path)\n6|     return cfg\n7| \n8| \n9| def reload(path):\n10|     return load(path)\n",
+            "truncated": false
+          }
+        },
+        {
+          "symbol": {
+            "id": "4c7f8b05d938ce2528e1ffab76671135",
+            "qualified": "app.api.handler",
+            "kind": "function",
+            "path": "app/api.py",
+            "start_line": 4,
+            "end_line": 5,
+            "signature": "def handler(req)",
+            "role": "prod"
+          },
+          "depth": 2,
+          "via": "app.service.build",
+          "edge": "calls",
+          "edge_confidence": "extracted",
+          "confidence": "extracted",
+          "fan_in": 1,
+          "source": {
+            "state": "fresh",
+            "start_line": 4,
+            "text": "4| def handler(req):\n5|     return service.build(req)\n",
+            "truncated": false
+          }
+        },
+        {
+          "symbol": {
+            "id": "0ac8e4e90ba94d1153cfc923de909841",
+            "qualified": "app.api",
+            "kind": "module",
+            "path": "app/api.py",
+            "start_line": 1,
+            "end_line": 9,
+            "signature": "",
+            "role": "prod"
+          },
+          "depth": 2,
+          "via": "app.service",
+          "edge": "imports",
+          "edge_confidence": "extracted",
+          "confidence": "extracted",
+          "fan_in": 0,
+          "source": {
+            "state": "fresh",
+            "start_line": 1,
+            "text": "1| from app import service\n2| \n3| \n4| def handler(req):\n5|     return service.build(req)\n6| \n7| \n8| def unrelated(x):\n9|     return x.get(\"k\")\n",
+            "truncated": false
+          }
+        },
+        {
+          "symbol": {
+            "id": "a745188a66fec965b9da2486ffb58c17",
+            "qualified": "tests.test_service.test_build",
+            "kind": "function",
+            "path": "tests/test_service.py",
+            "start_line": 4,
+            "end_line": 5,
+            "signature": "def test_build()",
+            "role": "test"
+          },
+          "depth": 2,
+          "via": "app.service.build",
+          "edge": "calls",
+          "edge_confidence": "extracted",
+          "confidence": "extracted",
+          "fan_in": 1,
+          "source": {
+            "state": "fresh",
+            "start_line": 4,
+            "text": "4| def test_build():\n5|     assert build(\"p\") is not None\n",
+            "truncated": false
+          }
+        },
+        {
+          "symbol": {
+            "id": "a8983e4e2ebd6cd9a8438a6f22b7c31e",
+            "qualified": "tests.test_service",
+            "kind": "module",
+            "path": "tests/test_service.py",
+            "start_line": 1,
+            "end_line": 5,
+            "signature": "",
+            "role": "test"
+          },
+          "depth": 2,
+          "via": "app.service.build",
+          "edge": "imports",
+          "edge_confidence": "extracted",
+          "confidence": "extracted",
+          "fan_in": 0,
+          "source": {
+            "state": "fresh",
+            "start_line": 1,
+            "text": "1| from app.service import build\n2| \n3| \n4| def test_build():\n5|     assert build(\"p\") is not None\n",
+            "truncated": false
+          }
+        }
+      ],
+      "by_file": [],
+      "by_directory": []
+    }
+  }
+}

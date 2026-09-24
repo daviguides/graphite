@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "query": "lookup",
+  "graph_rev": 8,
+  "stale": false,
+  "tier": "full",
+  "completeness": {
+    "status": "complete",
+    "causes": {
+      "ambiguous_refs": 0,
+      "unresolved_refs": 0,
+      "parse_failures": 0,
+      "source_changed": 0,
+      "ref_scope": "none"
+    }
+  },
+  "disclosures": [],
+  "result": {
+    "query": "run",
+    "status": "ambiguous",
+    "symbol": null,
+    "candidates": [
+      {
+        "id": "c91d862dd072295d080562efc3f5a651",
+        "qualified": "app.jobs.run",
+        "kind": "function",
+        "path": "app/jobs.py",
+        "start_line": 1,
+        "end_line": 2,
+        "signature": "def run()",
+        "role": "prod"
+      },
+      {
+        "id": "102598ef7bed6c84fbaac2f42f547f2a",
+        "qualified": "app.tasks.run",
+        "kind": "function",
+        "path": "app/tasks.py",
+        "start_line": 1,
+        "end_line": 2,
+        "signature": "def run()",
+        "role": "prod"
+      }
+    ]
+  }
+}

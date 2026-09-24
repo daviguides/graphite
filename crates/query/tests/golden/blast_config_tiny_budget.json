@@ -1,0 +1,91 @@
+{
+  "schema": 1,
+  "query": "blast_radius",
+  "graph_rev": 8,
+  "stale": false,
+  "tier": "by_directory",
+  "completeness": {
+    "status": "complete",
+    "causes": {
+      "ambiguous_refs": 0,
+      "unresolved_refs": 0,
+      "parse_failures": 0,
+      "source_changed": 0,
+      "ref_scope": "target"
+    }
+  },
+  "disclosures": [
+    {
+      "what": "dependent_sources",
+      "shown": 0,
+      "omitted": 6,
+      "reason": "tier summary: dependent source omitted; signatures kept"
+    },
+    {
+      "what": "dependents",
+      "shown": 0,
+      "omitted": 6,
+      "reason": "tier by_file: 6 dependents grouped into 3 files"
+    },
+    {
+      "what": "dependents",
+      "shown": 0,
+      "omitted": 6,
+      "reason": "tier by_directory: 6 dependents in 3 files grouped into 2 directories"
+    },
+    {
+      "what": "target_source",
+      "shown": 0,
+      "omitted": 1,
+      "reason": "tier by_directory: target source omitted"
+    },
+    {
+      "what": "directory groups",
+      "shown": 0,
+      "omitted": 2,
+      "reason": "token budget 1: lowest-ranked directory groups dropped"
+    }
+  ],
+  "result": {
+    "target": {
+      "query": "app.core.Config",
+      "status": "found",
+      "symbol": {
+        "id": "564fdc27814e26049eb081baa0613d65",
+        "qualified": "app.core.Config",
+        "kind": "class",
+        "path": "app/core.py",
+        "start_line": 9,
+        "end_line": 14,
+        "signature": "class Config",
+        "role": "prod"
+      },
+      "candidates": []
+    },
+    "source": null,
+    "risk": {
+      "level": "low",
+      "prod_direct": 2,
+      "prod_total": 4,
+      "test_total": 2,
+      "reason": "2 direct / 4 total production dependents"
+    },
+    "dependents": {
+      "summary": {
+        "total": 6,
+        "prod": 4,
+        "test": 2,
+        "by_depth": [
+          2,
+          4,
+          0
+        ],
+        "depth_limit": 3,
+        "more_beyond_depth": 0
+      },
+      "items": [],
+      "by_file": [],
+      "by_directory": []
+    }
+  }
+}

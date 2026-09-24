@@ -1,0 +1,168 @@
+{
+  "schema": 1,
+  "query": "diff_impact",
+  "graph_rev": 8,
+  "stale": false,
+  "tier": "full",
+  "completeness": {
+    "status": "complete",
+    "causes": {
+      "ambiguous_refs": 0,
+      "unresolved_refs": 0,
+      "parse_failures": 0,
+      "source_changed": 0,
+      "ref_scope": "changed_symbols"
+    }
+  },
+  "disclosures": [
+    {
+      "what": "hunks",
+      "shown": 2,
+      "omitted": 1,
+      "reason": "hunks in unindexed files or outside symbols are listed in `unmapped`, not analyzed"
+    }
+  ],
+  "result": {
+    "changed": [
+      {
+        "symbol": {
+          "id": "07062f12fd1bba433b9365f6b44277f1",
+          "qualified": "app.core.parse",
+          "kind": "function",
+          "path": "app/core.py",
+          "start_line": 5,
+          "end_line": 6,
+          "signature": "def parse(text)",
+          "role": "prod"
+        },
+        "hunks": [
+          [
+            6,
+            6
+          ]
+        ],
+        "direct_prod_callers": 1,
+        "direct_test_callers": 0,
+        "reference_gaps": 0,
+        "risk": "low",
+        "source": {
+          "state": "fresh",
+          "start_line": 5,
+          "text": "5| def parse(text):\n6|     return text.split()\n",
+          "truncated": false
+        }
+      },
+      {
+        "symbol": {
+          "id": "6f209013b0b05dbfdf5d79b254bfe4f9",
+          "qualified": "app.core.Config.get",
+          "kind": "method",
+          "path": "app/core.py",
+          "start_line": 13,
+          "end_line": 14,
+          "signature": "def get(self, key)",
+          "role": "prod"
+        },
+        "hunks": [
+          [
+            14,
+            14
+          ]
+        ],
+        "direct_prod_callers": 1,
+        "direct_test_callers": 0,
+        "reference_gaps": 0,
+        "risk": "low",
+        "source": {
+          "state": "fresh",
+          "start_line": 13,
+          "text": "13| def get(self, key):\n14|         return self.data\n",
+          "truncated": false
+        }
+      }
+    ],
+    "unmapped": [
+      {
+        "path": "app/missing.py",
+        "start_line": 1,
+        "line_count": 2,
+        "reason": "file not indexed"
+      }
+    ],
+    "risk": {
+      "level": "low",
+      "prod_direct": 2,
+      "prod_total": 2,
+      "test_total": 0,
+      "reason": "2 direct / 2 total production dependents"
+    },
+    "dependents": {
+      "summary": {
+        "total": 2,
+        "prod": 2,
+        "test": 0,
+        "by_depth": [
+          2,
+          0,
+          0
+        ],
+        "depth_limit": 3,
+        "more_beyond_depth": 0
+      },
+      "items": [
+        {
+          "symbol": {
+            "id": "a718205900f57530aa5f1e587d928c79",
+            "qualified": "app.core.Config.__init__",
+            "kind": "method",
+            "path": "app/core.py",
+            "start_line": 10,
+            "end_line": 11,
+            "signature": "def __init__(self, path)",
+            "role": "prod"
+          },
+          "depth": 1,
+          "via": "app.core.parse",
+          "edge": "calls",
+          "edge_confidence": "extracted",
+          "confidence": "extracted",
+          "fan_in": 1,
+          "source": {
+            "state": "fresh",
+            "start_line": 10,
+            "text": "10| def __init__(self, path):\n11|         self.data = parse(load(path))\n",
+            "truncated": false
+          }
+        },
+        {
+          "symbol": {
+            "id": "f275530a59fbe7a68a71c018c3c961f3",
+            "qualified": "app.api.unrelated",
+            "kind": "function",
+            "path": "app/api.py",
+            "start_line": 8,
+            "end_line": 9,
+            "signature": "def unrelated(x)",
+            "role": "prod"
+          },
+          "depth": 1,
+          "via": "app.core.Config.get",
+          "edge": "calls",
+          "edge_confidence": "ambiguous",
+          "confidence": "ambiguous",
+          "fan_in": 1,
+          "source": {
+            "state": "fresh",
+            "start_line": 8,
+            "text": "8| def unrelated(x):\n9|     return x.get(\"k\")\n",
+            "truncated": false
+          }
+        }
+      ],
+      "by_file": [],
+      "by_directory": []
+    },
+    "covering_tests": [],
+    "tests_basis": "test symbols among changed symbols and their dependents (no dedicated tests relation yet)"
+  }
+}
