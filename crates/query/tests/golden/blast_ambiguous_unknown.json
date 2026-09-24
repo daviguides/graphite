@@ -7,8 +7,8 @@
   "completeness": {
     "status": "lower_bound",
     "causes": {
-      "ambiguous_refs": 0,
-      "unresolved_refs": 1,
+      "ambiguous_refs": 1,
+      "unresolved_refs": 0,
       "parse_failures": 0,
       "source_changed": 0,
       "ref_scope": "target"

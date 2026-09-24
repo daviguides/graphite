@@ -5,9 +5,9 @@
   "stale": false,
   "tier": "full",
   "completeness": {
-    "status": "complete",
+    "status": "lower_bound",
     "causes": {
-      "ambiguous_refs": 0,
+      "ambiguous_refs": 1,
       "unresolved_refs": 0,
       "parse_failures": 0,
       "source_changed": 0,
@@ -69,10 +69,10 @@
             14
           ]
         ],
-        "direct_prod_callers": 1,
+        "direct_prod_callers": 0,
         "direct_test_callers": 0,
-        "reference_gaps": 0,
-        "risk": "low",
+        "reference_gaps": 1,
+        "risk": "unknown",
         "source": {
           "state": "fresh",
           "start_line": 13,
@@ -91,18 +91,18 @@
     ],
     "risk": {
       "level": "low",
-      "prod_direct": 2,
-      "prod_total": 2,
+      "prod_direct": 1,
+      "prod_total": 1,
       "test_total": 0,
-      "reason": "2 direct / 2 total production dependents"
+      "reason": "1 direct / 1 total production dependents; lower bound: 1 unresolved/ambiguous references"
     },
     "dependents": {
       "summary": {
-        "total": 2,
-        "prod": 2,
+        "total": 1,
+        "prod": 1,
         "test": 0,
         "by_depth": [
-          2,
+          1,
           0,
           0
         ],
@@ -131,30 +131,6 @@
             "state": "fresh",
             "start_line": 10,
             "text": "10| def __init__(self, path):\n11|         self.data = parse(load(path))\n",
-            "truncated": false
-          }
-        },
-        {
-          "symbol": {
-            "id": "f275530a59fbe7a68a71c018c3c961f3",
-            "qualified": "app.api.unrelated",
-            "kind": "function",
-            "path": "app/api.py",
-            "start_line": 8,
-            "end_line": 9,
-            "signature": "def unrelated(x)",
-            "role": "prod"
-          },
-          "depth": 1,
-          "via": "app.core.Config.get",
-          "edge": "calls",
-          "edge_confidence": "ambiguous",
-          "confidence": "ambiguous",
-          "fan_in": 1,
-          "source": {
-            "state": "fresh",
-            "start_line": 8,
-            "text": "8| def unrelated(x):\n9|     return x.get(\"k\")\n",
             "truncated": false
           }
         }
