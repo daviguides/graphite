@@ -87,7 +87,7 @@ for size in sizes:
             r = m.get(key)
             if r is None:
                 return "—"
-            return "unsupported" if r["value"] == -1 and r["n"] == 0 else ms(r["p50_us"])
+            return "unsupported" if r["value"] == -1 else ms(r["p50_us"])
 
         wr = "watcher_continuous_read_blast10_median"
         ww = "watcher_continuous_write"

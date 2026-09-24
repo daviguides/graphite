@@ -211,7 +211,13 @@ impl Engine for LbugEngine {
     }
 
     fn variants(&self) -> Vec<&'static str> {
-        vec!["cypher_shortest", "rust_bfs", "cypher_varlen"]
+        // LBUG_SKIP_VARLEN=1: the naive var-length query segfaults the process
+        // when it hits the query timeout on large graphs (see study).
+        if std::env::var("LBUG_SKIP_VARLEN").is_ok() {
+            vec!["cypher_shortest", "rust_bfs"]
+        } else {
+            vec!["cypher_shortest", "rust_bfs", "cypher_varlen"]
+        }
     }
 
     fn blast(&self, variant: &str, t: u32, d: u32, trusted: bool) -> Vec<(u32, u32)> {
