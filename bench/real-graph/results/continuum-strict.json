@@ -1,0 +1,766 @@
+{
+  "label": "continuum-strict",
+  "mode": "strict",
+  "root": "/Users/daviguides/work/sources/continuum",
+  "files": 1146,
+  "files_by_lang": {
+    "python": 909,
+    "ts/js": 177,
+    "rust": 60
+  },
+  "parse_errors": 4,
+  "generated_files_skipped": 0,
+  "nodes": 12373,
+  "symbols_non_module": 11227,
+  "symbols_by_kind": {
+    "struct": 193,
+    "enum": 19,
+    "function": 4868,
+    "module": 1146,
+    "method": 4358,
+    "type": 53,
+    "interface": 267,
+    "class": 1469
+  },
+  "edges": 27931,
+  "edges_by_kind": {
+    "calls:extracted": 13230,
+    "calls:inferred": 769,
+    "contains:extracted": 11227,
+    "imports:extracted": 2524,
+    "implements:extracted": 181
+  },
+  "calls_extracted": 15846,
+  "calls_inferred": 933,
+  "calls_dropped_ambiguous": 494,
+  "calls_external_unresolved": 38338,
+  "implements_resolved": 181,
+  "implements_unresolved": 190,
+  "fan_in_calls": {
+    "max": 228,
+    "p99": 15,
+    "p90": 3,
+    "median": 0,
+    "mean": 1.263026632225884
+  },
+  "top20_hubs": [
+    {
+      "name": "load_yaml",
+      "kind": "function",
+      "file": "tools/orch/dao-cli/dao_cli/core/yaml_io.py",
+      "line": 14,
+      "fan_in": 228,
+      "blast_d10_calls": 1266,
+      "blast_d10_all": 1792
+    },
+    {
+      "name": "save_yaml",
+      "kind": "function",
+      "file": "tools/orch/dao-cli/dao_cli/core/yaml_io.py",
+      "line": 30,
+      "fan_in": 160,
+      "blast_d10_calls": 968,
+      "blast_d10_all": 1426
+    },
+    {
+      "name": "list",
+      "kind": "function",
+      "file": "tools/cleaners/tabclean/tabclean/cli.py",
+      "line": 24,
+      "fan_in": 95,
+      "blast_d10_calls": 439,
+      "blast_d10_all": 876
+    },
+    {
+      "name": "LocalExecutor",
+      "kind": "class",
+      "file": "tools/substrate/ita/ita/executor.py",
+      "line": 69,
+      "fan_in": 79,
+      "blast_d10_calls": 79,
+      "blast_d10_all": 160
+    },
+    {
+      "name": "load_session",
+      "kind": "function",
+      "file": "tools/orch/refiner/refiner/core/state.py",
+      "line": 248,
+      "fan_in": 72,
+      "blast_d10_calls": 131,
+      "blast_d10_all": 232
+    },
+    {
+      "name": "Step",
+      "kind": "class",
+      "file": "tools/substrate/ita/ita/models.py",
+      "line": 26,
+      "fan_in": 71,
+      "blast_d10_calls": 71,
+      "blast_d10_all": 151
+    },
+    {
+      "name": "BaseRecipe",
+      "kind": "class",
+      "file": "tools/substrate/ita/ita/recipes/base.py",
+      "line": 13,
+      "fan_in": 71,
+      "blast_d10_calls": 71,
+      "blast_d10_all": 76
+    },
+    {
+      "name": "ReviewTarget.parse",
+      "kind": "method",
+      "file": "tools/context/zen-review/zen_review/models/__init__.py",
+      "line": 91,
+      "fan_in": 69,
+      "blast_d10_calls": 76,
+      "blast_d10_all": 126
+    },
+    {
+      "name": "session_dir",
+      "kind": "function",
+      "file": "tools/orch/refiner/refiner/core/state.py",
+      "line": 113,
+      "fan_in": 58,
+      "blast_d10_calls": 373,
+      "blast_d10_all": 493
+    },
+    {
+      "name": "Finding",
+      "kind": "class",
+      "file": "tools/orch/refiner/refiner/core/models.py",
+      "line": 152,
+      "fan_in": 52,
+      "blast_d10_calls": 140,
+      "blast_d10_all": 274
+    },
+    {
+      "name": "read_ledger",
+      "kind": "function",
+      "file": "tools/orch/regent/regent/core/ledger.py",
+      "line": 126,
+      "fan_in": 52,
+      "blast_d10_calls": 92,
+      "blast_d10_all": 161
+    },
+    {
+      "name": "InboxItem",
+      "kind": "class",
+      "file": "tools/orch/intake/intake/core/models.py",
+      "line": 74,
+      "fan_in": 49,
+      "blast_d10_calls": 119,
+      "blast_d10_all": 192
+    },
+    {
+      "name": "resolve_task_yaml_path",
+      "kind": "function",
+      "file": "tools/orch/dao-cli/dao_cli/core/project.py",
+      "line": 152,
+      "fan_in": 45,
+      "blast_d10_calls": 266,
+      "blast_d10_all": 489
+    },
+    {
+      "name": "_config",
+      "kind": "function",
+      "file": "tools/orch/regent/tests/test_pipeline.py",
+      "line": 25,
+      "fan_in": 44,
+      "blast_d10_calls": 44,
+      "blast_d10_all": 60
+    },
+    {
+      "name": "ConsultantSpec",
+      "kind": "class",
+      "file": "tools/orch/continuum-core/continuum_core/counsel/types.py",
+      "line": 18,
+      "fan_in": 43,
+      "blast_d10_calls": 51,
+      "blast_d10_all": 88
+    },
+    {
+      "name": "find_project_dir",
+      "kind": "function",
+      "file": "tools/orch/dao-cli/dao_cli/core/project.py",
+      "line": 73,
+      "fan_in": 43,
+      "blast_d10_calls": 587,
+      "blast_d10_all": 899
+    },
+    {
+      "name": "CliTransport",
+      "kind": "class",
+      "file": "tools/orch/continuum-core/continuum_core/counsel/transport.py",
+      "line": 183,
+      "fan_in": 42,
+      "blast_d10_calls": 89,
+      "blast_d10_all": 121
+    },
+    {
+      "name": "recorder",
+      "kind": "function",
+      "file": "tools/orch/regent/tests/test_delivery.py",
+      "line": 172,
+      "fan_in": 41,
+      "blast_d10_calls": 41,
+      "blast_d10_all": 52
+    },
+    {
+      "name": "_signal",
+      "kind": "function",
+      "file": "tools/orch/regent/tests/test_delivery.py",
+      "line": 75,
+      "fan_in": 40,
+      "blast_d10_calls": 40,
+      "blast_d10_all": 51
+    },
+    {
+      "name": "toast",
+      "kind": "function",
+      "file": "app/src/components/toast.tsx",
+      "line": 78,
+      "fan_in": 39,
+      "blast_d10_calls": 64,
+      "blast_d10_all": 107
+    }
+  ],
+  "blast_calls": {
+    "edge_set": "calls+implements (symbol-level dependents)",
+    "targets_measured": 11227,
+    "sampled": false,
+    "d3": {
+      "max": 1027,
+      "p99": 57,
+      "p90": 10,
+      "median": 0,
+      "mean": 4.176271488376236
+    },
+    "d10": {
+      "max": 1266,
+      "p99": 96,
+      "p90": 12,
+      "median": 0,
+      "mean": 6.323862118108132
+    },
+    "unbounded": {
+      "max": 1266,
+      "p99": 96,
+      "p90": 12,
+      "median": 0,
+      "mean": 6.3256435378997065
+    },
+    "top5_hub_pct_d10": [
+      10.23,
+      7.82,
+      3.55,
+      0.64,
+      1.06
+    ],
+    "top5_hub_pct_unbounded": [
+      10.23,
+      7.82,
+      3.55,
+      0.64,
+      1.06
+    ],
+    "max_pct_d10": 10.231956679867453,
+    "targets_over_10pct_d10": 1,
+    "targets_over_50pct_d10": 0
+  },
+  "blast_all": {
+    "edge_set": "all kinds incl. contains+imports (synthetic benchmark semantics)",
+    "targets_measured": 11227,
+    "sampled": false,
+    "d3": {
+      "max": 1355,
+      "p99": 114,
+      "p90": 32,
+      "median": 3,
+      "mean": 12.689320388349515
+    },
+    "d10": {
+      "max": 1792,
+      "p99": 197,
+      "p90": 46,
+      "median": 3,
+      "mean": 18.78524984412577
+    },
+    "unbounded": {
+      "max": 1792,
+      "p99": 197,
+      "p90": 46,
+      "median": 3,
+      "mean": 18.805914313708026
+    },
+    "top5_hub_pct_d10": [
+      14.48,
+      11.53,
+      7.08,
+      1.29,
+      1.88
+    ],
+    "top5_hub_pct_unbounded": [
+      14.48,
+      11.53,
+      7.08,
+      1.29,
+      1.88
+    ],
+    "max_pct_d10": 14.483148791723915,
+    "targets_over_10pct_d10": 2,
+    "targets_over_50pct_d10": 0
+  },
+  "scc_calls": {
+    "nontrivial_sccs": 0,
+    "largest_scc": 0,
+    "symbols_in_cycles": 0
+  },
+  "scc_all": {
+    "nontrivial_sccs": 10,
+    "largest_scc": 3,
+    "symbols_in_cycles": 21
+  },
+  "groups": [
+    {
+      "group": "app",
+      "files": 196,
+      "symbols": 2201,
+      "edges_out": 4611,
+      "edges_internal": 4611,
+      "top_hub": "toast (app/src/components/toast.tsx)",
+      "top_hub_fan_in": 39,
+      "max_blast_d10_calls": 215,
+      "max_blast_d10_all": 233
+    },
+    {
+      "group": "tools/orch/regent",
+      "files": 76,
+      "symbols": 1979,
+      "edges_out": 5588,
+      "edges_internal": 5132,
+      "top_hub": "read_ledger (tools/orch/regent/regent/core/ledger.py)",
+      "top_hub_fan_in": 52,
+      "max_blast_d10_calls": 308,
+      "max_blast_d10_all": 464
+    },
+    {
+      "group": "tools/orch/marshal",
+      "files": 50,
+      "symbols": 771,
+      "edges_out": 1935,
+      "edges_internal": 1879,
+      "top_hub": "TaskEntry (tools/orch/marshal/marshal_cli/core/models.py)",
+      "top_hub_fan_in": 35,
+      "max_blast_d10_calls": 202,
+      "max_blast_d10_all": 296
+    },
+    {
+      "group": "tools/orch/runner",
+      "files": 67,
+      "symbols": 667,
+      "edges_out": 1624,
+      "edges_internal": 1453,
+      "top_hub": "ExecutionConfig (tools/orch/runner/runner/core/models.py)",
+      "top_hub_fan_in": 35,
+      "max_blast_d10_calls": 111,
+      "max_blast_d10_all": 180
+    },
+    {
+      "group": "tools/context/zen-review",
+      "files": 67,
+      "symbols": 642,
+      "edges_out": 1645,
+      "edges_internal": 1641,
+      "top_hub": "parse (tools/context/zen-review/zen_review/models/__init__.py)",
+      "top_hub_fan_in": 69,
+      "max_blast_d10_calls": 110,
+      "max_blast_d10_all": 308
+    },
+    {
+      "group": "tools/orch/dao-cli",
+      "files": 52,
+      "symbols": 629,
+      "edges_out": 1595,
+      "edges_internal": 1591,
+      "top_hub": "load_yaml (tools/orch/dao-cli/dao_cli/core/yaml_io.py)",
+      "top_hub_fan_in": 228,
+      "max_blast_d10_calls": 1266,
+      "max_blast_d10_all": 1792
+    },
+    {
+      "group": "tools/orch/refiner",
+      "files": 62,
+      "symbols": 615,
+      "edges_out": 1923,
+      "edges_internal": 1716,
+      "top_hub": "load_session (tools/orch/refiner/refiner/core/state.py)",
+      "top_hub_fan_in": 72,
+      "max_blast_d10_calls": 375,
+      "max_blast_d10_all": 495
+    },
+    {
+      "group": "tools/orch/queue",
+      "files": 26,
+      "symbols": 362,
+      "edges_out": 955,
+      "edges_internal": 955,
+      "top_hub": "load_all_tasks (tools/orch/queue/src/reader.rs)",
+      "top_hub_fan_in": 14,
+      "max_blast_d10_calls": 59,
+      "max_blast_d10_all": 86
+    },
+    {
+      "group": "tools/orch/continuum-core",
+      "files": 28,
+      "symbols": 356,
+      "edges_out": 742,
+      "edges_internal": 736,
+      "top_hub": "ConsultantSpec (tools/orch/continuum-core/continuum_core/counsel/types.py)",
+      "top_hub_fan_in": 43,
+      "max_blast_d10_calls": 228,
+      "max_blast_d10_all": 378
+    },
+    {
+      "group": "tools/flow/sourcerer",
+      "files": 47,
+      "symbols": 341,
+      "edges_out": 716,
+      "edges_internal": 716,
+      "top_hub": "get_sources_path (tools/flow/sourcerer/sourcerer/config.py)",
+      "top_hub_fan_in": 12,
+      "max_blast_d10_calls": 117,
+      "max_blast_d10_all": 164
+    },
+    {
+      "group": "tools/substrate/ita",
+      "files": 17,
+      "symbols": 335,
+      "edges_out": 691,
+      "edges_internal": 691,
+      "top_hub": "LocalExecutor (tools/substrate/ita/ita/executor.py)",
+      "top_hub_fan_in": 79,
+      "max_blast_d10_calls": 79,
+      "max_blast_d10_all": 177
+    },
+    {
+      "group": "tools/orch/intake",
+      "files": 29,
+      "symbols": 329,
+      "edges_out": 808,
+      "edges_internal": 778,
+      "top_hub": "InboxItem (tools/orch/intake/intake/core/models.py)",
+      "top_hub_fan_in": 49,
+      "max_blast_d10_calls": 119,
+      "max_blast_d10_all": 195
+    },
+    {
+      "group": "tools/flow/rover",
+      "files": 72,
+      "symbols": 278,
+      "edges_out": 817,
+      "edges_internal": 813,
+      "top_hub": "run_git (tools/flow/rover/rover/commit/integrations/git.py)",
+      "top_hub_fan_in": 24,
+      "max_blast_d10_calls": 209,
+      "max_blast_d10_all": 342
+    },
+    {
+      "group": "tools/context/fireweave",
+      "files": 35,
+      "symbols": 168,
+      "edges_out": 423,
+      "edges_internal": 423,
+      "top_hub": "json_output (tools/context/fireweave/fireweave/cli/output.py)",
+      "top_hub_fan_in": 8,
+      "max_blast_d10_calls": 49,
+      "max_blast_d10_all": 93
+    },
+    {
+      "group": "tools/flow/worktree",
+      "files": 25,
+      "symbols": 158,
+      "edges_out": 459,
+      "edges_internal": 459,
+      "top_hub": "print_error (tools/flow/worktree/worktree/display.py)",
+      "top_hub_fan_in": 20,
+      "max_blast_d10_calls": 106,
+      "max_blast_d10_all": 160
+    },
+    {
+      "group": "tools/orch/instrument",
+      "files": 15,
+      "symbols": 145,
+      "edges_out": 467,
+      "edges_internal": 343,
+      "top_hub": "resolve_base_branch (tools/orch/instrument/instrument/core/initiative.py)",
+      "top_hub_fan_in": 16,
+      "max_blast_d10_calls": 71,
+      "max_blast_d10_all": 94
+    },
+    {
+      "group": "tools/flow/namer",
+      "files": 42,
+      "symbols": 134,
+      "edges_out": 368,
+      "edges_internal": 354,
+      "top_hub": "read_json_lines (tools/flow/namer/namer/integrations/jsonl_io.py)",
+      "top_hub_fan_in": 14,
+      "max_blast_d10_calls": 54,
+      "max_blast_d10_all": 76
+    },
+    {
+      "group": "tools/canvas/canvas",
+      "files": 30,
+      "symbols": 124,
+      "edges_out": 328,
+      "edges_internal": 326,
+      "top_hub": "print_error (tools/canvas/canvas/display.py)",
+      "top_hub_fan_in": 13,
+      "max_blast_d10_calls": 54,
+      "max_blast_d10_all": 78
+    },
+    {
+      "group": "tools/orch/crony",
+      "files": 17,
+      "symbols": 119,
+      "edges_out": 278,
+      "edges_internal": 277,
+      "top_hub": "build_schedule (tools/orch/crony/crony-cli/crony/schedule.py)",
+      "top_hub_fan_in": 12,
+      "max_blast_d10_calls": 25,
+      "max_blast_d10_all": 37
+    },
+    {
+      "group": "tools/context/slackweave",
+      "files": 32,
+      "symbols": 99,
+      "edges_out": 264,
+      "edges_internal": 262,
+      "top_hub": "SlackweaveError (tools/context/slackweave/slackweave/exceptions.py)",
+      "top_hub_fan_in": 6,
+      "max_blast_d10_calls": 23,
+      "max_blast_d10_all": 57
+    },
+    {
+      "group": "tools/cleaners/dklean",
+      "files": 6,
+      "symbols": 77,
+      "edges_out": 154,
+      "edges_internal": 152,
+      "top_hub": "format_size (tools/cleaners/dklean/dklean/models.py)",
+      "top_hub_fan_in": 12,
+      "max_blast_d10_calls": 16,
+      "max_blast_d10_all": 37
+    },
+    {
+      "group": "tools/shared/reaper",
+      "files": 6,
+      "symbols": 65,
+      "edges_out": 134,
+      "edges_internal": 134,
+      "top_hub": "_create_process (tools/shared/reaper/tests/test_core.py)",
+      "top_hub_fan_in": 13,
+      "max_blast_d10_calls": 22,
+      "max_blast_d10_all": 37
+    },
+    {
+      "group": "tools/observe/gauge",
+      "files": 13,
+      "symbols": 63,
+      "edges_out": 149,
+      "edges_internal": 148,
+      "top_hub": "print_header (tools/observe/gauge/gauge/display.py)",
+      "top_hub_fan_in": 5,
+      "max_blast_d10_calls": 15,
+      "max_blast_d10_all": 22
+    },
+    {
+      "group": "tools/substrate/scout",
+      "files": 14,
+      "symbols": 60,
+      "edges_out": 164,
+      "edges_internal": 164,
+      "top_hub": "load_config (tools/substrate/scout/src/config.rs)",
+      "top_hub_fan_in": 5,
+      "max_blast_d10_calls": 12,
+      "max_blast_d10_all": 18
+    },
+    {
+      "group": "tools/canvas/tests",
+      "files": 4,
+      "symbols": 56,
+      "edges_out": 120,
+      "edges_internal": 61,
+      "top_hub": "_make_adapter (tools/canvas/tests/test_services.py)",
+      "top_hub_fan_in": 5,
+      "max_blast_d10_calls": 5,
+      "max_blast_d10_all": 10
+    },
+    {
+      "group": "tools/shared/entryway",
+      "files": 16,
+      "symbols": 50,
+      "edges_out": 101,
+      "edges_internal": 100,
+      "top_hub": "_process_command (tools/shared/entryway/entryway/clis/slash_command.py)",
+      "top_hub_fan_in": 2,
+      "max_blast_d10_calls": 4,
+      "max_blast_d10_all": 9
+    },
+    {
+      "group": "tools/flow/cpath",
+      "files": 5,
+      "symbols": 45,
+      "edges_out": 80,
+      "edges_internal": 80,
+      "top_hub": "find_project_root (tools/flow/cpath/cpath/core.py)",
+      "top_hub_fan_in": 11,
+      "max_blast_d10_calls": 14,
+      "max_blast_d10_all": 19
+    },
+    {
+      "group": "tools/orch/continuum",
+      "files": 14,
+      "symbols": 43,
+      "edges_out": 93,
+      "edges_internal": 92,
+      "top_hub": "PhaseResult (tools/orch/continuum/continuum/schemas/models.py)",
+      "top_hub_fan_in": 6,
+      "max_blast_d10_calls": 9,
+      "max_blast_d10_all": 19
+    },
+    {
+      "group": "tools/cleaners/devtidy",
+      "files": 6,
+      "symbols": 38,
+      "edges_out": 82,
+      "edges_internal": 82,
+      "top_hub": "CacheItem (tools/cleaners/devtidy/devtidy/models.py)",
+      "top_hub_fan_in": 7,
+      "max_blast_d10_calls": 10,
+      "max_blast_d10_all": 19
+    },
+    {
+      "group": "tools/context/narrator",
+      "files": 15,
+      "symbols": 38,
+      "edges_out": 82,
+      "edges_internal": 81,
+      "top_hub": "time_stretch (tools/context/narrator/narrator/services/player.py)",
+      "top_hub_fan_in": 4,
+      "max_blast_d10_calls": 5,
+      "max_blast_d10_all": 10
+    },
+    {
+      "group": "tools/substrate/plumber",
+      "files": 9,
+      "symbols": 38,
+      "edges_out": 86,
+      "edges_internal": 83,
+      "top_hub": "_auto_init (tools/substrate/plumber/plumber/cli.py)",
+      "top_hub_fan_in": 4,
+      "max_blast_d10_calls": 5,
+      "max_blast_d10_all": 15
+    },
+    {
+      "group": "tools/orch/gradient-cli",
+      "files": 8,
+      "symbols": 37,
+      "edges_out": 80,
+      "edges_internal": 76,
+      "top_hub": "compile_plugin (tools/orch/gradient-cli/gradient_cli/core/compiler.py)",
+      "top_hub_fan_in": 9,
+      "max_blast_d10_calls": 84,
+      "max_blast_d10_all": 189
+    },
+    {
+      "group": "tools/flow/teams-alive",
+      "files": 10,
+      "symbols": 37,
+      "edges_out": 97,
+      "edges_internal": 97,
+      "top_hub": "IdleDetectionError (tools/flow/teams-alive/teams_alive/exceptions.py)",
+      "top_hub_fan_in": 4,
+      "max_blast_d10_calls": 17,
+      "max_blast_d10_all": 24
+    },
+    {
+      "group": "tools/substrate/dp",
+      "files": 11,
+      "symbols": 34,
+      "edges_out": 87,
+      "edges_internal": 87,
+      "top_hub": "_status (tools/substrate/dp/dp/display.py)",
+      "top_hub_fan_in": 4,
+      "max_blast_d10_calls": 10,
+      "max_blast_d10_all": 15
+    },
+    {
+      "group": "gradients/research",
+      "files": 4,
+      "symbols": 27,
+      "edges_out": 49,
+      "edges_internal": 49,
+      "top_hub": "extract_topics_from_message (gradients/research/thredium/thredium/scripts/extract_topics.py)",
+      "top_hub_fan_in": 1,
+      "max_blast_d10_calls": 3,
+      "max_blast_d10_all": 3
+    },
+    {
+      "group": "scripts",
+      "files": 4,
+      "symbols": 26,
+      "edges_out": 53,
+      "edges_internal": 52,
+      "top_hub": "load_yaml (scripts/migrate-to-nested-initiatives.py)",
+      "top_hub_fan_in": 2,
+      "max_blast_d10_calls": 4,
+      "max_blast_d10_all": 4
+    },
+    {
+      "group": "tools/orch/weeklog",
+      "files": 9,
+      "symbols": 18,
+      "edges_out": 45,
+      "edges_internal": 45,
+      "top_hub": "_clean_env (tools/orch/weeklog/src/weeklog/core/gh.py)",
+      "top_hub_fan_in": 3,
+      "max_blast_d10_calls": 7,
+      "max_blast_d10_all": 11
+    },
+    {
+      "group": "tools/cleaners/tabclean",
+      "files": 3,
+      "symbols": 14,
+      "edges_out": 24,
+      "edges_internal": 24,
+      "top_hub": "list (tools/cleaners/tabclean/tabclean/cli.py)",
+      "top_hub_fan_in": 95,
+      "max_blast_d10_calls": 443,
+      "max_blast_d10_all": 881
+    },
+    {
+      "group": "gradients/gradient",
+      "files": 3,
+      "symbols": 9,
+      "edges_out": 14,
+      "edges_internal": 14,
+      "top_hub": "get_git_diff (gradients/gradient/gradient/scripts/git/diff.py)",
+      "top_hub_fan_in": 1,
+      "max_blast_d10_calls": 2,
+      "max_blast_d10_all": 2
+    },
+    {
+      "group": "site",
+      "files": 1,
+      "symbols": 0,
+      "edges_out": 0,
+      "edges_internal": 0,
+      "top_hub": "",
+      "top_hub_fan_in": 0,
+      "max_blast_d10_calls": 0,
+      "max_blast_d10_all": 0
+    }
+  ]
+}

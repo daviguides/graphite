@@ -1,0 +1,853 @@
+{
+  "label": "sensemesh-permissive",
+  "mode": "permissive",
+  "root": "/Users/daviguides/work/sources/sensemesh/sensemesh",
+  "files": 3131,
+  "files_by_lang": {
+    "ts/js": 1390,
+    "python": 356,
+    "go": 1385
+  },
+  "parse_errors": 11,
+  "generated_files_skipped": 501,
+  "nodes": 23741,
+  "symbols_non_module": 20610,
+  "symbols_by_kind": {
+    "module": 3131,
+    "function": 11728,
+    "interface": 258,
+    "struct": 1724,
+    "type": 808,
+    "class": 548,
+    "method": 5544
+  },
+  "edges": 81068,
+  "edges_by_kind": {
+    "implements:extracted": 30,
+    "calls:extracted": 27745,
+    "contains:extracted": 20610,
+    "imports:extracted": 19362,
+    "calls:inferred": 13321
+  },
+  "calls_extracted": 39573,
+  "calls_inferred": 17927,
+  "calls_dropped_ambiguous": 16444,
+  "calls_external_unresolved": 115923,
+  "implements_resolved": 30,
+  "implements_unresolved": 124,
+  "fan_in_calls": {
+    "max": 869,
+    "p99": 21,
+    "p90": 4,
+    "median": 1,
+    "mean": 1.993983503153809
+  },
+  "top20_hubs": [
+    {
+      "name": "integrationLocker.Lock",
+      "kind": "method",
+      "file": "cloud/integration/health_sweep.go",
+      "line": 26,
+      "fan_in": 869,
+      "blast_d10_calls": 4055,
+      "blast_d10_all": 6433
+    },
+    {
+      "name": "fakeClock.Now",
+      "kind": "method",
+      "file": "cloud/data-fabric/sdk/direct/coord/failover_test.go",
+      "line": 283,
+      "fan_in": 653,
+      "blast_d10_calls": 2119,
+      "blast_d10_all": 4095
+    },
+    {
+      "name": "cn",
+      "kind": "function",
+      "file": "ui/src/lib/cn.ts",
+      "line": 29,
+      "fan_in": 315,
+      "blast_d10_calls": 800,
+      "blast_d10_all": 1175
+    },
+    {
+      "name": "SenderLog.append",
+      "kind": "method",
+      "file": "object-detector/fabric/direct/wal.py",
+      "line": 346,
+      "fan_in": 312,
+      "blast_d10_calls": 1077,
+      "blast_d10_all": 1521
+    },
+    {
+      "name": "FabricEventPublisher.Close",
+      "kind": "method",
+      "file": "cloud/mission_service/mission_event_publisher.go",
+      "line": 85,
+      "fan_in": 191,
+      "blast_d10_calls": 212,
+      "blast_d10_all": 305
+    },
+    {
+      "name": "Processor.Done",
+      "kind": "method",
+      "file": "cloud/data-fabric/sdk/direct/processor.go",
+      "line": 349,
+      "fan_in": 181,
+      "blast_d10_calls": 948,
+      "blast_d10_all": 2278
+    },
+    {
+      "name": "createTestEntClient",
+      "kind": "function",
+      "file": "cloud/mission_service/test_helpers_test.go",
+      "line": 20,
+      "fan_in": 178,
+      "blast_d10_calls": 186,
+      "blast_d10_all": 250
+    },
+    {
+      "name": "fakeBidiStream.Header",
+      "kind": "method",
+      "file": "aux/sensemesh-edge/internal/data/data_test.go",
+      "line": 138,
+      "fan_in": 152,
+      "blast_d10_calls": 386,
+      "blast_d10_all": 1113
+    },
+    {
+      "name": "llmError.Is",
+      "kind": "method",
+      "file": "aux/design-hub/internal/llm/client.go",
+      "line": 31,
+      "fan_in": 145,
+      "blast_d10_calls": 1257,
+      "blast_d10_all": 2693
+    },
+    {
+      "name": "Wrap",
+      "kind": "function",
+      "file": "cloud/internal/errors/errors.go",
+      "line": 39,
+      "fan_in": 140,
+      "blast_d10_calls": 279,
+      "blast_d10_all": 932
+    },
+    {
+      "name": "ParseUUID",
+      "kind": "function",
+      "file": "cloud/internal/uuid.go",
+      "line": 48,
+      "fan_in": 136,
+      "blast_d10_calls": 217,
+      "blast_d10_all": 854
+    },
+    {
+      "name": "New",
+      "kind": "function",
+      "file": "cloud/pkg/prompts/provider.go",
+      "line": 44,
+      "fan_in": 128,
+      "blast_d10_calls": 158,
+      "blast_d10_all": 294
+    },
+    {
+      "name": "DeviceContextStore.All",
+      "kind": "method",
+      "file": "cloud/mission_service/device_context.go",
+      "line": 179,
+      "fan_in": 127,
+      "blast_d10_calls": 352,
+      "blast_d10_all": 1236
+    },
+    {
+      "name": "RequirePrincipal",
+      "kind": "function",
+      "file": "cloud/pkg/security/principal.go",
+      "line": 60,
+      "fan_in": 125,
+      "blast_d10_calls": 300,
+      "blast_d10_all": 993
+    },
+    {
+      "name": "Principal",
+      "kind": "struct",
+      "file": "cloud/pkg/security/principal.go",
+      "line": 23,
+      "fan_in": 122,
+      "blast_d10_calls": 486,
+      "blast_d10_all": 831
+    },
+    {
+      "name": "Expect.IsZero",
+      "kind": "method",
+      "file": "cloud/chat/regression/types.go",
+      "line": 74,
+      "fan_in": 118,
+      "blast_d10_calls": 747,
+      "blast_d10_all": 2011
+    },
+    {
+      "name": "WithPrincipal",
+      "kind": "function",
+      "file": "cloud/pkg/security/principal.go",
+      "line": 47,
+      "fan_in": 105,
+      "blast_d10_calls": 450,
+      "blast_d10_all": 797
+    },
+    {
+      "name": "useUUIDParser",
+      "kind": "function",
+      "file": "ui/src/hooks/react/use-uuid-parser.ts",
+      "line": 5,
+      "fan_in": 98,
+      "blast_d10_calls": 292,
+      "blast_d10_all": 495
+    },
+    {
+      "name": "MissionRule",
+      "kind": "struct",
+      "file": "cloud/mission_service/mission_rule_processor.go",
+      "line": 74,
+      "fan_in": 97,
+      "blast_d10_calls": 244,
+      "blast_d10_all": 436
+    },
+    {
+      "name": "countingWriter.WriteHeader",
+      "kind": "method",
+      "file": "aux/llm-proxy/internal/proxy/proxy.go",
+      "line": 195,
+      "fan_in": 87,
+      "blast_d10_calls": 284,
+      "blast_d10_all": 820
+    }
+  ],
+  "blast_calls": {
+    "edge_set": "calls+implements (symbol-level dependents)",
+    "targets_measured": 20610,
+    "sampled": false,
+    "d3": {
+      "max": 3505,
+      "p99": 70,
+      "p90": 15,
+      "median": 1,
+      "mean": 6.261960213488598
+    },
+    "d10": {
+      "max": 4055,
+      "p99": 112,
+      "p90": 22,
+      "median": 1,
+      "mean": 9.954488112566715
+    },
+    "unbounded": {
+      "max": 4055,
+      "p99": 123,
+      "p90": 22,
+      "median": 1,
+      "mean": 10.078602620087336
+    },
+    "top5_hub_pct_d10": [
+      17.08,
+      8.93,
+      3.37,
+      4.54,
+      0.89
+    ],
+    "top5_hub_pct_unbounded": [
+      17.08,
+      8.93,
+      3.37,
+      4.54,
+      0.89
+    ],
+    "max_pct_d10": 17.080156690956574,
+    "targets_over_10pct_d10": 1,
+    "targets_over_50pct_d10": 0
+  },
+  "blast_all": {
+    "edge_set": "all kinds incl. contains+imports (synthetic benchmark semantics)",
+    "targets_measured": 20610,
+    "sampled": false,
+    "d3": {
+      "max": 4660,
+      "p99": 186,
+      "p90": 53,
+      "median": 10,
+      "mean": 23.974478408539543
+    },
+    "d10": {
+      "max": 6433,
+      "p99": 386,
+      "p90": 101,
+      "median": 13,
+      "mean": 43.86501698204755
+    },
+    "unbounded": {
+      "max": 6433,
+      "p99": 444,
+      "p90": 101,
+      "median": 13,
+      "mean": 46.207811741872874
+    },
+    "top5_hub_pct_d10": [
+      27.1,
+      17.25,
+      4.95,
+      6.41,
+      1.28
+    ],
+    "top5_hub_pct_unbounded": [
+      27.1,
+      17.25,
+      4.95,
+      6.41,
+      1.28
+    ],
+    "max_pct_d10": 27.096583968661808,
+    "targets_over_10pct_d10": 3,
+    "targets_over_50pct_d10": 0
+  },
+  "scc_calls": {
+    "nontrivial_sccs": 22,
+    "largest_scc": 10,
+    "symbols_in_cycles": 88
+  },
+  "scc_all": {
+    "nontrivial_sccs": 51,
+    "largest_scc": 15,
+    "symbols_in_cycles": 179
+  },
+  "groups": [
+    {
+      "group": "ui",
+      "files": 1386,
+      "symbols": 3575,
+      "edges_out": 11520,
+      "edges_internal": 11520,
+      "top_hub": "cn (ui/src/lib/cn.ts)",
+      "top_hub_fan_in": 315,
+      "max_blast_d10_calls": 800,
+      "max_blast_d10_all": 1175
+    },
+    {
+      "group": "cloud/mission_service",
+      "files": 175,
+      "symbols": 2179,
+      "edges_out": 11118,
+      "edges_internal": 9866,
+      "top_hub": "Close (cloud/mission_service/mission_event_publisher.go)",
+      "top_hub_fan_in": 191,
+      "max_blast_d10_calls": 410,
+      "max_blast_d10_all": 1693
+    },
+    {
+      "group": "object-detector",
+      "files": 132,
+      "symbols": 1757,
+      "edges_out": 4800,
+      "edges_internal": 4727,
+      "top_hub": "append (object-detector/fabric/direct/wal.py)",
+      "top_hub_fan_in": 312,
+      "max_blast_d10_calls": 1116,
+      "max_blast_d10_all": 1560
+    },
+    {
+      "group": "cloud/data-fabric",
+      "files": 144,
+      "symbols": 1731,
+      "edges_out": 8041,
+      "edges_internal": 7600,
+      "top_hub": "Now (cloud/data-fabric/sdk/direct/coord/failover_test.go)",
+      "top_hub_fan_in": 653,
+      "max_blast_d10_calls": 2119,
+      "max_blast_d10_all": 4095
+    },
+    {
+      "group": "cloud/chat",
+      "files": 184,
+      "symbols": 1671,
+      "edges_out": 8935,
+      "edges_internal": 7796,
+      "top_hub": "IsZero (cloud/chat/regression/types.go)",
+      "top_hub_fan_in": 118,
+      "max_blast_d10_calls": 747,
+      "max_blast_d10_all": 2011
+    },
+    {
+      "group": "tools/chat-regression-report",
+      "files": 83,
+      "symbols": 919,
+      "edges_out": 2557,
+      "edges_internal": 2470,
+      "top_hub": "wait (tools/chat-regression-report/tests/chat_regression_report/stability/test_go_execution.py)",
+      "top_hub_fan_in": 49,
+      "max_blast_d10_calls": 193,
+      "max_blast_d10_all": 408
+    },
+    {
+      "group": "aux/sensemesh-edge",
+      "files": 64,
+      "symbols": 795,
+      "edges_out": 3043,
+      "edges_internal": 2814,
+      "top_hub": "Header (aux/sensemesh-edge/internal/data/data_test.go)",
+      "top_hub_fan_in": 152,
+      "max_blast_d10_calls": 386,
+      "max_blast_d10_all": 1113
+    },
+    {
+      "group": "cloud/metadata",
+      "files": 81,
+      "symbols": 667,
+      "edges_out": 2911,
+      "edges_internal": 1838,
+      "top_hub": "newFakeKV (cloud/metadata/streamcontrol/streamcontrol_test.go)",
+      "top_hub_fan_in": 36,
+      "max_blast_d10_calls": 44,
+      "max_blast_d10_all": 63
+    },
+    {
+      "group": "cloud/auth",
+      "files": 68,
+      "symbols": 630,
+      "edges_out": 3009,
+      "edges_internal": 2213,
+      "top_hub": "fakeDirectory (cloud/auth/connection/fakes_test.go)",
+      "top_hub_fan_in": 61,
+      "max_blast_d10_calls": 187,
+      "max_blast_d10_all": 479
+    },
+    {
+      "group": "cloud/persistence",
+      "files": 84,
+      "symbols": 553,
+      "edges_out": 2229,
+      "edges_internal": 1802,
+      "top_hub": "newTestWriter (cloud/persistence/clickhouse/writer_test.go)",
+      "top_hub_fan_in": 42,
+      "max_blast_d10_calls": 86,
+      "max_blast_d10_all": 166
+    },
+    {
+      "group": "aux/agentdeck",
+      "files": 52,
+      "symbols": 527,
+      "edges_out": 2221,
+      "edges_internal": 2136,
+      "top_hub": "Get (aux/agentdeck/internal/sessions/store.go)",
+      "top_hub_fan_in": 66,
+      "max_blast_d10_calls": 155,
+      "max_blast_d10_all": 195
+    },
+    {
+      "group": "cloud/integration",
+      "files": 55,
+      "symbols": 430,
+      "edges_out": 1762,
+      "edges_internal": 1403,
+      "top_hub": "Lock (cloud/integration/health_sweep.go)",
+      "top_hub_fan_in": 869,
+      "max_blast_d10_calls": 4055,
+      "max_blast_d10_all": 6433
+    },
+    {
+      "group": "aux/design-hub",
+      "files": 33,
+      "symbols": 416,
+      "edges_out": 1386,
+      "edges_internal": 1305,
+      "top_hub": "Is (aux/design-hub/internal/llm/client.go)",
+      "top_hub_fan_in": 145,
+      "max_blast_d10_calls": 1257,
+      "max_blast_d10_all": 2693
+    },
+    {
+      "group": "aux/llm-proxy",
+      "files": 43,
+      "symbols": 377,
+      "edges_out": 1379,
+      "edges_internal": 1325,
+      "top_hub": "WriteHeader (aux/llm-proxy/internal/proxy/proxy.go)",
+      "top_hub_fan_in": 87,
+      "max_blast_d10_calls": 284,
+      "max_blast_d10_all": 820
+    },
+    {
+      "group": "experiments",
+      "files": 36,
+      "symbols": 373,
+      "edges_out": 937,
+      "edges_internal": 814,
+      "top_hub": "ch_query (experiments/hackathon/digest-lookback/lib/db.py)",
+      "top_hub_fan_in": 9,
+      "max_blast_d10_calls": 16,
+      "max_blast_d10_all": 22
+    },
+    {
+      "group": "cloud/video-service",
+      "files": 63,
+      "symbols": 371,
+      "edges_out": 1685,
+      "edges_internal": 1219,
+      "top_hub": "Bytes (cloud/video-service/internal/hls/live/types.go)",
+      "top_hub_fan_in": 52,
+      "max_blast_d10_calls": 226,
+      "max_blast_d10_all": 807
+    },
+    {
+      "group": "cloud/rtp",
+      "files": 41,
+      "symbols": 363,
+      "edges_out": 1382,
+      "edges_internal": 1044,
+      "top_hub": "Add (cloud/rtp/ringbuffer.go)",
+      "top_hub_fan_in": 32,
+      "max_blast_d10_calls": 83,
+      "max_blast_d10_all": 197
+    },
+    {
+      "group": "aux/gemma-router",
+      "files": 32,
+      "symbols": 357,
+      "edges_out": 1163,
+      "edges_internal": 1097,
+      "top_hub": "New (aux/gemma-router/internal/metrics/metrics.go)",
+      "top_hub_fan_in": 18,
+      "max_blast_d10_calls": 29,
+      "max_blast_d10_all": 68
+    },
+    {
+      "group": "cloud/pkg",
+      "files": 46,
+      "symbols": 336,
+      "edges_out": 986,
+      "edges_internal": 882,
+      "top_hub": "New (cloud/pkg/prompts/provider.go)",
+      "top_hub_fan_in": 128,
+      "max_blast_d10_calls": 803,
+      "max_blast_d10_all": 1637
+    },
+    {
+      "group": "aux/edge-gateway",
+      "files": 33,
+      "symbols": 281,
+      "edges_out": 954,
+      "edges_internal": 905,
+      "top_hub": "String (aux/edge-gateway/internal/data/splice.go)",
+      "top_hub_fan_in": 25,
+      "max_blast_d10_calls": 161,
+      "max_blast_d10_all": 402
+    },
+    {
+      "group": "cloud/mission_insight",
+      "files": 41,
+      "symbols": 269,
+      "edges_out": 2784,
+      "edges_internal": 614,
+      "top_hub": "CELFilterToVariants (cloud/mission_insight/cel_to_variant.go)",
+      "top_hub_fan_in": 14,
+      "max_blast_d10_calls": 40,
+      "max_blast_d10_all": 70
+    },
+    {
+      "group": "tools/psync",
+      "files": 20,
+      "symbols": 242,
+      "edges_out": 518,
+      "edges_internal": 503,
+      "top_hub": "_run (tools/psync/tests/test_cli_watch.py)",
+      "top_hub_fan_in": 18,
+      "max_blast_d10_calls": 38,
+      "max_blast_d10_all": 62
+    },
+    {
+      "group": "aux/alert-sentinel",
+      "files": 28,
+      "symbols": 201,
+      "edges_out": 425,
+      "edges_internal": 418,
+      "top_hub": "get (aux/alert-sentinel/src/alert_sentinel/dedup_store.py)",
+      "top_hub_fan_in": 22,
+      "max_blast_d10_calls": 41,
+      "max_blast_d10_all": 58
+    },
+    {
+      "group": "aux/rtsp-relay",
+      "files": 17,
+      "symbols": 170,
+      "edges_out": 454,
+      "edges_internal": 428,
+      "top_hub": "Close (aux/rtsp-relay/internal/store/sqlite.go)",
+      "top_hub_fan_in": 21,
+      "max_blast_d10_calls": 39,
+      "max_blast_d10_all": 55
+    },
+    {
+      "group": "cloud/description_agent",
+      "files": 21,
+      "symbols": 169,
+      "edges_out": 651,
+      "edges_internal": 436,
+      "top_hub": "JetStream (cloud/description_agent/internal/nats/client.go)",
+      "top_hub_fan_in": 29,
+      "max_blast_d10_calls": 189,
+      "max_blast_d10_all": 454
+    },
+    {
+      "group": "cloud/partitioned-config",
+      "files": 13,
+      "symbols": 154,
+      "edges_out": 709,
+      "edges_internal": 446,
+      "top_hub": "startTestNATS (cloud/partitioned-config/sdk/infra_test.go)",
+      "top_hub_fan_in": 19,
+      "max_blast_d10_calls": 64,
+      "max_blast_d10_all": 133
+    },
+    {
+      "group": "cloud/drone_server",
+      "files": 8,
+      "symbols": 148,
+      "edges_out": 446,
+      "edges_internal": 336,
+      "top_hub": "GetStatus (cloud/drone_server/internal/service/replay_manager.go)",
+      "top_hub_fan_in": 19,
+      "max_blast_d10_calls": 208,
+      "max_blast_d10_all": 731
+    },
+    {
+      "group": "tools/mission-evals",
+      "files": 22,
+      "symbols": 140,
+      "edges_out": 311,
+      "edges_internal": 308,
+      "top_hub": "Aggregate (tools/mission-evals/mission_evals/schemas/standing.py)",
+      "top_hub_fan_in": 23,
+      "max_blast_d10_calls": 37,
+      "max_blast_d10_all": 51
+    },
+    {
+      "group": "cloud/alerts",
+      "files": 16,
+      "symbols": 121,
+      "edges_out": 339,
+      "edges_internal": 291,
+      "top_hub": "getTestDBConnection (cloud/alerts/test_helpers.go)",
+      "top_hub_fan_in": 30,
+      "max_blast_d10_calls": 31,
+      "max_blast_d10_all": 46
+    },
+    {
+      "group": "tools/sense-regression-report",
+      "files": 19,
+      "symbols": 118,
+      "edges_out": 250,
+      "edges_internal": 246,
+      "top_hub": "_html (tools/sense-regression-report/tests/sense_regression_report/test_renderer.py)",
+      "top_hub_fan_in": 22,
+      "max_blast_d10_calls": 30,
+      "max_blast_d10_all": 35
+    },
+    {
+      "group": "cloud/internal",
+      "files": 16,
+      "symbols": 82,
+      "edges_out": 247,
+      "edges_internal": 166,
+      "top_hub": "Wrap (cloud/internal/errors/errors.go)",
+      "top_hub_fan_in": 140,
+      "max_blast_d10_calls": 699,
+      "max_blast_d10_all": 1800
+    },
+    {
+      "group": "cloud/server",
+      "files": 8,
+      "symbols": 70,
+      "edges_out": 780,
+      "edges_internal": 184,
+      "top_hub": "NewFrameRateDetector (cloud/server/frame_rate_detector.go)",
+      "top_hub_fan_in": 9,
+      "max_blast_d10_calls": 42,
+      "max_blast_d10_all": 127
+    },
+    {
+      "group": "cloud/feedback",
+      "files": 7,
+      "symbols": 43,
+      "edges_out": 158,
+      "edges_internal": 85,
+      "top_hub": "Notify (cloud/feedback/discord_notifier.go)",
+      "top_hub_fan_in": 13,
+      "max_blast_d10_calls": 26,
+      "max_blast_d10_all": 51
+    },
+    {
+      "group": "cloud/mcp",
+      "files": 5,
+      "symbols": 41,
+      "edges_out": 94,
+      "edges_internal": 91,
+      "top_hub": "PutObject (cloud/mcp/internal/storage/client.go)",
+      "top_hub_fan_in": 9,
+      "max_blast_d10_calls": 71,
+      "max_blast_d10_all": 240
+    },
+    {
+      "group": "cloud/message_archive",
+      "files": 4,
+      "symbols": 39,
+      "edges_out": 103,
+      "edges_internal": 84,
+      "top_hub": "rotateFile (cloud/message_archive/archiver/main.go)",
+      "top_hub_fan_in": 2,
+      "max_blast_d10_calls": 12,
+      "max_blast_d10_all": 24
+    },
+    {
+      "group": "cloud/scripts",
+      "files": 3,
+      "symbols": 37,
+      "edges_out": 122,
+      "edges_internal": 62,
+      "top_hub": "seedLatLng (cloud/scripts/dump-seed/main.go)",
+      "top_hub_fan_in": 2,
+      "max_blast_d10_calls": 2,
+      "max_blast_d10_all": 4
+    },
+    {
+      "group": "cloud/storage",
+      "files": 2,
+      "symbols": 37,
+      "edges_out": 185,
+      "edges_internal": 122,
+      "top_hub": "newTestHandler (cloud/storage/grpc_handler_test.go)",
+      "top_hub_fan_in": 18,
+      "max_blast_d10_calls": 24,
+      "max_blast_d10_all": 32
+    },
+    {
+      "group": "infra",
+      "files": 6,
+      "symbols": 35,
+      "edges_out": 60,
+      "edges_internal": 58,
+      "top_hub": "loadStartupScript (infra/config_test.go)",
+      "top_hub_fan_in": 14,
+      "max_blast_d10_calls": 14,
+      "max_blast_d10_all": 15
+    },
+    {
+      "group": "e2e-tests",
+      "files": 8,
+      "symbols": 32,
+      "edges_out": 63,
+      "edges_internal": 55,
+      "top_hub": "Session (e2e-tests/auth.go)",
+      "top_hub_fan_in": 1,
+      "max_blast_d10_calls": 2,
+      "max_blast_d10_all": 5
+    },
+    {
+      "group": "tools/chat-rca",
+      "files": 12,
+      "symbols": 31,
+      "edges_out": 74,
+      "edges_internal": 73,
+      "top_hub": "bucket (tools/chat-rca/chat_rca/schemas/config.py)",
+      "top_hub_fan_in": 17,
+      "max_blast_d10_calls": 52,
+      "max_blast_d10_all": 73
+    },
+    {
+      "group": "cloud/common",
+      "files": 3,
+      "symbols": 30,
+      "edges_out": 63,
+      "edges_internal": 61,
+      "top_hub": "GetEnv (cloud/common/daprconfig/config.go)",
+      "top_hub_fan_in": 29,
+      "max_blast_d10_calls": 89,
+      "max_blast_d10_all": 173
+    },
+    {
+      "group": "tools/chat-cli",
+      "files": 8,
+      "symbols": 30,
+      "edges_out": 61,
+      "edges_internal": 61,
+      "top_hub": "encode_envelope (tools/chat-cli/chat_cli/principal.py)",
+      "top_hub_fan_in": 4,
+      "max_blast_d10_calls": 10,
+      "max_blast_d10_all": 17
+    },
+    {
+      "group": "cloud/llm",
+      "files": 3,
+      "symbols": 26,
+      "edges_out": 64,
+      "edges_internal": 50,
+      "top_hub": "Config (cloud/llm/googleai/client.go)",
+      "top_hub_fan_in": 6,
+      "max_blast_d10_calls": 113,
+      "max_blast_d10_all": 177
+    },
+    {
+      "group": "cloud/vocab",
+      "files": 2,
+      "symbols": 19,
+      "edges_out": 53,
+      "edges_internal": 51,
+      "top_hub": "Caps (cloud/vocab/vocab.go)",
+      "top_hub_fan_in": 9,
+      "max_blast_d10_calls": 108,
+      "max_blast_d10_all": 332
+    },
+    {
+      "group": "deploy",
+      "files": 1,
+      "symbols": 11,
+      "edges_out": 22,
+      "edges_internal": 20,
+      "top_hub": "load_envoy (deploy/scripts/check-edge-config-parity.py)",
+      "top_hub_fan_in": 1,
+      "max_blast_d10_calls": 4,
+      "max_blast_d10_all": 4
+    },
+    {
+      "group": "cloud/dock",
+      "files": 1,
+      "symbols": 3,
+      "edges_out": 9,
+      "edges_internal": 5,
+      "top_hub": "detectFrameType (cloud/dock/main.go)",
+      "top_hub_fan_in": 1,
+      "max_blast_d10_calls": 1,
+      "max_blast_d10_all": 2
+    },
+    {
+      "group": "cloud/proto",
+      "files": 1,
+      "symbols": 2,
+      "edges_out": 2,
+      "edges_internal": 2,
+      "top_hub": "",
+      "top_hub_fan_in": 0,
+      "max_blast_d10_calls": 0,
+      "max_blast_d10_all": 628
+    },
+    {
+      "group": "aux/storybook-host",
+      "files": 1,
+      "symbols": 2,
+      "edges_out": 3,
+      "edges_internal": 3,
+      "top_hub": "tailscaleSSHFlag (aux/storybook-host/infra/main.go)",
+      "top_hub_fan_in": 1,
+      "max_blast_d10_calls": 1,
+      "max_blast_d10_all": 2
+    }
+  ]
+}
