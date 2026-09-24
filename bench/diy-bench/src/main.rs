@@ -163,7 +163,7 @@ impl Engine for DiyEngine {
             }
         }
         wtx.commit().unwrap();
-        self.load_from_disk(ds.n_syms() as usize, ds.cfg.files as usize);
+        self.load_from_disk(ds.n_syms() as usize, ds.n_files() as usize);
     }
 
     fn variants(&self) -> Vec<&'static str> {
@@ -255,10 +255,10 @@ impl Factory for DiyFactory {
     }
     fn reopen(&self, tag: &str) -> Option<DiyEngine> {
         let path = self.dir.join(format!("diy-redb-{tag}.redb"));
-        let cfg = common::Config::by_name(&self.size);
+        let ds = Dataset::by_name(&self.size);
         let e = DiyEngine { db: Database::create(&path).unwrap(), path, g: RwLock::new(Graph::default()) };
         let t = std::time::Instant::now();
-        e.load_from_disk(cfg.n_syms() as usize, cfg.files as usize);
+        e.load_from_disk(ds.n_syms() as usize, ds.n_files() as usize);
         eprintln!("[diy] reopen: rebuilt in-memory graph from redb in {:?}", t.elapsed());
         Some(e)
     }

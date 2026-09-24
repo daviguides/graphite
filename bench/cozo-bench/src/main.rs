@@ -12,6 +12,10 @@ const SCHEMA: &str = r#"
 {::index create edge:rev {dst, src, kind, prov, resolved}}
 "#;
 
+// Graph algorithms read an unweighted 2-column view; a 3rd column would be
+// taken as the edge weight by the projection.
+const ADJ: &str = "e[a, b] := *edge{src: a, dst: b}";
+
 struct CozoEngine {
     db: DbInstance,
     backend: String,
@@ -136,7 +140,7 @@ impl Engine for CozoEngine {
 
     fn load(&self, ds: &Dataset) {
         self.run(SCHEMA, BTreeMap::new(), true);
-        let syms: Vec<DataValue> = (0..ds.cfg.files).flat_map(|f| sym_rows(ds, f)).collect();
+        let syms: Vec<DataValue> = (0..ds.n_files()).flat_map(|f| sym_rows(ds, f)).collect();
         for chunk in syms.chunks(50_000) {
             self.run(
                 "?[file, id, name] <- $rows :put sym {file, id => name}",
@@ -152,7 +156,6 @@ impl Engine for CozoEngine {
                 true,
             );
         }
-        self.run("::graph create g {edges: edge}", BTreeMap::new(), true);
     }
 
     fn variants(&self) -> Vec<&'static str> {
@@ -170,13 +173,14 @@ impl Engine for CozoEngine {
 
     fn shortest_path(&self, a: u32, b: u32) -> Option<u32> {
         let rows = self.run(
-            "start[x] <- [[$a]]\n\
+            "e[a, b] := *edge{src: a, dst: b}\n\
+             start[x] <- [[$a]]\n\
              goal[x] <- [[$b]]\n\
-             ?[s, g, cost, path] <~ ShortestPathDijkstra(start[], goal[], graph: 'g')",
+             ?[s, g, path] <~ ShortestPathBFS(e[], start[], goal[])",
             p(vec![("a", DataValue::from(a as i64)), ("b", DataValue::from(b as i64))]),
             false,
         );
-        rows.rows.first().and_then(|r| match &r[3] {
+        rows.rows.first().and_then(|r| match &r[2] {
             DataValue::List(path) => Some(path.len() as u32 - 1),
             _ => None,
         })
@@ -184,7 +188,7 @@ impl Engine for CozoEngine {
 
     fn scc(&self) -> Option<Vec<u32>> {
         let rows = self.run(
-            "?[n, c] <~ StronglyConnectedComponents(graph: 'g')",
+            &format!("{ADJ}\n?[n, c] <~ StronglyConnectedComponents(e[])"),
             BTreeMap::new(),
             false,
         );
@@ -193,7 +197,7 @@ impl Engine for CozoEngine {
 
     fn communities(&self) -> Option<usize> {
         let rows = self.run(
-            "?[labels, n] <~ CommunityDetectionLouvain(graph: 'g')",
+            &format!("{ADJ}\n?[labels, n] <~ CommunityDetectionLouvain(e[])"),
             BTreeMap::new(),
             false,
         );
@@ -202,7 +206,7 @@ impl Engine for CozoEngine {
     }
 
     fn pagerank(&self) -> Option<usize> {
-        let rows = self.run("?[n, r] <~ PageRank(graph: 'g')", BTreeMap::new(), false);
+        let rows = self.run(&format!("{ADJ}\n?[n, r] <~ PageRank(e[])"), BTreeMap::new(), false);
         Some(rows.rows.len())
     }
 

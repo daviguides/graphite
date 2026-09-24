@@ -7,7 +7,7 @@ import sys
 from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sizes = sys.argv[1:] or ["small", "medium", "large"]
+sizes = sys.argv[1:] or ["continuum-strict", "sensemesh-strict", "continuum-permissive", "sensemesh-permissive", "small", "medium", "large"]
 
 data = defaultdict(dict)  # (engine, size) -> metric -> rec
 for path in glob.glob(os.path.join(HERE, "results", "*.jsonl")):
@@ -57,17 +57,17 @@ for size in sizes:
         continue
     any_m = data[(es[0], size)]
     print(f"\n### {size}: {int(any_m['dataset_symbols']['value']):,} symbols / {int(any_m['dataset_edges']['value']):,} edges")
-    print(f"\nTargets: hub blast(d10) = {int(any_m['target_hub_blast10_size']['value']):,} nodes; "
-          f"median blast(d10) = {int(any_m['target_median_blast10_size']['value']):,} nodes.\n")
+    tsz = lambda t: int(any_m.get(f"target_{t}_blast10_size", {"value": -1})["value"])
+    print(f"\nTargets (depth-10 reach): hub = {tsz('hub'):,}, p99 = {tsz('p99'):,}, median = {tsz('median'):,} nodes.\n")
 
     print("#### Blast radius by traversal strategy (p50 / p95)\n")
-    print("| engine | strategy | d3 median | d10 median | d10 hub | d10 hub trusted | correct |")
-    print("|---|---|---|---|---|---|---|")
+    print("| engine | strategy | d3 median | d10 median | d10 p99 | d10 hub | d10 hub trusted | correct |")
+    print("|---|---|---|---|---|---|---|---|")
     for e in es:
         m = data[(e, size)]
         for v in variants(m):
             cells = []
-            for key in (f"blast_d3_median[{v}]", f"blast_d10_median[{v}]", f"blast_d10_hub[{v}]", f"blast_d10_hub_trusted[{v}]"):
+            for key in (f"blast_d3_median[{v}]", f"blast_d10_median[{v}]", f"blast_d10_p99[{v}]", f"blast_d10_hub[{v}]", f"blast_d10_hub_trusted[{v}]"):
                 cells.append(f"{ms(get(m, key))} / {ms(get(m, key, 'p95_us'))}")
             ok = flag(m, f"correct_vs_reference_initial[{v}]") + flag(m, f"correct_incremental_eq_full[{v}]")
             print(f"| {e} | {v} | " + " | ".join(cells) + f" | {ok} |")

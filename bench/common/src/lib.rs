@@ -102,29 +102,107 @@ impl Config {
 }
 
 #[derive(Clone)]
+enum Source {
+    Synthetic(Config),
+    /// Real graph: `pristine` is the extracted edge set per file, `dsts` the
+    /// pool of real edge targets used to synthesize plausible edits.
+    Real { pristine: Arc<Vec<Vec<Edge>>>, dsts: Arc<Vec<u32>> },
+}
+
+#[derive(Clone)]
 pub struct Dataset {
-    pub cfg: Config,
+    pub name: String,
+    /// `file_start[f]..file_start[f + 1]` are the symbols of file `f`.
+    pub file_start: Vec<u32>,
     /// Edges owned by each file (edges whose `src` lives in that file).
     pub edges_by_file: Vec<Vec<Edge>>,
+    source: Source,
 }
 
 impl Dataset {
     pub fn generate(cfg: &Config) -> Dataset {
         let mut rng = Rng::new(cfg.seed);
-        let edges_by_file = (0..cfg.files)
-            .map(|f| gen_file_edges(cfg, f, &mut rng))
-            .collect();
-        Dataset { cfg: cfg.clone(), edges_by_file }
+        let edges_by_file = (0..cfg.files).map(|f| gen_file_edges(cfg, f, &mut rng)).collect();
+        let file_start = (0..=cfg.files).map(|f| f * cfg.syms_per_file).collect();
+        Dataset { name: cfg.name.to_string(), file_start, edges_by_file, source: Source::Synthetic(cfg.clone()) }
     }
+
+    /// Load a graph exported by `bench/real-graph` (`data/<label>/{symbols,edges}.jsonl`).
+    /// Symbols are renumbered so each file's symbols are contiguous; duplicate
+    /// (src, dst, kind) edges are dropped.
+    pub fn load_real(label: &str) -> Dataset {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../real-graph/data").join(label);
+        let read = |f: &str| std::fs::read_to_string(dir.join(f)).unwrap_or_else(|e| panic!("{}: {e}", dir.join(f).display()));
+        let mut syms: Vec<(String, u32)> = read("symbols.jsonl")
+            .lines()
+            .map(|l| {
+                let v: serde_json::Value = serde_json::from_str(l).unwrap();
+                (v["file"].as_str().unwrap().to_string(), v["i"].as_u64().unwrap() as u32)
+            })
+            .collect();
+        syms.sort();
+        let n = syms.len();
+        let mut new_id = vec![u32::MAX; n];
+        let mut file_start = Vec::new();
+        let mut prev: Option<&str> = None;
+        for (k, (file, i)) in syms.iter().enumerate() {
+            if prev != Some(file.as_str()) {
+                file_start.push(k as u32);
+                prev = Some(file.as_str());
+            }
+            new_id[*i as usize] = k as u32;
+        }
+        file_start.push(n as u32);
+        let n_files = file_start.len() - 1;
+        let file_of = |sym: u32| (file_start.partition_point(|&s| s <= sym) - 1) as u32;
+        let mut edges_by_file = vec![Vec::new(); n_files];
+        let mut seen = HashSet::new();
+        for l in read("edges.jsonl").lines() {
+            let v: serde_json::Value = serde_json::from_str(l).unwrap();
+            let src = new_id[v["src"].as_u64().unwrap() as usize];
+            let dst = new_id[v["dst"].as_u64().unwrap() as usize];
+            let kind = match v["kind"].as_str().unwrap() {
+                "calls" => KIND_CALLS,
+                "imports" => KIND_IMPORTS,
+                "implements" => KIND_IMPLEMENTS,
+                "contains" => KIND_CONTAINS,
+                k => panic!("unknown edge kind {k}"),
+            };
+            if !seen.insert((src, dst, kind)) {
+                continue;
+            }
+            let extracted = v["prov"].as_str().unwrap() == "extracted";
+            let prov = if extracted { PROV_EXTRACTED } else { PROV_INFERRED };
+            edges_by_file[file_of(src) as usize].push(Edge { src, dst, kind, prov, resolved: extracted });
+        }
+        let dsts = edges_by_file.iter().flatten().filter(|e| e.kind == KIND_CALLS).map(|e| e.dst).collect();
+        Dataset {
+            name: label.to_string(),
+            file_start,
+            source: Source::Real { pristine: Arc::new(edges_by_file.clone()), dsts: Arc::new(dsts) },
+            edges_by_file,
+        }
+    }
+
+    /// `small|medium|large` (synthetic) or `real:<label>`.
+    pub fn by_name(name: &str) -> Dataset {
+        match name.strip_prefix("real:") {
+            Some(label) => Dataset::load_real(label),
+            None => Dataset::generate(&Config::by_name(name)),
+        }
+    }
+
     pub fn n_syms(&self) -> u32 {
-        self.cfg.n_syms()
+        *self.file_start.last().unwrap()
+    }
+    pub fn n_files(&self) -> u32 {
+        self.edges_by_file.len() as u32
     }
     pub fn file_of(&self, sym: u32) -> u32 {
-        sym / self.cfg.syms_per_file
+        (self.file_start.partition_point(|&s| s <= sym) - 1) as u32
     }
     pub fn syms_of(&self, file: u32) -> std::ops::Range<u32> {
-        let s = file * self.cfg.syms_per_file;
-        s..s + self.cfg.syms_per_file
+        self.file_start[file as usize]..self.file_start[file as usize + 1]
     }
     pub fn edges(&self) -> impl Iterator<Item = &Edge> {
         self.edges_by_file.iter().flatten()
@@ -132,9 +210,31 @@ impl Dataset {
     pub fn n_edges(&self) -> usize {
         self.edges_by_file.iter().map(Vec::len).sum()
     }
-    /// A new version of one file: same symbols, regenerated outgoing edges.
+
+    /// A new version of one file: same symbols, changed outgoing edges.
+    /// Synthetic: regenerated. Real: the extracted edges with ~15% dropped
+    /// and a few new calls to real call targets (a plausible edit).
     pub fn regen_file(&self, file: u32, rng: &mut Rng) -> Vec<Edge> {
-        gen_file_edges(&self.cfg, file, rng)
+        match &self.source {
+            Source::Synthetic(cfg) => gen_file_edges(cfg, file, rng),
+            Source::Real { pristine, dsts } => {
+                let mut out: Vec<Edge> = pristine[file as usize].iter().filter(|_| rng.f64() >= 0.15).copied().collect();
+                let syms = self.syms_of(file);
+                let callers: Vec<u32> = syms.clone().collect();
+                let adds = 1 + rng.below(4);
+                for _ in 0..adds {
+                    if callers.is_empty() || dsts.is_empty() {
+                        break;
+                    }
+                    let src = callers[rng.below(callers.len() as u64) as usize];
+                    let dst = dsts[rng.below(dsts.len() as u64) as usize];
+                    if src != dst && !out.iter().any(|e| e.src == src && e.dst == dst && e.kind == KIND_CALLS) {
+                        out.push(Edge { src, dst, kind: KIND_CALLS, prov: PROV_EXTRACTED, resolved: true });
+                    }
+                }
+                out
+            }
+        }
     }
 }
 
@@ -497,34 +597,53 @@ impl Recorder {
     }
 }
 
-fn pick_targets(ds: &Dataset, reference: &Reference) -> (u32, u32, (u32, u32)) {
+pub struct Targets {
+    pub hub: u32,
+    pub p99: u32,
+    pub median: u32,
+    pub path: (u32, u32),
+}
+
+/// Pick blast targets by depth-10 reach: the worst hub, the p99 and the
+/// median symbol among symbols with non-empty reach. Large graphs are sampled.
+pub fn pick_targets(ds: &Dataset, reference: &Reference) -> Targets {
     let n = ds.n_syms();
-    let hub = (0..n).max_by_key(|&s| reference.in_degree(s)).unwrap();
     let mut rng = Rng::new(7);
-    let mut sample: Vec<(usize, u32)> = (0..201)
-        .map(|_| rng.below(n as u64) as u32)
+    let mut cand: Vec<u32> = if n <= 60_000 {
+        (0..n).collect()
+    } else {
+        (0..20_000).map(|_| rng.below(n as u64) as u32).collect()
+    };
+    let mut by_in: Vec<u32> = (0..n).collect();
+    by_in.sort_by_key(|&s| std::cmp::Reverse(reference.in_degree(s)));
+    cand.extend(by_in.into_iter().take(100));
+    cand.sort_unstable();
+    cand.dedup();
+    let mut reach: Vec<(usize, u32)> = cand
+        .into_iter()
         .map(|s| (reference.blast(s, 10, false).len(), s))
-        .filter(|&(len, _)| len > 0)
+        .filter(|&(r, _)| r > 0)
         .collect();
-    sample.sort();
-    let median = sample[sample.len() / 2].1;
-    // A pair with a real path of length >= 4.
-    let mut pair = (0, 0);
+    reach.sort_unstable();
+    let at = |q: f64| reach[((reach.len() - 1) as f64 * q).round() as usize].1;
+    let (hub, p99, median) = (reach.last().unwrap().1, at(0.99), at(0.50));
+    // A pair with a real forward path, as long as possible (>= 4 preferred).
+    let mut path = (hub, hub);
     let mut best = 0;
-    for _ in 0..400 {
+    for _ in 0..2_000 {
         let a = rng.below(n as u64) as u32;
         let b = rng.below(n as u64) as u32;
         if let Some(len) = reference.shortest_path(a, b) {
-            if len >= 4 && len > best {
+            if len > best {
                 best = len;
-                pair = (a, b);
+                path = (a, b);
                 if len >= 6 {
                     break;
                 }
             }
         }
     }
-    (hub, median, pair)
+    Targets { hub, p99, median, path }
 }
 
 /// Apply `count` random per-file updates to both `engine` and `ds`.
@@ -532,7 +651,7 @@ fn apply_updates<E: Engine>(engine: &E, ds: &mut Dataset, count: usize, seed: u6
     let mut rng = Rng::new(seed);
     let mut lat = Vec::with_capacity(count);
     for _ in 0..count {
-        let file = rng.below(ds.cfg.files as u64) as u32;
+        let file = rng.below(ds.n_files() as u64) as u32;
         let edges = ds.regen_file(file, &mut rng);
         let t = Instant::now();
         engine.replace_file(ds, file, &edges);
@@ -549,20 +668,16 @@ pub struct RunOpts {
 }
 
 pub fn run_suite<F: Factory>(factory: &F, opts: &RunOpts) {
-    let cfg = Config::by_name(&opts.size);
     let engine_label = factory.label();
-    let path = opts
-        .results_dir
-        .join(format!("{}-{}.jsonl", engine_label, cfg.name));
-    let _ = std::fs::remove_file(&path);
-    let rec = Recorder { engine: engine_label.clone(), size: cfg.name.to_string(), path };
-
     let t = Instant::now();
-    let ds = Dataset::generate(&cfg);
+    let ds = Dataset::by_name(&opts.size);
+    let path = opts.results_dir.join(format!("{}-{}.jsonl", engine_label, ds.name));
+    let _ = std::fs::remove_file(&path);
+    let rec = Recorder { engine: engine_label.clone(), size: ds.name.clone(), path };
     let reference = Reference::new(&ds);
     eprintln!(
-        "[{engine_label}] dataset {}: {} syms, {} edges, generated in {:?}",
-        cfg.name,
+        "[{engine_label}] dataset {}: {} syms, {} edges, loaded in {:?}",
+        ds.name,
         ds.n_syms(),
         ds.n_edges(),
         t.elapsed()
@@ -579,11 +694,12 @@ pub fn run_suite<F: Factory>(factory: &F, opts: &RunOpts) {
         rec.value("disk_mb", dir_size_mb(&p), p.display().to_string());
     }
 
-    let (hub, median, (pa, pb)) = pick_targets(&ds, &reference);
-    let hub_size = reference.blast(hub, 10, false).len();
-    let med_size = reference.blast(median, 10, false).len();
-    rec.value("target_hub_blast10_size", hub_size as f64, format!("sym {hub}"));
-    rec.value("target_median_blast10_size", med_size as f64, format!("sym {median}"));
+    let tg = pick_targets(&ds, &reference);
+    let (median, (pa, pb)) = (tg.median, tg.path);
+    let named = [("hub", tg.hub), ("p99", tg.p99), ("median", tg.median)];
+    for (tname, s) in named {
+        rec.value(&format!("target_{tname}_blast10_size"), reference.blast(s, 10, false).len() as f64, format!("sym {s}"));
+    }
 
     let variants = engine.variants();
     let dv = variants[0];
@@ -596,7 +712,7 @@ pub fn run_suite<F: Factory>(factory: &F, opts: &RunOpts) {
     // ---- correctness on the initial state (every variant)
     for &v in &variants {
         let mut mismatches = 0;
-        for &tg in &[hub, median] {
+        for &(_, tg) in &named {
             for &d in &[3u32, 10] {
                 for &tr in &[false, true] {
                     if engine.blast(v, tg, d, tr) != reference.blast(tg, d, tr) {
@@ -605,13 +721,13 @@ pub fn run_suite<F: Factory>(factory: &F, opts: &RunOpts) {
                 }
             }
         }
-        rec.value(&format!("correct_vs_reference_initial[{v}]"), (mismatches == 0) as u8 as f64, format!("{mismatches} mismatching queries of 8"));
+        rec.value(&format!("correct_vs_reference_initial[{v}]"), (mismatches == 0) as u8 as f64, format!("{mismatches} mismatching queries of 12"));
     }
 
     // ---- blast radius latencies (every variant)
     let budget = Duration::from_secs(3);
     for &v in &variants {
-        for (tname, tg) in [("hub", hub), ("median", median)] {
+        for (tname, tg) in named {
             for d in [3u32, 10] {
                 let s = time_it(5, 300, budget, || {
                     std::hint::black_box(engine.blast(v, tg, d, false));
@@ -672,8 +788,7 @@ pub fn run_suite<F: Factory>(factory: &F, opts: &RunOpts) {
     rebuilt.load(&ds_inc);
     let mut rng = Rng::new(4242);
     let mut targets: Vec<u32> = (0..20).map(|_| rng.below(ds.n_syms() as u64) as u32).collect();
-    targets.push(hub);
-    targets.push(median);
+    targets.extend([tg.hub, tg.p99, tg.median]);
     for &v in &variants {
         let (mut inc_vs_full, mut inc_vs_ref, mut checks) = (0, 0, 0);
         for &tg in &targets {
@@ -734,7 +849,7 @@ pub fn run_suite<F: Factory>(factory: &F, opts: &RunOpts) {
             let mut rng = Rng::new(1234);
             let mut lat = Vec::new();
             while !w_stop.load(Ordering::Relaxed) {
-                let file = rng.below(ds.cfg.files as u64) as u32;
+                let file = rng.below(ds.n_files() as u64) as u32;
                 let edges = ds.regen_file(file, &mut rng);
                 let t = Instant::now();
                 w_engine.replace_file(&ds, file, &edges);

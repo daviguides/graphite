@@ -192,7 +192,7 @@ impl Engine for LbugEngine {
         let deps = self.scratch.join("deps.csv");
         {
             let mut f = std::io::BufWriter::new(std::fs::File::create(&syms).unwrap());
-            for file in 0..ds.cfg.files {
+            for file in 0..ds.n_files() {
                 for id in ds.syms_of(file) {
                     writeln!(f, "{id},{file},sym_{id}").unwrap();
                 }
