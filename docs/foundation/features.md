@@ -250,7 +250,7 @@ Not scheduled because no measured effect on the targets justifies them now. Each
 |---|---|---|---|
 | `rename` tool (graph + regex multi-file edit) | GN | Editing is the agent's job; v2 references give it the sites. | Agents repeatedly miss sites in multi-file renames despite references. |
 | Many listed tools (~90 / 17) | CT (ig), GN | Measured to cost turns and context every session. | Routing bench shows a specific extra tool is picked correctly and saves turns. |
-| Two-step `symbol_id` lookups | CT (ig) | Costs a turn; v1 disambiguates in the envelope. | Never expected — only if disambiguation measurably fails. |
+| Two-step `symbol_id` lookups | CT (ig) | Costs a turn; v1 disambiguates in the envelope. | Disambiguation in the envelope measurably fails. |
 | `list_repos` / multi-repo registry | GN | One daemon per repo. | v8 cross-repo work needs a registry. |
 | MCP prompts (`detect_impact`, `generate_map`) | GN | No measured use by agents. | A host surfaces prompts and agents use them. |
 | Remote auto-sync polling | GN | The local watcher supersedes it. | Hosted/CI deployments with no local watcher. |
@@ -260,7 +260,7 @@ Not scheduled because no measured effect on the targets justifies them now. Each
 | Structured TOML ingestion (JSON/YAML → tables) | CT (ig) | No agent task needs it yet. | v8 non-code ingestion needs a generic loader. |
 | Hash-chained audit ledger | CT (lk) | No target served. | A compliance requirement appears. |
 | AI chat inside the UI | GN | The agent already is the chat. | Humans ask questions the agent can't route to Graphite. |
-| Per-repo byte-truncating token budgets | GN | Rank-based budgets (v1) are strictly better. | Never expected. |
+| Byte-truncating token budgets | GN | Rank-based budgets (v1) keep structure intact. | A measured case where rank-based budgets lose information that byte truncation keeps. |
 | Storing source text in the DB | GN, CGM | Byte ranges + disk reads keep the DB small; watcher keeps files current. | Reading from disk becomes a measured latency problem. |
 
 ---
