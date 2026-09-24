@@ -64,13 +64,15 @@ impl Engine {
     pub fn open(paths: RepoPaths) -> Result<Self> {
         std::fs::create_dir_all(&paths.dir)?;
         let store = CozoStore::open(&paths.db)?;
+        // Seed from what the store already holds so a restart rewrites only changed files.
+        let hashes = store.file_hashes()?;
         let (ignore, _) = ignore::gitignore::Gitignore::new(paths.root.join(".gitignore"));
         Ok(Engine {
             paths,
             store,
             fresh: Freshness::default(),
             adj: RwLock::new(Adjacency::default()),
-            hashes: Mutex::new(HashMap::new()),
+            hashes: Mutex::new(hashes),
             failures: Mutex::new(HashSet::new()),
             write: Mutex::new(()),
             ignore,
@@ -145,12 +147,12 @@ impl Engine {
         for f in &facts {
             stats.symbols += f.symbols.len();
             stats.edges += f.edges.len();
+            self.note_parse(&f.path, f.parse_ok);
             if hashes.get(&f.path) == Some(&f.content_hash) {
                 continue;
             }
             self.store.replace_file(f)?;
             hashes.insert(f.path.clone(), f.content_hash);
-            self.note_parse(&f.path, f.parse_ok);
             stats.files_written += 1;
         }
         let live: HashSet<&str> = facts.iter().map(|f| f.path.as_str()).collect();

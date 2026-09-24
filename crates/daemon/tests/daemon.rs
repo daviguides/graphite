@@ -3,6 +3,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use graphite_daemon::{client, server, DaemonError, GraphQueries, Op, RepoPaths, Response};
+use graphite_store::GraphStore;
 use serde_json::Value;
 
 fn write(root: &Path, rel: &str, body: &str) {
@@ -217,4 +218,37 @@ fn single_instance_per_repo() {
     let second = server::run(paths.clone(), Box::new(GraphQueries));
     assert!(matches!(second, Err(DaemonError::AlreadyRunning(_))));
     stop(&paths, h);
+}
+
+#[test]
+fn restart_rewrites_only_changed_files() {
+    use graphite_daemon::Engine;
+    let tmp = tempfile::tempdir().unwrap();
+    seed(tmp.path());
+    write(tmp.path(), "c.py", "def c():\n    pass\n");
+    let paths = RepoPaths::new(tmp.path());
+
+    let first = Engine::open(paths.clone()).unwrap().index_all().unwrap();
+    assert_eq!(first.files_written, 3);
+
+    let again = Engine::open(paths.clone()).unwrap().index_all().unwrap();
+    assert_eq!((again.files_written, again.files_removed), (0, 0));
+
+    write(
+        tmp.path(),
+        "b.py",
+        "from a import f\n\ndef g2():\n    return f()\n",
+    );
+    std::fs::remove_file(tmp.path().join("c.py")).unwrap();
+    let engine = Engine::open(paths.clone()).unwrap();
+    let edited = engine.index_all().unwrap();
+    assert_eq!((edited.files_written, edited.files_removed), (1, 1));
+    let callers: Vec<_> = engine
+        .store
+        .symbols_by_name("g2")
+        .unwrap()
+        .into_iter()
+        .map(|s| s.qualified)
+        .collect();
+    assert_eq!(callers, vec!["b.g2"]);
 }
