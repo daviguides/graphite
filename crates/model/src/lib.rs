@@ -248,6 +248,20 @@ pub struct FileFacts {
 /// Monotonic graph revision watermark, bumped on every committed write.
 pub type GraphRev = u64;
 
+/// Conventions for `Target::Unresolved`, shared by extractors and the store.
+pub mod target {
+    /// `import_path` prefix for stdlib/builtins: never in the repo, never a resolution candidate.
+    pub const EXTERNAL_PREFIX: &str = "<external>:";
+    /// `name` for a reference to a whole module (`import a.b`); `import_path` is the module path.
+    pub const MODULE_TARGET: &str = "<module>";
+    /// `name` for a wildcard import (`from x import *`); `import_path` is the module path.
+    pub const WILDCARD_TARGET: &str = "*";
+    /// `name` when the callee is not a name (`f()()`); `qualifier` holds its text.
+    pub const DYNAMIC_TARGET: &str = "<dynamic>";
+    /// Receivers that mean "the enclosing class or its bases".
+    pub const SELF_RECEIVERS: &[&str] = &["self", "cls", "super()"];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
