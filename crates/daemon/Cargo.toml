@@ -1,0 +1,21 @@
+[package]
+name = "graphite-daemon"
+edition.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[dependencies]
+graphite-model.workspace = true
+graphite-store.workspace = true
+graphite-extract-python = { path = "../extract-python" }
+serde.workspace = true
+serde_json.workspace = true
+blake3.workspace = true
+thiserror.workspace = true
+rayon = "1"
+ignore = "0.4"
+notify = "8"
+fs4 = { version = "0.13", features = ["sync"] }
+
+[dev-dependencies]
+tempfile = "3"
