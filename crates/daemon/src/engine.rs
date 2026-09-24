@@ -24,6 +24,24 @@ const SKIP_DIRS: &[&str] = &[
     "site-packages",
 ];
 
+/// Bump whenever the store schema, extractor output or resolution rules change in a way old DB contents can't satisfy.
+pub const DB_VERSION: u32 = 2;
+
+/// Remove the DB if it was built with a different (or unknown) layout; true if wiped.
+fn ensure_db_version(paths: &RepoPaths) -> Result<bool> {
+    if !paths.db.exists() {
+        return Ok(false);
+    }
+    let found = std::fs::read_to_string(&paths.db_version)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok());
+    if found == Some(DB_VERSION) {
+        return Ok(false);
+    }
+    std::fs::remove_dir_all(&paths.db)?;
+    Ok(true)
+}
+
 /// Outcome of the initial (or recovery) full sync.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct IndexStats {
@@ -60,10 +78,15 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Open the repo's store; call `index_all` before serving.
+    /// Open the repo's store; call `index_all` before serving. A DB built with another layout is wiped first.
     pub fn open(paths: RepoPaths) -> Result<Self> {
         std::fs::create_dir_all(&paths.dir)?;
+        let wiped = ensure_db_version(&paths)?;
+        if wiped {
+            eprintln!("graphite: index layout changed, rebuilding from scratch");
+        }
         let store = CozoStore::open(&paths.db)?;
+        std::fs::write(&paths.db_version, DB_VERSION.to_string())?;
         // Seed from what the store already holds so a restart rewrites only changed files.
         let hashes = store.file_hashes()?;
         let (ignore, _) = ignore::gitignore::Gitignore::new(paths.root.join(".gitignore"));

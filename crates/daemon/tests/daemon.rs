@@ -252,3 +252,33 @@ fn restart_rewrites_only_changed_files() {
         .collect();
     assert_eq!(callers, vec!["b.g2"]);
 }
+
+#[test]
+fn db_layout_mismatch_forces_full_reindex() {
+    use graphite_daemon::engine::DB_VERSION;
+    use graphite_daemon::Engine;
+    let tmp = tempfile::tempdir().unwrap();
+    seed(tmp.path());
+    let paths = RepoPaths::new(tmp.path());
+    Engine::open(paths.clone()).unwrap().index_all().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&paths.db_version).unwrap(),
+        DB_VERSION.to_string()
+    );
+
+    let same = Engine::open(paths.clone()).unwrap().index_all().unwrap();
+    assert_eq!(same.files_written, 0);
+
+    // A DB from another layout (or one predating the version file) is rebuilt, not trusted.
+    for stale in [Some("1"), None] {
+        match stale {
+            Some(v) => std::fs::write(&paths.db_version, v).unwrap(),
+            None => std::fs::remove_file(&paths.db_version).unwrap(),
+        }
+        let rebuilt = Engine::open(paths.clone()).unwrap().index_all().unwrap();
+        assert_eq!(
+            rebuilt.files_written, 2,
+            "stale layout {stale:?} must reindex everything"
+        );
+    }
+}

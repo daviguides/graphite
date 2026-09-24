@@ -10,6 +10,8 @@ pub struct RepoPaths {
     pub db: PathBuf,
     pub socket: PathBuf,
     pub lock: PathBuf,
+    /// Records which on-disk layout `db` was built with.
+    pub db_version: PathBuf,
     pub log: PathBuf,
 }
 
@@ -35,6 +37,7 @@ impl RepoPaths {
             db: dir.join("db"),
             socket: socket_path(&root, &dir),
             lock: dir.join("daemon.lock"),
+            db_version: dir.join("db.version"),
             log: dir.join("daemon.log"),
             dir,
             root,
