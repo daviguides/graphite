@@ -1,0 +1,99 @@
+### pkg/__init__.py
+parse_ok=true
+SYM module pkg L1-7 parent=- exported=true test=false sig=
+SYM function pkg.init L5-7 parent=pkg exported=true test=false sig=def init()
+EDGE calls pkg.init -> ?build q=service ip=pkg.sub.service.build L6 extracted
+EDGE calls pkg.init -> ?build q=subpkg.service ip=pkg.sub.service.build L7 extracted
+EDGE imports pkg -> ?service q=- ip=pkg.sub.service L1 extracted
+EDGE imports pkg -> ?sub q=- ip=pkg.sub L2 extracted
+EDGE contains pkg -> pkg.init L5 extracted
+### pkg/sub/service.py
+parse_ok=true
+SYM module pkg.sub.service L1-64 parent=- exported=true test=false sig=
+SYM function pkg.sub.service.build L14-19 parent=pkg.sub.service exported=true test=false sig=def build(name: str) -> "Service"
+SYM function pkg.sub.service._private L22-23 parent=pkg.sub.service exported=false test=false sig=def _private()
+SYM class pkg.sub.service.Service L26-54 parent=pkg.sub.service exported=true test=false sig=class Service(BaseService, metaclass=Meta)
+SYM method pkg.sub.service.Service.__init__ L27-29 parent=pkg.sub.service.Service exported=true test=false sig=def __init__(self, name: Optional[str] = None)
+SYM method pkg.sub.service.Service.label L31-33 parent=pkg.sub.service.Service exported=true test=false sig=def label(self) -> str
+SYM method pkg.sub.service.Service.label L35-37 parent=pkg.sub.service.Service exported=true test=false sig=def label(self, value)
+SYM method pkg.sub.service.Service.start L39-43 parent=pkg.sub.service.Service exported=true test=false sig=async def start(self)
+SYM method pkg.sub.service.Service._boot L45-49 parent=pkg.sub.service.Service exported=false test=false sig=def _boot(self)
+SYM function pkg.sub.service.Service._boot.inner L46-47 parent=pkg.sub.service.Service._boot exported=false test=false sig=def inner()
+SYM method pkg.sub.service.Service.stop L51-54 parent=pkg.sub.service.Service exported=true test=false sig=def stop(svc)
+SYM class pkg.sub.service.Nested L57-59 parent=pkg.sub.service exported=false test=false sig=class Nested(Service)
+SYM class pkg.sub.service.Nested.Config L58-59 parent=pkg.sub.service.Nested exported=false test=false sig=class Config
+SYM function pkg.sub.service.handler L62-64 parent=pkg.sub.service exported=false test=false sig=def handler()
+EDGE calls pkg.sub.service.build -> pkg.sub.service.Service L15 extracted
+EDGE calls pkg.sub.service.build -> ?start q=svc ip=- L16 extracted
+EDGE calls pkg.sub.service.build -> ?log q=helpers ip=pkg.sub.helpers.log L17 extracted
+EDGE calls pkg.sub.service.build -> ?dumps q=j ip=<external>:json.dumps L18 extracted
+EDGE calls pkg.sub.service.build -> ?getcwd q=os ip=<external>:os.getcwd L18 extracted
+EDGE calls pkg.sub.service.build -> ?print q=- ip=<external>:builtins.print L18 extracted
+EDGE calls pkg.sub.service.Service._boot -> pkg.sub.service.Service._boot.inner L49 extracted
+EDGE contains pkg.sub.service.Service._boot -> pkg.sub.service.Service._boot.inner L46 extracted
+EDGE inherits pkg.sub.service.Nested -> pkg.sub.service.Service L57 extracted
+EDGE contains pkg.sub.service.Nested -> pkg.sub.service.Nested.Config L58 extracted
+EDGE imports pkg.sub.service -> ?<module> q=- ip=<external>:os L2 extracted
+EDGE imports pkg.sub.service -> ?<module> q=- ip=<external>:os.path L3 extracted
+EDGE imports pkg.sub.service -> ?<module> q=- ip=<external>:json L4 extracted
+EDGE imports pkg.sub.service -> ?Optional q=- ip=<external>:typing.Optional L5 extracted
+EDGE imports pkg.sub.service -> ?helpers q=- ip=pkg.sub.helpers L6 extracted
+EDGE imports pkg.sub.service -> ?Account q=- ip=pkg.sub.models.Account L7 extracted
+EDGE imports pkg.sub.service -> ?User q=- ip=pkg.sub.models.User L7 extracted
+EDGE imports pkg.sub.service -> ?BaseService q=- ip=pkg.core.base.BaseService L8 extracted
+EDGE imports pkg.sub.service -> ?* q=- ip=pkg.sub.star L9 extracted
+EDGE contains pkg.sub.service -> pkg.sub.service.build L14 extracted
+EDGE contains pkg.sub.service -> pkg.sub.service._private L22 extracted
+EDGE contains pkg.sub.service -> pkg.sub.service.Service L26 extracted
+EDGE contains pkg.sub.service -> pkg.sub.service.Nested L57 extracted
+EDGE contains pkg.sub.service -> pkg.sub.service.handler L62 extracted
+EDGE references pkg.sub.service.Service.label -> ?setter q=label ip=- L35 extracted
+EDGE inherits pkg.sub.service.Service -> ?BaseService q=- ip=pkg.core.base.BaseService L26 extracted
+EDGE contains pkg.sub.service.Service -> pkg.sub.service.Service.__init__ L27 extracted
+EDGE contains pkg.sub.service.Service -> pkg.sub.service.Service.label L31 extracted
+EDGE contains pkg.sub.service.Service -> pkg.sub.service.Service.label L35 extracted
+EDGE contains pkg.sub.service.Service -> pkg.sub.service.Service.start L39 extracted
+EDGE contains pkg.sub.service.Service -> pkg.sub.service.Service._boot L45 extracted
+EDGE contains pkg.sub.service.Service -> pkg.sub.service.Service.stop L51 extracted
+EDGE references pkg.sub.service.Service.label -> ?property q=- ip=<external>:builtins.property L31 extracted
+EDGE calls pkg.sub.service.Service.stop -> ?join q=os.path ip=<external>:os.path.join L53 extracted
+EDGE calls pkg.sub.service.Service.stop -> ?<dynamic> q=factory() ip=- L54 extracted
+EDGE calls pkg.sub.service.Service.stop -> ?factory q=- ip=- L54 extracted
+EDGE references pkg.sub.service.Service.stop -> ?staticmethod q=- ip=<external>:builtins.staticmethod L51 extracted
+EDGE calls pkg.sub.service.Service.__init__ -> ?__init__ q=super() ip=- L28 extracted
+EDGE calls pkg.sub.service.Service.__init__ -> ?super q=- ip=<external>:builtins.super L28 extracted
+EDGE calls pkg.sub.service.Service.start -> pkg.sub.service.Service._boot L40 resolved
+EDGE calls pkg.sub.service.Service.start -> ?missing q=self ip=- L41 extracted
+EDGE calls pkg.sub.service.Service.start -> pkg.sub.service.Service.stop L42 resolved
+EDGE calls pkg.sub.service.Service.start -> ?load q=U ip=pkg.sub.models.User.load L43 extracted
+EDGE calls pkg.sub.service.handler -> ?undefined_thing q=- ip=- L64 extracted
+EDGE references pkg.sub.service.handler -> ?route q=app ip=- L62 extracted
+EDGE calls pkg.sub.service._private -> pkg.sub.service.build L23 extracted
+### pkg/sub/test_service.py
+parse_ok=true
+SYM module pkg.sub.test_service L1-20 parent=- exported=true test=true sig=
+SYM function pkg.sub.test_service.svc L6-8 parent=pkg.sub.test_service exported=true test=true sig=def svc()
+SYM function pkg.sub.test_service.test_build L11-12 parent=pkg.sub.test_service exported=true test=true sig=def test_build(svc)
+SYM class pkg.sub.test_service.TestService L15-20 parent=pkg.sub.test_service exported=true test=true sig=class TestService
+SYM method pkg.sub.test_service.TestService.test_label L16-17 parent=pkg.sub.test_service.TestService exported=true test=true sig=def test_label(self, svc)
+SYM method pkg.sub.test_service.TestService.helper L19-20 parent=pkg.sub.test_service.TestService exported=true test=true sig=def helper(self)
+EDGE calls pkg.sub.test_service.svc -> ?build q=- ip=pkg.sub.service.build L8 extracted
+EDGE references pkg.sub.test_service.svc -> ?fixture q=pytest ip=pytest.fixture L6 extracted
+EDGE imports pkg.sub.test_service -> ?<module> q=- ip=pytest L1 extracted
+EDGE imports pkg.sub.test_service -> ?build q=- ip=pkg.sub.service.build L3 extracted
+EDGE contains pkg.sub.test_service -> pkg.sub.test_service.svc L6 extracted
+EDGE contains pkg.sub.test_service -> pkg.sub.test_service.test_build L11 extracted
+EDGE contains pkg.sub.test_service -> pkg.sub.test_service.TestService L15 extracted
+EDGE contains pkg.sub.test_service.TestService -> pkg.sub.test_service.TestService.test_label L16 extracted
+EDGE contains pkg.sub.test_service.TestService -> pkg.sub.test_service.TestService.helper L19 extracted
+EDGE calls pkg.sub.test_service.TestService.helper -> ?build q=- ip=pkg.sub.service.build L20 extracted
+### pkg/sub/broken.py
+parse_ok=false
+SYM module pkg.sub.broken L1-10 parent=- exported=true test=false sig=
+SYM function pkg.sub.broken.ok L1-2 parent=pkg.sub.broken exported=true test=false sig=def ok()
+SYM function pkg.sub.broken.broken L5-6 parent=pkg.sub.broken exported=true test=false sig=def broken(
+SYM function pkg.sub.broken.after L9-10 parent=pkg.sub.broken exported=true test=false sig=def after()
+EDGE calls pkg.sub.broken.after -> pkg.sub.broken.ok L10 extracted
+EDGE contains pkg.sub.broken -> pkg.sub.broken.ok L1 extracted
+EDGE contains pkg.sub.broken -> pkg.sub.broken.broken L5 extracted
+EDGE contains pkg.sub.broken -> pkg.sub.broken.after L9 extracted
