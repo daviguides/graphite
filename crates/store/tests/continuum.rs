@@ -311,4 +311,30 @@ fn continuum_incremental_equals_full() {
             pct(times, 0.95)
         );
     }
+
+    // Edit -> visible latency on the hub's own file: write + adjacency apply.
+    let hub_path = full.symbol(hub).unwrap().unwrap().path;
+    let original = facts.iter().find(|f| f.path == hub_path).unwrap().clone();
+    let without_hub = drop_symbol(&original, hub);
+    let mut visible = |label: &str, f: &FileFacts| {
+        let t = Instant::now();
+        let delta = inc.replace_file(f).unwrap();
+        adj.apply(&inc, &delta).unwrap();
+        println!(
+            "hub file {hub_path} [{label}]: edit->visible {:?} ({} names re-resolved)",
+            t.elapsed(),
+            delta.touched_names.len()
+        );
+    };
+    visible("body edit", &original);
+    visible("delete hub function", &without_hub);
+    visible("restore hub function", &original);
+}
+
+fn drop_symbol(f: &FileFacts, gone: SymbolId) -> FileFacts {
+    let mut out = f.clone();
+    out.symbols.retain(|s| s.id != gone);
+    out.edges
+        .retain(|e| e.src != gone && !matches!(e.dst, Target::Symbol(d) if d == gone));
+    out
 }
