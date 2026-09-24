@@ -1,4 +1,4 @@
-//! Compact human-readable rendering of daemon responses.
+//! Compact human-readable rendering of daemon responses (the `--json` output is the full envelope).
 
 use graphite_daemon::Response;
 use serde_json::Value;
@@ -8,59 +8,88 @@ pub fn human(cmd: &str, r: &Response) {
         eprintln!("error: {}", r.error.as_deref().unwrap_or("unknown"));
         return;
     }
-    let stale = if r.stale {
-        " (stale: recent edits still indexing)"
-    } else {
-        ""
-    };
     let d = &r.data;
     match cmd {
-        "status" => {
-            println!(
-                "root {}  files {}  edges {}  rev {}  pending {}{}",
-                d["root"].as_str().unwrap_or("?"),
-                d["files"],
-                d["adjacency_edges"],
-                r.graph_rev,
-                d["pending_events"],
-                stale
-            );
-            let i = &d["init"];
-            println!(
-                "initial index: {} files, {} symbols, {} ms (extract {} / write {} / adjacency {})",
-                i["files_seen"],
-                i["symbols"],
-                i["total_ms"],
-                i["extract_ms"],
-                i["write_ms"],
-                i["adjacency_ms"]
-            );
+        "status" => status(r),
+        "lookup" => {
+            header(r);
+            lookup(&d["result"]);
         }
-        "lookup" => lookup(d),
         "blast" => {
-            if d["status"] != "found" {
-                return lookup(d);
+            header(r);
+            let res = &d["result"];
+            if res["target"]["status"] != "found" {
+                return lookup(&res["target"]);
             }
-            println!("{}  (rev {}{})", sym(&d["target"]), r.graph_rev, stale);
-            dependents(&d["dependents"]);
+            println!("{}", sym(&res["target"]["symbol"]));
+            risk(&res["risk"]);
+            dependents(&res["dependents"]);
         }
         "diff-impact" => {
+            header(r);
+            let res = &d["result"];
+            for c in res["changed"].as_array().into_iter().flatten() {
+                println!(
+                    "  changed  {}  risk {}  callers {} prod / {} test",
+                    sym(&c["symbol"]),
+                    c["risk"].as_str().unwrap_or("?"),
+                    c["direct_prod_callers"],
+                    c["direct_test_callers"]
+                );
+            }
+            let unmapped = res["unmapped"].as_array().map_or(0, Vec::len);
+            if unmapped > 0 {
+                println!("  {unmapped} changed hunks not mapped to a symbol");
+            }
+            risk(&res["risk"]);
+            dependents(&res["dependents"]);
+            let tests = res["covering_tests"].as_array().map_or(0, Vec::len);
             println!(
-                "vs {}  (rev {}{})",
-                d["base"].as_str().unwrap_or("HEAD"),
-                r.graph_rev,
-                stale
+                "  {tests} covering tests ({})",
+                res["tests_basis"].as_str().unwrap_or("")
             );
-            for s in d["changed_symbols"].as_array().into_iter().flatten() {
-                println!("  changed  {}", sym(s));
-            }
-            dependents(&d["impacted"]);
-            if let Some(u) = d["unindexed_files"].as_array().filter(|u| !u.is_empty()) {
-                println!("  not indexed (no graph info): {}", u.len());
-            }
         }
         _ => println!("{}", serde_json::to_string_pretty(d).unwrap_or_default()),
     }
+    disclosures(d);
+}
+
+fn header(r: &Response) {
+    let d = &r.data;
+    let stale = if r.stale || d["stale"] == true {
+        "  STALE: recent edits still indexing"
+    } else {
+        ""
+    };
+    println!(
+        "rev {}  tier {}  completeness {}{}",
+        r.graph_rev,
+        d["tier"].as_str().unwrap_or("-"),
+        d["completeness"]["status"].as_str().unwrap_or("-"),
+        stale
+    );
+}
+
+fn status(r: &Response) {
+    let d = &r.data;
+    println!(
+        "root {}  files {}  edges {}  rev {}  pending {}",
+        d["root"].as_str().unwrap_or("?"),
+        d["files"],
+        d["adjacency_edges"],
+        r.graph_rev,
+        d["pending_events"],
+    );
+    let i = &d["init"];
+    println!(
+        "initial index: {} files, {} symbols, {} ms (extract {} / write {} / adjacency {})",
+        i["files_seen"],
+        i["symbols"],
+        i["total_ms"],
+        i["extract_ms"],
+        i["write_ms"],
+        i["adjacency_ms"]
+    );
 }
 
 fn sym(s: &Value) -> String {
@@ -69,39 +98,70 @@ fn sym(s: &Value) -> String {
         s["qualified"].as_str().unwrap_or("?"),
         s["kind"].as_str().unwrap_or("?"),
         s["path"].as_str().unwrap_or("?"),
-        s["line"]
+        s["start_line"]
     )
 }
 
-fn lookup(d: &Value) {
-    match d["status"].as_str() {
-        Some("found") => println!("{}", sym(&d["symbol"])),
+fn lookup(l: &Value) {
+    match l["status"].as_str() {
+        Some("found") => println!("{}", sym(&l["symbol"])),
         Some("ambiguous") => {
             println!("ambiguous — candidates:");
-            for c in d["candidates"].as_array().into_iter().flatten() {
+            for c in l["candidates"].as_array().into_iter().flatten() {
                 println!("  {}", sym(c));
             }
         }
-        _ => println!("not found: {}", d["hint"].as_str().unwrap_or("")),
+        _ => println!("not found: {}", l["query"].as_str().unwrap_or("")),
     }
 }
 
+fn risk(r: &Value) {
+    if r.is_null() {
+        return;
+    }
+    println!(
+        "  risk {}: {}",
+        r["level"].as_str().unwrap_or("?"),
+        r["reason"].as_str().unwrap_or("")
+    );
+}
+
 fn dependents(d: &Value) {
+    let s = &d["summary"];
     println!(
         "  {} dependents ({} prod, {} test) by depth {}",
-        d["total"], d["prod"], d["test"], d["by_depth"]
+        s["total"], s["prod"], s["test"], s["by_depth"]
     );
     for i in d["items"].as_array().into_iter().flatten() {
-        let via = i["via"]
-            .as_str()
-            .map(|v| format!("  via {v}"))
-            .unwrap_or_default();
-        println!("  d{}  {}{}", i["depth"], sym(i), via);
-    }
-    if d["truncated"] == true {
         println!(
-            "  … {} more not listed",
-            d["total"].as_u64().unwrap_or(0) - d["listed"].as_u64().unwrap_or(0)
+            "  d{}  {}  {} {}",
+            i["depth"],
+            sym(&i["symbol"]),
+            i["edge"].as_str().unwrap_or(""),
+            i["confidence"].as_str().unwrap_or("")
+        );
+    }
+    for f in d["by_file"].as_array().into_iter().flatten() {
+        println!("  {} ({})", f["path"].as_str().unwrap_or("?"), f["count"]);
+    }
+    for f in d["by_directory"].as_array().into_iter().flatten() {
+        println!(
+            "  {}/ ({} in {} files)",
+            f["dir"].as_str().unwrap_or("?"),
+            f["count"],
+            f["files"]
+        );
+    }
+}
+
+fn disclosures(d: &Value) {
+    for x in d["disclosures"].as_array().into_iter().flatten() {
+        println!(
+            "  note: {} shown {} omitted {} — {}",
+            x["what"].as_str().unwrap_or(""),
+            x["shown"],
+            x["omitted"],
+            x["reason"].as_str().unwrap_or("")
         );
     }
 }
