@@ -2,16 +2,35 @@
 
 > The graph your agent reads before it acts.
 
-Embedded code-graph engine. Rust CLI + MCP server. Tree-sitter extracts, CozoDB stores, Datalog queries.
+Embedded code-graph engine. Rust CLI + MCP server. Tree-sitter extracts, CozoDB stores facts and rules, an in-memory adjacency serves hot traversals.
 
-## Why CozoDB
+## Storage Decision: Hybrid (benchmarked 2026-09-24)
 
-CozoDB was chosen over alternatives for specific architectural reasons:
+Decided after a measured benchmark on real graphs (Continuum, sensemesh) and synthetic stress graphs. Evidence: [storage-benchmark.md](../../references/studies/storage-benchmark.md), [cozodb-health.md](../../references/studies/cozodb-health.md), [rust-embedded-graph-alternatives.md](../../references/studies/rust-embedded-graph-alternatives.md), [real-graph-shape.md](../../references/studies/real-graph-shape.md), [cozo-based-tools.md](../../references/studies/cozo-based-tools.md).
 
-- **Over KuzuDB** — KuzuDB uses Cypher (pattern matching). CozoDB uses Datalog (recursive rules). Transitive closure, PageRank, community detection are native Datalog operations, not query-language extensions. CozoDB also has a Rust crate (`cozo`); KuzuDB's Rust bindings are less mature.
-- **Over SQLite** — Relational, not graph-native. Code dependency traversal requires recursive CTEs that are verbose and slow compared to Datalog's native recursion. SQLite has no concept of graph edges or traversal.
-- **Over JSON/markdown files** — No indexing, no concurrent reads, entire graph loaded per query. Works for small repos, collapses at scale. Graft's approach.
-- **Over NetworkX** — Python in-memory graph. No persistence, no indexing, no concurrent access. Graphify's approach.
+### The split
+
+| Layer | Owns | Why |
+|---|---|---|
+| **CozoDB via `mnestic` fork, RocksDB backend** | Source of truth: per-file facts (files, symbols, edges), persistence, confidence rules, flexible Datalog queries, full-text search | Ready-made features, shared maintenance, fast per-file writes (~0.2 ms), no crashes under concurrent read/write. RocksDB because SQLite/mem backends block reads during writes. |
+| **In-memory adjacency in the daemon** | Hot traversals: blast radius, callers/callees, paths, cycles | Plain Rust BFS over adjacency lists: 19–80 µs on the worst real hub vs 3–13 ms through the DB. Traversal is the part where own code is trivial and a DB pays a fixed per-query cost. |
+| **Dedicated Rust crate, background** | Community detection (Louvain/Leiden), PageRank | CozoDB's Louvain cost 1–4.7 s and several GB; run off the query path on the call graph only. |
+
+### Invariant: one source of truth
+
+CozoDB is the only thing written by the watcher. The in-memory adjacency is **derived** from CozoDB facts — rebuilt on daemon start, updated from the same per-file delta after each committed write, never written independently. Incremental result must equal a full rebuild from CozoDB (checked by test). Without this invariant the hybrid becomes two diverging stores — the bug class code-graph-mcp bumped its index format 71 times for.
+
+### Why not the alternatives
+
+- **CozoDB pure** — traversals 40–150× slower than in-memory BFS on hubs (still under target on strict real graphs, 13 ms on permissive); Louvain too heavy for the daemon; a correctness bug in mnestic's cached graph projection (edge kind treated as weight) — use Rust-driven traversal, not its projection.
+- **DIY pure (Ascent + redb)** — fastest everywhere, but we would write persistence, rules, search and algorithms ourselves. Speed gain is invisible to an agent whose turns take seconds.
+- **LadybugDB** — two native crashes (SIGSEGV/SIGBUS) on query timeout, algorithm extension doesn't load on macOS arm64, ~1 ms per-query floor, 5–23 ms per-file writes. Better fit for large analytical graphs (Cypher), not this workload.
+- **SQLite / JSON / NetworkX** — see landscape; recursion too slow or no indexing/concurrency.
+
+### Risks
+
+- `mnestic` has one maintainer. Mitigation: pin exact version; keep CozoDB behind a `GraphStore` trait; the engine (~36K lines) is small enough to own if it stalls.
+- Durability settings differ from the benchmark's DIY candidate (fsync per commit); tune RocksDB sync before relying on crash recovery.
 
 ## How It Works
 
@@ -114,16 +133,14 @@ pub struct Dependency {
 }
 ```
 
-### 3. Storage Layer (CozoDB)
+### 3. Storage Layer (CozoDB + in-memory adjacency)
 
-Embedded, in-process. Two backend options:
-- **SQLite** (default): persistent, survives restarts, good for repos you work on daily
-- **Memory**: ephemeral, fastest, good for one-shot analysis
+See [Storage Decision](#storage-decision-hybrid-benchmarked-2026-09-24). CozoDB (`mnestic` fork, RocksDB backend) holds the facts; the daemon derives an in-memory adjacency from them for traversals. The schema below is a starting sketch — the proposed schema in [gitnexus.md](../../references/studies/gitnexus.md) §6 supersedes it.
 
 ```rust
 use cozo::DbInstance;
 
-let db = DbInstance::new("sqlite", "graphite.db", "")?;
+let db = DbInstance::new("rocksdb", "graphite.db", "")?;
 
 // Create relations
 db.run_script(r#"
@@ -136,7 +153,7 @@ db.run_script(r#"
 
 ### 4. Query Layer (Datalog)
 
-Recursive queries are CozoDB's strength. Examples:
+Datalog serves rules (confidence, derived edges) and flexible/ad-hoc queries. Hot traversals (blast radius, callers, paths) run on the in-memory adjacency in production; the Datalog forms below remain the reference semantics used to verify it. Examples:
 
 **Blast radius** — everything that transitively depends on a symbol:
 ```datalog
