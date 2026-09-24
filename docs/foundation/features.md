@@ -4,7 +4,9 @@
 
 **Source keys:** GN = [gitnexus.md](../../references/studies/gitnexus.md) · CGM = [code-graph-mcp.md](../../references/studies/code-graph-mcp.md) · CT = [cozo-based-tools.md](../../references/studies/cozo-based-tools.md) (fg = ferrograph, ig = infigraph, lk = LeanKG) · SB = [storage-benchmark.md](../../references/studies/storage-benchmark.md) · RG = [real-graph-shape.md](../../references/studies/real-graph-shape.md) · LS = [landscape.md](../../references/landscape.md) (Graft / CodeGraph / Graphify) · FE = [frontend.md](frontend.md) · LY = [laya-integration.md](laya-integration.md) · RI = [runner-integration.md](runner-integration.md)
 
-Versions are ordered by value to the targets and by dependency. Placement is revisable: an item moves earlier when measurement shows it cuts agent turns, later when it doesn't. **v1 is a proposal for the user to confirm.**
+Versions are ordered by value to the targets and by dependency. Placement is revisable: an item moves earlier when measurement shows it cuts agent turns, later when it doesn't. **v1 and its waves are a proposal for the user to confirm.**
+
+Every wave is a vertical slice: usable end-to-end by an agent and measurable on its own, never a single layer.
 
 ---
 
@@ -12,7 +14,11 @@ Versions are ordered by value to the targets and by dependency. Placement is rev
 
 | Version | Theme | Primary target |
 |---|---|---|
-| **v1** | Core graph + agent surface | Speed |
+| **v1** | Core graph + agent surface — shipped in four waves: | Speed |
+| ↳ **v1.0** | Thesis slice: one language, daemon, `diff_impact` + blast radius, CLI, with-vs-without bench | Speed |
+| ↳ **v1.1** | Full agent surface: all v1 languages, `context` + search + grep, hooks, MCP shim | Speed, Assertiveness |
+| ↳ **v1.2** | Runner integration | Speed |
+| ↳ **v1.3** | Response contract completion + operational fallback | Speed, Assertiveness |
 | **v2** | Query breadth + hardening | Speed, Correctness |
 | **v3** | Resolution depth | Correctness |
 | **v4** | Structure & orientation | Assertiveness |
@@ -24,22 +30,68 @@ Versions are ordered by value to the targets and by dependency. Placement is rev
 ### v1 — Core graph + agent surface *(proposal)*
 
 - **Goal:** the agent stops exploring. It gets the change's blast radius, the code and the covering tests in one call or before it greps or edits, from a graph that is always current.
-- **Features:** extractor for Rust / TS / Python / Go (`.scm` captures, single pass, deterministic IDs, import-bound calls, qualifiers, sentinels, test detection, unresolved refs recorded), v1 edge kinds, three-tier confidence + provenance derived by rule, `covers` relation; one daemon per repo (CozoDB mnestic/RocksDB + in-memory adjacency, eager watcher, BLAKE3 ladder, freshness barrier, `graph_rev`, post-edit nudge, stale sweep, CLI probe fallback); queries `diff_impact`, `context`, blast radius (depth-labelled, default depth 3), lexical search, AST-context grep; the full response contract (§5); CLI-first surface, MCP shim, ≤5 listed tools, pre-grep and pre-edit hooks, skill file; runner socket bridge, IMPLEMENTING injection, VALIDATING targeted tests, mid-session access; deterministic ranker + triage trace fields; trace relation, conversion metric, routing bench, effectiveness bench, storage bench.
+- **Shipped as four waves** (v1.0 → v1.3, below). 62 features (the language row is split in two: Python in v1.0, the rest in v1.1).
 - **Depends on:** nothing.
-- **Exit criteria:** (1) effectiveness bench on real tasks in Continuum and sensemesh shows fewer turns and less wall-clock with Graphite than without; (2) incremental == full rebuild on both repos; (3) depth-10 blast radius < 10 ms on real graphs; (4) routing bench above threshold; (5) hooks show measurable conversion (graph answer used instead of grep/Read).
+- **Exit criteria (v1 as a whole, checked at the end of v1.3):** (1) effectiveness bench on real tasks in Continuum and sensemesh shows fewer turns and less wall-clock with Graphite than without; (2) incremental == full rebuild on both repos; (3) depth-10 blast radius < 10 ms on real graphs; (4) routing bench above threshold; (5) hooks show measurable conversion (graph answer used instead of grep/Read).
+
+#### v1.0 — Thesis slice *(proposal)*
+
+- **Goal:** prove or refute the thesis with the thinnest usable slice — **does the agent finish real tasks faster with Graphite than without?** Speed first; correctness must not regress.
+- **Language: Python** *(proposal for the user)*. Reasoning:
+  - **Python (recommended):** 909 of Continuum's 1,146 files, and Continuum is where runner and dao tasks run — the bench uses real tasks on a real repo the user works in daily. It is also the hardest of the three to resolve (dynamic, duck typing), so v1.0 exercises confidence, `lower-bound` and `causes` for real instead of hiding them.
+  - **Rust:** simplest resolution and it's Graphite's own language, but Continuum has only 60 Rust files and Graphite has no code yet — no realistic task set.
+  - **Go:** sensemesh is production and resolution is clean, but runner doesn't run there and the Go part is only 1,385 of 3,131 files (TS is as large).
+  - If Python's resolution noise makes the bench inconclusive, Go on sensemesh is the fallback thesis repo.
+- **Features (34):**
+  - *Extraction:* Python grammar, `.scm` captures, single AST pass, deterministic IDs, import-bound calls, `<external>`/`<module>` sentinels, test detection, unresolved refs recorded.
+  - *Graph:* core edge kinds, three-tier confidence + provenance, confidence derived by rule, `covers`.
+  - *Daemon:* one daemon per repo (CozoDB mnestic/RocksDB + in-memory adjacency), eager watcher, freshness barrier, `graph_rev`, mtime→BLAKE3 ladder, stale sweep, incremental == full test.
+  - *Queries:* `diff_impact`, blast radius (default depth 3).
+  - *Response:* source inline, rank-based budget, deterministic ranking (and ranker), disclosure fields, `epistemic` + `causes`, prod/test partition + covering tests, `stale` + `graph_rev`, bytes/3 estimator.
+  - *Surface:* CLI `--json` as the only surface, skill file (so the agent knows the CLI exists).
+  - *Measurement:* effectiveness bench (turns + wall-clock, with vs without), storage bench kept runnable.
+- **Depends on:** nothing.
+- **Exit criteria — go / no-go on the thesis:**
+  - **Bench:** a fixed set of real Python tasks in Continuum (bug fixes and changes that cross files, taken from real history), each run with and without Graphite, same model, several repeats.
+  - **Go:** with Graphite, median wall-clock and median turns per task are clearly lower (target ≥20%), task success rate is equal or better, and zero silent-stale answers were observed. Plus incremental == full on Continuum and depth-10 blast radius < 10 ms.
+  - **Rethink if:**
+    - the agent **used** Graphite (Graphite CLI calls in the transcripts) and was **not** faster, or got less correct → the thesis or the answer shape is wrong; revisit what `diff_impact` returns before building more surface.
+    - the agent **did not use** Graphite → a surface problem, not a thesis refutation; pull the v1.1 hooks forward and rerun before judging.
+    - correctness dropped (tasks failed or regressed that passed without Graphite) → stop and investigate before any further wave.
+
+#### v1.1 — Full agent surface
+
+- **Goal:** the agent gets graph answers everywhere it would otherwise explore — on every language of both test repos, at the moment it greps or edits, and through MCP where the host prefers it.
+- **Features (17):** Rust / TS-JS / Go grammars, callee qualifiers, parse-parallel/write-serial pipeline; `context`, lexical symbol search, AST-context grep; disambiguation in the envelope; MCP shim, ≤5 listed tools, tool schema limits; pre-grep hook (block and answer), pre-edit hook (impact + covering tests), hook fail-open in settings.json, post-edit nudge; trace relation, conversion metric, routing bench.
+- **Depends on:** v1.0 (daemon, `diff_impact`, response envelope).
+- **Exit criteria:** effectiveness bench rerun on Continuum and on sensemesh (Go/TS) shows turns and wall-clock at least as good as v1.0, with a further drop from hooks; conversion metric shows the hooks' answers are used instead of the grep/Read they replaced; routing bench above threshold; incremental == full on sensemesh.
+
+#### v1.2 — Runner integration
+
+- **Goal:** runner-driven workflows get the same gain without the agent having to ask — context injected per mode, tests targeted.
+- **Features (4):** socket bridge, IMPLEMENTING injection (`diff_impact` with source), VALIDATING targeted tests, mid-session access in SDK sessions (CLI + hooks in worktree settings, MCP shim).
+- **Depends on:** v1.0 (`diff_impact`, `covers`), v1.1 (hooks, MCP shim, mid-session surface).
+- **Exit criteria:** runner tasks in Continuum, with vs without Graphite: fewer turns and less wall-clock in IMPLEMENTING; time to first test failure in VALIDATING drops from minutes to seconds; SDK sessions show Graphite calls mid-session in their transcripts.
+
+#### v1.3 — Response contract completion + operational fallback
+
+- **Goal:** large and edge-case answers stay bounded and honest; Graphite works where no daemon runs.
+- **Features (7):** `compact` flag, tiered auto-compression, risk verdict (UNKNOWN on zero callers), depth labels, not-indexed/not-found as guidance, CLI probe fallback, triage trace fields.
+- **Depends on:** v1.0 (response envelope, ranking), v1.1 (trace relation, for triage fields).
+- **Exit criteria:** hub-symbol queries on both repos return bounded payloads with every cut disclosed; no regression on the v1.1 effectiveness bench; CLI works in CI with no daemon; triage fields populated in the trace. Then the v1 exit criteria above are checked as a whole.
 
 ### v2 — Query breadth + hardening
 
 - **Goal:** cover the rest of the agent's everyday questions in one call each, and make freshness failure-proof in long sessions.
 - **Features:** find all references, search ladder with provenance, path between symbols, repo/module overview, skeleton with fan-in, batch lookups, class-target seeding; ambiguity refinement, noise filters, per-file parse timeout; watcher safety nets, crash marker + transactional rebuild, schema fingerprint, worktree seeding; EXPLORING-mode injection; health check; steering variants (compound-grep inject, read fan-out hint, per-prompt push) + recommendation funnel.
-- **Depends on:** v1 daemon, contract, trace.
+- **Depends on:** v1.0 daemon + envelope, v1.1 trace, v1.2 runner bridge (for EXPLORING injection), v1.3 contract completion.
 - **Exit criteria:** EXPLORING turns down vs v1 on the same tasks; worktree cold start fast enough that runner's first query doesn't wait on a full index; a multi-hour soak with the watcher shows zero silent staleness.
 
 ### v3 — Resolution depth
 
 - **Goal:** fewer `lower-bound` answers and fewer missed dependents — the agent stops patching one file and missing its siblings.
 - **Features:** framework routes + route map / API impact, dynamic dispatch synthesis, Python MRO and receiver-chain typing, LSP/SCIP compiler-grade edges, v2 edge kinds, git co-change edges.
-- **Depends on:** v1 provenance + `epistemic`/`causes` (to measure the gain), v2 references.
+- **Depends on:** v1.0 provenance + `epistemic`/`causes` (to measure the gain), v2 references.
 - **Exit criteria:** on real repos, the share of `lower-bound` results and unresolved references drops; blast radius recall against historical commits (files actually co-modified) rises.
 
 ### v4 — Structure & orientation
@@ -53,14 +105,14 @@ Versions are ordered by value to the targets and by dependency. Placement is rev
 
 - **Goal:** the human sees what the agent saw and fixes the graph where it is blind; savings are visible.
 - **Features:** Agent Observatory, Blast Radius Review, Savings Dashboard, Graph Health view, Overrides / curation, raw Datalog query (humans/UI).
-- **Depends on:** v1 trace + conversion data, v2 health check, v3 provenance.
+- **Depends on:** v1.1 trace + conversion data, v2 health check, v3 provenance.
 - **Exit criteria:** overrides measurably reduce unresolved / lower-bound results; dashboard savings match the effectiveness bench.
 
 ### v6 — Learned ranking (Laya)
 
 - **Goal:** within a large blast radius, the agent reads the right items first — fewer investigation turns on INFERRED noise.
 - **Features:** git-history label mining, Laya sidecar in shadow mode, ranked mode activation.
-- **Depends on:** v1 deterministic ranker + triage trace fields, v3 co-change edges (label source and ranker signal), v5 Observatory (evaluation).
+- **Depends on:** v1.0 deterministic ranker, v1.3 triage trace fields, v3 co-change edges (label source and ranker signal), v5 Observatory (evaluation).
 - **Exit criteria:** Laya beats the deterministic baseline on recall@token-budget; filtered-then-accessed (false negative) rate stays under threshold; VALIDATING never ranked.
 
 ### v7 — Advanced views & orchestration UI
@@ -83,16 +135,17 @@ Versions are ordered by value to the targets and by dependency. Placement is rev
 
 | Feature | What | Target | Version | Sources | Why this version |
 |---|---|---|---|---|---|
-| Languages Rust / TS-JS / Python / Go | Tree-sitter grammars compiled in | S C | **v1** | vision, RG | Covers Continuum and sensemesh, the two real test repos. |
-| `.scm` query files with unified capture tags | One query set per language, shared capture names; downstream never branches on language | C | **v1** | GN, CGM | CGM's top recurring bug is "a missing match arm is a silently absent edge"; data-driven captures + wiring tests prevent it. |
-| Single AST pass emitting node + reference facts | Definitions, unresolved references with qualifiers, imports — per file | S C | **v1** | CGM | Per-file facts are the basis of incremental == full. |
-| Deterministic symbol IDs | From path + qualified name + kind + arity | C | **v1** | CGM, GN, CT | Rowid/position IDs caused CGM's renumbering class and fg's instability. |
-| Import-bound call resolution | A call to `foo` in a file importing `foo` from X binds to X; contradicted edges pruned | C | **v1** | CGM, GN | Difference between 1 true edge and N phantom edges. |
-| Callee qualifiers | `path` / `self` / `stype` / `rtype` / `recv` / `chain` per call edge | C | **v1** | CGM | Structural qualifiers keep edges from being downgraded to ambiguous. |
-| `<external>` sentinels + `<module>` scope node | Unresolved/std imports bind to external nodes; top-level statements attach to a module node | C | **v1** | CGM | Without them, common names produce phantom edges and top-level-only files look dead. |
-| Test detection | AST flags + path/name heuristics | S C | **v1** | CGM, GN | Needed for prod/test partition and targeted tests. |
-| Unresolved references recorded | Store unresolved receivers/dispatch with cause | A C | **v1** | GN, CGM | Feeds `epistemic` / `causes`. |
-| Parse-parallel, write-serial pipeline | Rayon parse, single writer | S | **v1** | CGM, SB | Cold index speed; atomic per-file writes. |
+| Language: Python | Tree-sitter grammar compiled in | S C | **v1.0** | RG, RI | Proposed first language: 909 of Continuum's 1,146 files, and the repo where runner runs — the thesis bench runs on real tasks. See [v1.0](#v10--thesis-slice-proposal). |
+| Languages Rust / TS-JS / Go | Remaining grammars compiled in | S C | **v1.1** | vision, RG | Brings in sensemesh (Go/TS) and Graphite itself (Rust). |
+| `.scm` query files with unified capture tags | One query set per language, shared capture names; downstream never branches on language | C | **v1.0** | GN, CGM | CGM's top recurring bug is "a missing match arm is a silently absent edge"; data-driven captures + wiring tests prevent it. |
+| Single AST pass emitting node + reference facts | Definitions, unresolved references with qualifiers, imports — per file | S C | **v1.0** | CGM | Per-file facts are the basis of incremental == full. |
+| Deterministic symbol IDs | From path + qualified name + kind + arity | C | **v1.0** | CGM, GN, CT | Rowid/position IDs caused CGM's renumbering class and fg's instability. |
+| Import-bound call resolution | A call to `foo` in a file importing `foo` from X binds to X; contradicted edges pruned | C | **v1.0** | CGM, GN | Difference between 1 true edge and N phantom edges. |
+| Callee qualifiers | `path` / `self` / `stype` / `rtype` / `recv` / `chain` per call edge | C | **v1.1** | CGM | Structural qualifiers keep edges from being downgraded to ambiguous. |
+| `<external>` sentinels + `<module>` scope node | Unresolved/std imports bind to external nodes; top-level statements attach to a module node | C | **v1.0** | CGM | Without them, common names produce phantom edges and top-level-only files look dead. |
+| Test detection | AST flags + path/name heuristics | S C | **v1.0** | CGM, GN | Needed for prod/test partition and targeted tests. |
+| Unresolved references recorded | Store unresolved receivers/dispatch with cause | A C | **v1.0** | GN, CGM | Feeds `epistemic` / `causes`. |
+| Parse-parallel, write-serial pipeline | Rayon parse, single writer | S | **v1.1** | CGM, SB | Cold index speed; atomic per-file writes. |
 | Ambiguity refinement | Prefer non-test for non-test caller, then longest common path prefix; keep all if tied | C | **v2** | CGM | Precision gain on top of the v1 confidence tiers. |
 | Noise filters as data tables | Cross-file call noise, type-ref noise | C | **v2** | CGM, RG | RG saw noise inflate hubs; tune after measuring v1 graphs. |
 | Per-file parse timeout + recorded parse errors | 5 s cap; failures surfaced in health | C | **v2** | CGM | Pairs with the v2 health check. |
@@ -108,10 +161,10 @@ Versions are ordered by value to the targets and by dependency. Placement is rev
 
 | Feature | What | Target | Version | Sources | Why this version |
 |---|---|---|---|---|---|
-| Edge kinds (core) | `contains`, `calls`, `imports`, `extends`/`inherits`, `implements`, `has_member`, `overrides`, `references` | C | **v1** | GN, CGM | What blast radius needs. |
-| Three-tier confidence + categorical provenance | EXTRACTED / INFERRED / AMBIGUOUS; `extracted`, `resolved`, `inferred`, `name_guess` | A C | **v1** | CGM, GN, LS (Graphify) | A number alone can't exclude guesses (GN). Default floor INFERRED; ambiguous counted and disclosed. |
-| Confidence derived by rule | Evaluated at query time from facts, never stored | C | **v1** | CGM, SB | Stored confidence drifted in CGM; SB measured +3–5% cost. |
-| Test coverage relation (`covers`) | Test symbol → symbols it reaches | S C | **v1** | GN, CGM, CT (ig), LS | Targeted tests and pre-edit covering tests. |
+| Edge kinds (core) | `contains`, `calls`, `imports`, `extends`/`inherits`, `implements`, `has_member`, `overrides`, `references` | C | **v1.0** | GN, CGM | What blast radius needs. |
+| Three-tier confidence + categorical provenance | EXTRACTED / INFERRED / AMBIGUOUS; `extracted`, `resolved`, `inferred`, `name_guess` | A C | **v1.0** | CGM, GN, LS (Graphify) | A number alone can't exclude guesses (GN). Default floor INFERRED; ambiguous counted and disclosed. |
+| Confidence derived by rule | Evaluated at query time from facts, never stored | C | **v1.0** | CGM, SB | Stored confidence drifted in CGM; SB measured +3–5% cost. |
+| Test coverage relation (`covers`) | Test symbol → symbols it reaches | S C | **v1.0** | GN, CGM, CT (ig), LS | Targeted tests and pre-edit covering tests. |
 | Edge kinds (extended) | `exports`, `routes_to`, `accesses` r/w, `injects`, `fetches` | C | **v3** | GN, CGM | Come with routes and dispatch. |
 | Git co-change edges (`changes_with`) | Mined from history; participate in blast radius | C | **v3** | CT (fg), LS, LY | Correctness signal; also the ranker/label source for v6. CT suggested v1 — placed v3 because it needs history mining and its main consumers come later. |
 | Communities (Louvain → Leiden) | Clusters over calls/extends/implements, name guesses excluded, deterministic seed | A | **v4** | GN, LS, SB | CozoDB Louvain cost 1–4.7 s / GBs (SB) → background Rust crate. Needs v3 edge quality. |
@@ -123,15 +176,15 @@ Versions are ordered by value to the targets and by dependency. Placement is rev
 
 | Feature | What | Target | Version | Sources | Why this version |
 |---|---|---|---|---|---|
-| One daemon per repo | Owns CozoDB, watcher, adjacency; CLI/MCP/hooks/runner are thin socket clients | S C | **v1** | CGM, CT (lk) | Every session/runner task spawns its own MCP process; one daemon = one hot graph. |
-| Eager indexing on the watcher thread | Change → hash → parse → atomic per-file replace → adjacency update | S | **v1** | CGM, GN, SB | CGM indexes on the next query; GN takes 31.7 s per edit. |
-| Freshness barrier | Wait ≤~200 ms for indexing up to arrival seqno, else `stale: true` | S C | **v1** | CGM | Never blocks, never silently stale. |
-| `graph_rev` watermark | Stored in DB, returned in every response | A C | **v1** | CT (lk) | Kills cache races; tells agent and Observatory what state answered. |
-| mtime+size stamp → BLAKE3 ladder | Skip unchanged bytes | S | **v1** | CGM, LS | Minimal watcher overhead. |
-| Post-edit nudge hook | Tell the daemon "file X changed now" | S C | **v1** | CGM | Agent's own edit indexed before its next query. |
-| Stale-element sweep | Remove facts of files that left the tracked set | C | **v1** | CT (lk) | Deleted files must disappear. |
-| Incremental == full, tested | Fixture comparing incremental with rebuild | C | **v1** | CGM, SB | CGM bumped its index format 71 times over this bug class. |
-| CLI probe fallback | Probe + sync when no daemon runs | S | **v1** | architecture | CI and one-off use. |
+| One daemon per repo | Owns CozoDB, watcher, adjacency; CLI/MCP/hooks/runner are thin socket clients | S C | **v1.0** | CGM, CT (lk) | Every session/runner task spawns its own MCP process; one daemon = one hot graph. |
+| Eager indexing on the watcher thread | Change → hash → parse → atomic per-file replace → adjacency update | S | **v1.0** | CGM, GN, SB | CGM indexes on the next query; GN takes 31.7 s per edit. |
+| Freshness barrier | Wait ≤~200 ms for indexing up to arrival seqno, else `stale: true` | S C | **v1.0** | CGM | Never blocks, never silently stale. |
+| `graph_rev` watermark | Stored in DB, returned in every response | A C | **v1.0** | CT (lk) | Kills cache races; tells agent and Observatory what state answered. |
+| mtime+size stamp → BLAKE3 ladder | Skip unchanged bytes | S | **v1.0** | CGM, LS | Minimal watcher overhead. |
+| Post-edit nudge hook | Tell the daemon "file X changed now" | S C | **v1.1** | CGM | Agent's own edit indexed before its next query. |
+| Stale-element sweep | Remove facts of files that left the tracked set | C | **v1.0** | CT (lk) | Deleted files must disappear. |
+| Incremental == full, tested | Fixture comparing incremental with rebuild | C | **v1.0** | CGM, SB | CGM bumped its index format 71 times over this bug class. |
+| CLI probe fallback | Probe + sync when no daemon runs | S | **v1.3** | architecture | CI and one-off use. |
 | Watcher safety nets | Unknown events = content change; periodic backstop rescan | C | **v2** | CGM | Watchers fail silently in long sessions. |
 | Crash marker + transactional rebuild | `index_run_in_flight`; readers see the old graph until commit | C | **v2** | CGM | Crash consistency. |
 | Schema fingerprint → rebuild on mismatch | Hash of the schema definition | C | **v2** | GN | Safe upgrades once v1 ships. |
@@ -141,12 +194,12 @@ Versions are ordered by value to the targets and by dependency. Placement is rev
 
 | Feature | What | Target | Version | Sources | Why this version |
 |---|---|---|---|---|---|
-| Blast radius | Transitive dependents, shallowest depth; default depth 3, max 10 | S C | **v1** | all | Core. RG: depth 3 reaches 63–76% of the depth-10 set; SB: 19–80 µs. |
-| Depth labels | d1 WILL BREAK / d2 LIKELY AFFECTED / d3+ MAY NEED TESTING | A | **v1** | GN | Tells the agent what to do. |
-| `context` | One symbol: signature, source, callers/callees, references, tests | S A | **v1** | GN, CGM, CT (fg) | Replaces 3–6 Read/Grep calls before an edit. |
-| `diff_impact` | Diff hunks → changed symbols → blast radius → covering tests | S C | **v1** | GN (`detect_changes`), CT (ig), CGM (`affected`), RI | Merged duplicates; the graph already matches the working tree. |
-| Lexical symbol search | Exact → fuzzy with disambiguation | S | **v1** | CGM, CT (lk), GN | Replaces grep loops for names. |
-| AST-context grep | Regex hits grouped by enclosing symbol | S | **v1** | CGM, LS (Graft) | The pre-grep hook's answer. |
+| Blast radius | Transitive dependents, shallowest depth; default depth 3, max 10 | S C | **v1.0** | all | Core. RG: depth 3 reaches 63–76% of the depth-10 set; SB: 19–80 µs. |
+| Depth labels | d1 WILL BREAK / d2 LIKELY AFFECTED / d3+ MAY NEED TESTING | A | **v1.3** | GN | Tells the agent what to do. |
+| `context` | One symbol: signature, source, callers/callees, references, tests | S A | **v1.1** | GN, CGM, CT (fg) | Replaces 3–6 Read/Grep calls before an edit. |
+| `diff_impact` | Diff hunks → changed symbols → blast radius → covering tests | S C | **v1.0** | GN (`detect_changes`), CT (ig), CGM (`affected`), RI | Merged duplicates; the graph already matches the working tree. |
+| Lexical symbol search | Exact → fuzzy with disambiguation | S | **v1.1** | CGM, CT (lk), GN | Replaces grep loops for names. |
+| AST-context grep | Regex hits grouped by enclosing symbol | S | **v1.1** | CGM, LS (Graft) | The pre-grep hook's answer. |
 | Find all references | Every import/inherit/implement/call/reference site | C | **v2** | CGM, CT (ig) | Rename/remove safety. |
 | Search ladder with provenance | `retrieval{rung, reason}` on each answer | A | **v2** | CT (lk) | Builds on v1 search. |
 | Path between two symbols | Shortest directed path, file:line per hop | S | **v2** | GN, CGM | Answers 3–8 hops in one call. |
@@ -164,36 +217,36 @@ Versions are ordered by value to the targets and by dependency. Placement is rev
 
 ## 5. Response contract
 
-All **v1** — the contract is what turns a correct graph into fewer agent turns.
+All **v1** — the contract is what turns a correct graph into fewer agent turns. The core (source inline, budgets, disclosure, honesty) ships in v1.0; convenience layers on top of it in v1.1 and v1.3.
 
 | Feature | What | Target | Version | Sources | Why this version |
 |---|---|---|---|---|---|
-| Source inline | Verbatim line-numbered source (~4 KB cap), read from disk by byte range + body hash | S | **v1** | CGM, GN, LS | Eliminates the follow-up Read. Disagreement: CGM stores code in DB, GN reads by range — range chosen, the watcher keeps files current. |
-| `compact` flag | Signature + location only | S | **v1** | CGM | Every query. |
-| Tiered auto-compression | Node summaries → by file → by directory, ids to expand; names always present | S | **v1** | CGM, CT (ig), LY | Bounded payloads. |
-| Rank-based budget | Drop lowest-ranked items, never cut bytes | S A | **v1** | GN | Byte truncation breaks structure. |
-| Deterministic ranking | confidence × depth × fan-in | S A | **v1** | LY, SB | Most relevant first; baseline for v6. |
-| Disclosure fields | `limit_hit`, `depth_capped`, `*_hidden`, `*_truncated`, `partial` | A C | **v1** | CGM, GN, CT (ig) | Three tools converged: never a silent partial answer. |
-| `epistemic` + `causes` | `exact` / `lower-bound` + counted reasons | A C | **v1** | GN | Honest uncertainty compensates shallower v1 resolution. |
-| Risk verdict | LOW…CRITICAL; UNKNOWN (never LOW) on zero callers | A C | **v1** | GN, CGM | One word the agent can act on. |
-| Prod / test partition + covering tests | Tests split out, runnable names | S C | **v1** | CGM, GN | Targeted tests. |
-| Disambiguation in the envelope | Ranked candidates with `uid`; no match → suggestion, not error | A S | **v1** | GN, CGM | Avoids the two-step lookup turn. |
-| Not-indexed / not-found as guidance | Success-shaped, names the next action | S | **v1** | LS (CodeGraph), CGM | `isError` teaches agents to abandon the toolset. |
-| `stale` + `graph_rev` + `graph_lag_ms` | Freshness state in every response | A | **v1** | CT (lk), CGM | See §3. |
-| Bytes/3 token estimator | Conservative, single estimator | S | **v1** | CGM | Predictable budgets. |
+| Source inline | Verbatim line-numbered source (~4 KB cap), read from disk by byte range + body hash | S | **v1.0** | CGM, GN, LS | Eliminates the follow-up Read. Disagreement: CGM stores code in DB, GN reads by range — range chosen, the watcher keeps files current. |
+| `compact` flag | Signature + location only | S | **v1.3** | CGM | Every query. |
+| Tiered auto-compression | Node summaries → by file → by directory, ids to expand; names always present | S | **v1.3** | CGM, CT (ig), LY | Bounded payloads. |
+| Rank-based budget | Drop lowest-ranked items, never cut bytes | S A | **v1.0** | GN | Byte truncation breaks structure. |
+| Deterministic ranking | confidence × depth × fan-in | S A | **v1.0** | LY, SB | Most relevant first; baseline for v6. |
+| Disclosure fields | `limit_hit`, `depth_capped`, `*_hidden`, `*_truncated`, `partial` | A C | **v1.0** | CGM, GN, CT (ig) | Three tools converged: never a silent partial answer. |
+| `epistemic` + `causes` | `exact` / `lower-bound` + counted reasons | A C | **v1.0** | GN | Honest uncertainty compensates shallower v1 resolution. |
+| Risk verdict | LOW…CRITICAL; UNKNOWN (never LOW) on zero callers | A C | **v1.3** | GN, CGM | One word the agent can act on. |
+| Prod / test partition + covering tests | Tests split out, runnable names | S C | **v1.0** | CGM, GN | Targeted tests. |
+| Disambiguation in the envelope | Ranked candidates with `uid`; no match → suggestion, not error | A S | **v1.1** | GN, CGM | Avoids the two-step lookup turn. |
+| Not-indexed / not-found as guidance | Success-shaped, names the next action | S | **v1.3** | LS (CodeGraph), CGM | `isError` teaches agents to abandon the toolset. |
+| `stale` + `graph_rev` + `graph_lag_ms` | Freshness state in every response | A | **v1.0** | CT (lk), CGM | See §3. |
+| Bytes/3 token estimator | Conservative, single estimator | S | **v1.0** | CGM | Predictable budgets. |
 
 ## 6. Agent surface & steering
 
 | Feature | What | Target | Version | Sources | Why this version |
 |---|---|---|---|---|---|
-| CLI as primary agent surface | `graphite <cmd> --json` via Bash | S | **v1** | CGM | MCP tools are deferred in Claude Code; measured conversions came via CLI. |
-| MCP shim (secondary) | Same handlers, thin client | S | **v1** | architecture, CGM | Hosts that don't defer tools; runner SDK sessions. |
-| Few listed tools, capability via flags | ≤5 listed | S | **v1** | CGM, CT (lk), LS | Agents under-pick extra tools. Count disagreement (1 vs 3 vs 7): start few, the routing bench decides. |
-| Tool schema limits | No `anyOf`; descriptions ≤200 chars, positive; instructions ≤1.5 KB | S | **v1** | CGM | Measured client behavior. |
-| Pre-grep hook: block and answer | Deny identifier grep, return the graph's answer | S | **v1** | CGM, GN | Hint-only ~0% uptake; answering converts. |
-| Pre-edit hook: impact + covering tests | Inject when a signature with ≥2 prod callers is touched | C | **v1** | CGM | Blast radius at the moment of the edit. |
-| Hook fail-open, in settings.json | Errors never break the tool call | C | **v1** | CGM | Plugin `hooks.json` only honors SessionStart. |
-| Skill file | Teaches the agent the tool | S | **v1** | CT (fg) | Cheap onboarding. |
+| CLI as primary agent surface | `graphite <cmd> --json` via Bash | S | **v1.0** | CGM | MCP tools are deferred in Claude Code; measured conversions came via CLI. |
+| MCP shim (secondary) | Same handlers, thin client | S | **v1.1** | architecture, CGM | Hosts that don't defer tools; runner SDK sessions. |
+| Few listed tools, capability via flags | ≤5 listed | S | **v1.1** | CGM, CT (lk), LS | Agents under-pick extra tools. Count disagreement (1 vs 3 vs 7): start few, the routing bench decides. |
+| Tool schema limits | No `anyOf`; descriptions ≤200 chars, positive; instructions ≤1.5 KB | S | **v1.1** | CGM | Measured client behavior. |
+| Pre-grep hook: block and answer | Deny identifier grep, return the graph's answer | S | **v1.1** | CGM, GN | Hint-only ~0% uptake; answering converts. |
+| Pre-edit hook: impact + covering tests | Inject when a signature with ≥2 prod callers is touched | C | **v1.1** | CGM | Blast radius at the moment of the edit. |
+| Hook fail-open, in settings.json | Errors never break the tool call | C | **v1.1** | CGM | Plugin `hooks.json` only honors SessionStart. |
+| Skill file | Teaches the agent the tool | S | **v1.0** | CT (fg) | Cheap onboarding. |
 | Steering variants | Compound-grep inject, read fan-out hint, per-prompt push | S | **v2** | CGM | Tune with the v2 recommendation funnel. |
 | Per-community skills, AGENTS.md rules | Area knowledge, "impact before edit" | A | **v4** | GN | Needs communities. |
 | Session memory across agent sessions | Save/search prior session context | S | **v8** | CT (ig, lk) | Overlaps runner/dao task state today; ships if cross-session tasks measure repeated rediscovery. |
@@ -202,10 +255,10 @@ All **v1** — the contract is what turns a correct graph into fewer agent turns
 
 | Feature | What | Target | Version | Sources | Why this version |
 |---|---|---|---|---|---|
-| Socket bridge | Runner queries the daemon; CLI fallback; starts the worktree daemon | S | **v1** | RI | No per-query spawn. |
-| IMPLEMENTING injection | `diff_impact` with source in the prompt | S C | **v1** | RI | Highest-value mode. |
-| VALIDATING targeted tests | Covering tests before the full suite | S | **v1** | RI, CGM | Seconds of feedback instead of minutes. |
-| Mid-session access | CLI (primary) / MCP in SDK sessions, hooks in worktree settings | S A | **v1** | RI | Layer 2. |
+| Socket bridge | Runner queries the daemon; CLI fallback; starts the worktree daemon | S | **v1.2** | RI | No per-query spawn. |
+| IMPLEMENTING injection | `diff_impact` with source in the prompt | S C | **v1.2** | RI | Highest-value mode. |
+| VALIDATING targeted tests | Covering tests before the full suite | S | **v1.2** | RI, CGM | Seconds of feedback instead of minutes. |
+| Mid-session access | CLI (primary) / MCP in SDK sessions, hooks in worktree settings | S A | **v1.2** | RI | Layer 2. |
 | EXPLORING injection | Repo overview in the prompt | S | **v2** | RI | Needs v2 overview. |
 | RESEARCHING / PLANNING injection | Communities, coupling, cycles | A | **v4** | RI | Needs v4 structure. |
 | Context pack preview / task scoping | Human trims context; scope violations in trace | S | **v7** | FE | Needs the UI. |
@@ -214,8 +267,8 @@ All **v1** — the contract is what turns a correct graph into fewer agent turns
 
 | Feature | What | Target | Version | Sources | Why this version |
 |---|---|---|---|---|---|
-| Deterministic ranker | confidence × depth × fan-in (+ co-change once v3) | S A | **v1** | LY | Most of the value with no model. |
-| Triage trace fields | Candidates, must/verify/skip, engine, model sha | S | **v1** | LY | Without them no later ranker can be evaluated. |
+| Deterministic ranker | confidence × depth × fan-in (+ co-change once v3) | S A | **v1.0** | LY | Most of the value with no model. |
+| Triage trace fields | Candidates, must/verify/skip, engine, model sha | S | **v1.3** | LY | Without them no later ranker can be evaluated. |
 | Git-history label mining | Training data from past commits | A C | **v6** | LY | Needs v3 co-change. |
 | Laya sidecar: shadow → ranked | Ranks residual INFERRED items; never filters; VALIDATING never ranked | S A C | **v6** | LY | Activates only if it beats the deterministic baseline. |
 
@@ -232,11 +285,11 @@ All **v1** — the contract is what turns a correct graph into fewer agent turns
 
 | Feature | What | Target | Version | Sources | Why this version |
 |---|---|---|---|---|---|
-| Trace relation | Every call: session, tool, args, result/source tokens, latency, symbols, `graph_rev` | S | **v1** | FE, CGM, LY | Feeds every later measurement. |
-| Conversion metric | Did the agent Read/Edit what Graphite returned? (from transcripts) | A | **v1** | CGM | The "was it used" signal. |
-| Routing bench | Right tool picked from live schemas; release gate | A | **v1** | CGM | Tool descriptions are code. |
-| Effectiveness bench | Turns and wall-clock with vs without Graphite | S | **v1** | CGM, LS (Graft) | The only proof of the primary target. |
-| Storage bench kept runnable | `bench/` on real graphs | S | **v1** | SB | Guards the hot path. |
+| Trace relation | Every call: session, tool, args, result/source tokens, latency, symbols, `graph_rev` | S | **v1.1** | FE, CGM, LY | Feeds every later measurement. |
+| Conversion metric | Did the agent Read/Edit what Graphite returned? (from transcripts) | A | **v1.1** | CGM | The "was it used" signal. |
+| Routing bench | Right tool picked from live schemas; release gate | A | **v1.1** | CGM | Tool descriptions are code. |
+| Effectiveness bench | Turns and wall-clock with vs without Graphite | S | **v1.0** | CGM, LS (Graft) | The only proof of the primary target. |
+| Storage bench kept runnable | `bench/` on real graphs | S | **v1.0** | SB | Guards the hot path. |
 | Health check | Parse errors, unresolved ratio, staleness | C | **v2** | CGM | With parse-error recording. |
 | Recommendation funnel | Hook deny/hint/bypass joined to later use | S | **v2** | CGM | Tunes steering. |
 
@@ -267,4 +320,4 @@ Not scheduled because no measured effect on the targets justifies them now. Each
 
 ## Counts
 
-109 features after deduplication — v1: 61 · v2: 18 · v3: 7 · v4: 10 · v5: 3 · v6: 2 · v7: 4 · v8: 4 · parking lot: 14
+110 features after deduplication (the v1 language row is split in two) — v1: 62 (v1.0: 34 · v1.1: 17 · v1.2: 4 · v1.3: 7) · v2: 18 · v3: 7 · v4: 10 · v5: 3 · v6: 2 · v7: 4 · v8: 4 · parking lot: 14
