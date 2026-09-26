@@ -321,3 +321,22 @@ fn text_golden_hub_stays_small() {
         "--all lists every call site kept"
     );
 }
+
+#[test]
+fn changed_symbol_counts_callers_not_edges() {
+    let f = shapes();
+    let hunks = vec![Hunk {
+        path: "shop/util.py".into(),
+        start_line: 8,
+        line_count: 1,
+    }];
+    let env = diff_impact(&f.ctx(), &hunks, &Options::default()).unwrap();
+    let c = &env.result.changed[0];
+    assert_eq!(c.symbol.qualified, "shop.util.render");
+    assert_eq!(
+        c.direct_prod_callers, 2,
+        "serve_twice calls twice but is one caller"
+    );
+    assert_eq!(c.direct_test_callers, 1);
+    assert_eq!(c.direct.sites, 4);
+}

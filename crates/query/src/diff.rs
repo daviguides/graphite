@@ -246,12 +246,17 @@ pub fn diff_impact(
         causes.ambiguous_refs += amb;
         causes.unresolved_refs += unres;
         gaps_total += amb + unres;
-        let callers = ctx.adj.callers_of(sym.id);
+        let mut callers: Vec<SymbolId> = ctx
+            .adj
+            .callers_of(sym.id)
+            .into_iter()
+            .filter(|(_, kind, _)| opts.kinds.contains(kind) && *kind != EdgeKind::Imports)
+            .map(|(src, _, _)| src)
+            .collect();
+        callers.sort();
+        callers.dedup();
         let (mut prod, mut test) = (0, 0);
-        for (src, kind, _) in &callers {
-            if !opts.kinds.contains(kind) || *kind == EdgeKind::Imports {
-                continue;
-            }
+        for src in &callers {
             match cache.get(ctx, *src)?.map(role) {
                 Some(Role::Prod) => prod += 1,
                 Some(Role::Test) => test += 1,

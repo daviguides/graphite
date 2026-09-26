@@ -19,7 +19,7 @@ pub struct CallerSites {
     pub edge: &'static str,
     /// Strongest confidence among this caller's references.
     pub confidence: ConfidenceView,
-    /// Local names of the caller's own top callers, most-called first.
+    /// Local names of the caller's own top callers, production first, then most-called.
     pub called_by: Vec<String>,
     pub called_by_total: u32,
 }
@@ -204,13 +204,17 @@ pub(crate) fn direct_sites(
         }
         files.insert(sym.path.clone());
         let up = &upstream[&id];
-        let mut ranked: Vec<(usize, String)> = Vec::with_capacity(up.len());
+        let mut ranked: Vec<(Role, usize, String)> = Vec::with_capacity(up.len());
         for u in up {
             if let Some(s) = cache.get(ctx, *u)? {
-                ranked.push((ctx.adj.callers_of(*u).len(), local_of(s)));
+                ranked.push((role(s), ctx.adj.callers_of(*u).len(), local_of(s)));
             }
         }
-        ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        ranked.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| b.1.cmp(&a.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
         out.push(CallerSites {
             caller: SymbolView::from(&sym),
             lines,
@@ -219,7 +223,7 @@ pub(crate) fn direct_sites(
             called_by: ranked
                 .into_iter()
                 .take(MAX_CALLED_BY)
-                .map(|(_, n)| n)
+                .map(|(_, _, n)| n)
                 .collect(),
             called_by_total: up.len() as u32,
         });

@@ -17,7 +17,7 @@ const TOP_CALLERS: usize = 12;
 /// Callers listed per changed symbol in a diff.
 const TOP_CHANGED_CALLERS: usize = 5;
 const LINES_PER_CALLER: usize = 4;
-const TOP_TESTS: usize = 8;
+const TOP_TESTS: usize = 5;
 const TOP_GROUPS: usize = 6;
 const TOP_UNMAPPED: usize = 5;
 
@@ -37,7 +37,7 @@ pub fn render_text(env: &Value, o: TextOptions) -> String {
         Some("diff_impact") => diff(&mut out, env, res, o),
         _ => out.line(serde_json::to_string_pretty(env).unwrap_or_default()),
     }
-    notes(&mut out, env);
+    notes(&mut out, env, o);
     out.0
 }
 
@@ -464,17 +464,19 @@ fn diff(out: &mut Out, env: &Value, res: &Value, o: TextOptions) {
     }
 }
 
-/// Cuts that change what an agent should conclude; tier regrouping of the JSON detail is not one.
-fn notes(out: &mut Out, env: &Value) {
+/// Cuts that change what an agent should conclude. Tier regrouping of the JSON detail is not one, and
+/// call-site caps are already stated by the "… N more callers" line unless `--all` was asked for.
+fn notes(out: &mut Out, env: &Value, o: TextOptions) {
     let mut more = Vec::new();
     for d in arr(&env["disclosures"]) {
         let what = s(d, "what");
         let reason = s(d, "reason");
         match what {
             "depth" => more.push(format!("{reason} (--depth N)")),
-            "call_sites" | "changed_call_sites" | "candidates" | "covering_tests" => {
+            "call_sites" | "changed_call_sites" if o.all && !reason.starts_with("tier ") => {
                 more.push(reason.to_string())
             }
+            "candidates" | "covering_tests" => more.push(reason.to_string()),
             "dependents" if !reason.starts_with("tier ") => more.push(reason.to_string()),
             _ => {}
         }
