@@ -38,7 +38,7 @@
  "hidden_at_start": {
   "tools/orch/dao-cli": {
    "passed": 0,
-   "failed": 1
+   "failed": 11
   },
   "tools/orch/instrument": {
    "passed": 0,

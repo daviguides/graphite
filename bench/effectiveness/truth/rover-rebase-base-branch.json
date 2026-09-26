@@ -25,8 +25,7 @@
    "tests.test_prompt.TestComposePrompt::test_includes_current_state",
    "tests.test_prompt.TestComposePrompt::test_includes_key_context",
    "tests.test_prompt.TestComposePrompt::test_includes_resume_action",
-   "tests.test_prompt.TestComposePrompt::test_omits_none_fields",
-   "tests.test_sync.TestSyncPreservesMergedWork::test_umbrella_ends_up_on_top_of_the_default_branch"
+   "tests.test_prompt.TestComposePrompt::test_omits_none_fields"
   ]
  },
  "ref_failures": {

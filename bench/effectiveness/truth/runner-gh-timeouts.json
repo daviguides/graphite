@@ -25,8 +25,7 @@
    "tests.test_prompt.TestComposePrompt::test_includes_resume_action",
    "tests.test_prompt.TestComposePrompt::test_omits_none_fields",
    "tests.test_prompt.TestForkParallelSafety::test_parallel_safety_covers_forks",
-   "tests.test_prompt.TestImplementingGitGuardrail::test_implementing_prompt_does_not_permit_git_commit",
-   "tests.test_sync.TestSyncPreservesMergedWork::test_merged_pr_survives_the_sync"
+   "tests.test_prompt.TestImplementingGitGuardrail::test_implementing_prompt_does_not_permit_git_commit"
   ]
  },
  "ref_failures": {

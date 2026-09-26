@@ -27,7 +27,6 @@
    "tests.test_prompt.TestComposePrompt::test_omits_none_fields",
    "tests.test_prompt.TestForkParallelSafety::test_parallel_safety_covers_forks",
    "tests.test_prompt.TestImplementingGitGuardrail::test_implementing_prompt_does_not_permit_git_commit",
-   "tests.test_sync.TestStaleWorktreeCleanup::test_sync_recovers_when_its_temp_worktree_was_left_behind",
    "tests.test_validating_reject_route_back.TestGateRecheckBeforeAdvance::test_failed_gate_reruns_stored_mode_instead_of_skipping"
   ]
  },
@@ -53,7 +52,7 @@
  },
  "hidden_at_start": {
   "tools/orch/runner": {
-   "passed": 0,
+   "passed": 11,
    "failed": 1
   }
  }

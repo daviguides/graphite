@@ -30,8 +30,8 @@
  },
  "hidden_at_start": {
   "tools/orch/marshal": {
-   "passed": 0,
-   "failed": 1
+   "passed": 30,
+   "failed": 11
   }
  }
 }

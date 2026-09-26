@@ -14,21 +14,47 @@
  ],
  "ref_diff_lines": 152,
  "start_failures": {
-  "tools/flow/sourcerer": []
+  "tools/flow/sourcerer": [
+   "::tests.test_completion",
+   "::tests.test_git",
+   "::tests.test_project",
+   "tests.test_shell.TestBuildGoCommands::test_includes_venv_activation",
+   "tests.test_shell.TestBuildVenvActivateCommands::test_generates_source_activate",
+   "tests.test_shell.TestBuildVenvActivateCommands::test_exports_uv_project_environment",
+   "tests.test_shell.TestBuildVenvActivateCommands::test_deactivates_current_first",
+   "tests.test_shell.TestBuildVenvCreateCommands::test_generates_uv_venv_command",
+   "tests.test_shell.TestBuildVenvRemoveCommands::test_generates_rm_command",
+   "tests.test_shell.TestBuildHookScript::test_contains_org_shortcuts",
+   "tests.test_shell.TestShellCommandsProperty::test_activate_always_contains_source",
+   "tests.wt.test_filesystem.TestListRealDirs::test_returns_real_dirs_sorted"
+  ]
  },
  "ref_failures": {
-  "tools/flow/sourcerer": []
+  "tools/flow/sourcerer": [
+   "::tests.test_completion",
+   "::tests.test_git",
+   "::tests.test_project",
+   "tests.test_shell.TestBuildGoCommands::test_includes_venv_activation",
+   "tests.test_shell.TestBuildVenvActivateCommands::test_generates_source_activate",
+   "tests.test_shell.TestBuildVenvActivateCommands::test_exports_uv_project_environment",
+   "tests.test_shell.TestBuildVenvActivateCommands::test_deactivates_current_first",
+   "tests.test_shell.TestBuildVenvCreateCommands::test_generates_uv_venv_command",
+   "tests.test_shell.TestBuildVenvRemoveCommands::test_generates_rm_command",
+   "tests.test_shell.TestBuildHookScript::test_contains_org_shortcuts",
+   "tests.test_shell.TestShellCommandsProperty::test_activate_always_contains_source",
+   "tests.wt.test_filesystem.TestListRealDirs::test_returns_real_dirs_sorted"
+  ]
  },
  "hidden_at_ref": {
   "tools/flow/sourcerer": {
-   "passed": 0,
-   "failed": 0
+   "passed": 62,
+   "failed": 12
   }
  },
  "hidden_at_start": {
   "tools/flow/sourcerer": {
-   "passed": 0,
-   "failed": 0
+   "passed": 62,
+   "failed": 12
   }
  }
 }
