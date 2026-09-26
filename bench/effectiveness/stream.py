@@ -96,6 +96,63 @@ def bash_reads(command: str, root: str, cwd: str, known: set[str]) -> tuple[set[
     return found, cwd
 
 
+def _result_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(c.get("text", "") for c in content if isinstance(c, dict))
+    return json.dumps(content)
+
+
+def graphite_calls(path: Path) -> list[dict]:
+    """Every `graphite` command the agent ran, with its output (JSON when parseable)."""
+    pending: dict[str, dict] = {}
+    calls: list[dict] = []
+    for line in path.read_text().splitlines():
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for block in (ev.get("message") or {}).get("content", []) or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use" and block.get("name") == "Bash":
+                cmd = (block.get("input") or {}).get("command", "")
+                if re.search(r"(^|[\s;&|/(])graphite\s", cmd):
+                    pending[block["id"]] = {"command": cmd}
+            elif block.get("type") == "tool_result" and block.get("tool_use_id") in pending:
+                call = pending.pop(block["tool_use_id"])
+                text = _result_text(block.get("content"))
+                call["is_error"] = bool(block.get("is_error"))
+                parsed = []
+                for ln in text.splitlines():
+                    ln = ln.strip()
+                    if ln.startswith("{"):
+                        try:
+                            parsed.append(json.loads(ln))
+                        except json.JSONDecodeError:
+                            pass
+                call["json"] = parsed
+                call["raw"] = text if not parsed else ""
+                calls.append(call)
+    calls.extend(pending.values())
+    return calls
+
+
+def paths_in(obj) -> set[str]:
+    out: set[str] = set()
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in ("path", "file") and isinstance(v, str):
+                out.add(v)
+            else:
+                out |= paths_in(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            out |= paths_in(v)
+    return out
+
+
 def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
     """known_files: repo-relative paths that exist in the worktree; enables
     counting reads done through Bash."""

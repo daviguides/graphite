@@ -172,3 +172,78 @@ def test_bash_reads_track_cd_and_skip_non_readers():
     assert got == set()
     got, _ = bash_reads("sed -n 1,40p /w/z.py", root, "a", known)
     assert got == {"z.py"}
+
+
+# ---- arm B setup/teardown against the real CLI (skipped if not built)
+
+GRAPHITE = Path(__file__).resolve().parents[3] / "target/release/graphite"
+
+
+@pytest.mark.skipif(not GRAPHITE.exists(), reason="graphite CLI not built")
+def test_arm_b_setup_and_teardown_on_a_task_worktree(monkeypatch):
+    import tomllib
+    monkeypatch.setenv("GRAPHITE_BIN", str(GRAPHITE))
+    arm = tomllib.loads((HERE.parent / "arms.toml").read_text())["arms"]["B"]
+    common.ensure_mirror()
+    truth = json.loads((HERE.parent / "truth/sourcerer-monorepo-root.json").read_text())
+    tree = common.WORK / "smoke-armB"
+    common.add_worktree(truth["start"], tree)
+    try:
+        setup = run.run_hooks(arm["setup"], tree)
+        assert all(h["code"] == 0 for h in setup), setup
+        status = json.loads(common.run([str(GRAPHITE), "status", "--repo", str(tree), "--json"]).stdout)
+        assert status, status
+        look = common.run([str(GRAPHITE), "lookup", "find_worktrees_root", "--repo", str(tree), "--json"],
+                          check=False)
+        assert look.returncode == 0, look.stderr
+        teardown = run.run_hooks(arm["teardown"], tree)
+        assert all(h["code"] == 0 for h in teardown), teardown
+    finally:
+        common.run([str(GRAPHITE), "daemon", "stop", "--repo", str(tree)], check=False)
+        common.remove_worktree(tree)
+
+
+# ---- attribution and statistics
+
+
+def test_attribution_classes():
+    truth = {"expected_src": ["a.py", "b.py"]}
+    base = {"arm": "B", "outcome": "fail", "success": False, "graphite_calls": 2}
+    assert run.attribute({**base, "graphite_calls": 0}, truth, False)["class"] == "graphite_not_used"
+    assert run.attribute({**base, "outcome": "success", "success": True}, truth, False)["class"] == "graphite_used_success"
+    caused = run.attribute({**base, "files_edited": ["a.py"], "graphite_paths": ["a.py"]}, truth, False)
+    assert caused == {"class": "graphite_caused_failure", "omitted": ["b.py"]}
+    despite = run.attribute({**base, "files_edited": ["a.py"], "graphite_paths": ["a.py", "b.py"]}, truth, False)
+    assert despite["class"] == "failure_despite_graphite"
+    assert run.attribute({**base, "arm": "A"}, truth, False) is None
+    assert run.attribute({**base, "outcome": "harness_error"}, truth, False) is None
+
+
+def test_graphite_calls_parsed_from_stream(tmp_path):
+    from stream import graphite_calls, paths_in
+    out = {"ok": True, "data": {"result": {"candidates": [{"path": "x/y.py"}]}}}
+    lines = [
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+                                                       "input": {"command": "graphite lookup foo --json"}}]}},
+        {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
+                                                  "content": json.dumps(out)}]}},
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t2", "name": "Bash",
+                                                       "input": {"command": "grep -rn foo ."}}]}},
+    ]
+    s = tmp_path / "s.jsonl"
+    s.write_text("\n".join(json.dumps(l) for l in lines))
+    calls = graphite_calls(s)
+    assert len(calls) == 1 and calls[0]["json"] == [out]
+    assert paths_in(calls[0]["json"]) == {"x/y.py"}
+
+
+def test_go_requires_ci_upper_below_one():
+    import analyze
+    # 5 tasks, B sometimes much worse: point estimate may pass, CI must not
+    stats = {}
+    ratios = [0.5, 0.6, 0.7, 1.6, 1.8]
+    for i, r in enumerate(ratios):
+        stats[(f"t{i}", "A")] = {"turns": 10, "wall": 100, "success_rate": 1.0, "stale": 0}
+        stats[(f"t{i}", "B")] = {"turns": 10 * r, "wall": 100 * r, "success_rate": 1.0, "stale": 0}
+    v, lines = analyze.verdict(stats)
+    assert v == "NO-GO"

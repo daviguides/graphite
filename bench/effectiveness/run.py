@@ -27,7 +27,7 @@ from pathlib import Path
 from checks import check_code, check_question
 from common import (HERE, RESULTS, RUNS, TRUTH, add_worktree, ensure_mirror, git, load_json,
                     load_tasks, remove_worktree, uv_sync)
-from stream import parse_stream
+from stream import graphite_calls, parse_stream, paths_in
 
 BENCH_RULES = """\
 You are running inside an automated benchmark sandbox: a throwaway git
@@ -51,10 +51,14 @@ def load_arms() -> dict:
     return tomllib.loads((HERE / "arms.toml").read_text())["arms"]
 
 
+def graphite_bin() -> str | None:
+    return os.environ.get("GRAPHITE_BIN") or shutil.which("graphite")
+
+
 def run_hooks(cmds: list[str], tree: Path) -> list[dict]:
     out = []
     for cmd in cmds:
-        c = cmd.format(tree=shlex.quote(str(tree)))
+        c = cmd.format(tree=shlex.quote(str(tree)), graphite=shlex.quote(graphite_bin() or "graphite"))
         p = subprocess.run(c, shell=True, cwd=tree, capture_output=True, text=True)
         out.append({"cmd": c, "code": p.returncode, "tail": (p.stdout + p.stderr)[-500:]})
     return out
@@ -83,6 +87,29 @@ def claude_cmd(prompt: str, model: str, budget: float) -> list[str]:
 
 
 AGENT_STOP_SUBTYPES = {"success", "error_max_turns", "error_max_budget_usd"}
+
+
+def attribute(record: dict, truth: dict, is_question: bool) -> dict | None:
+    """Arm B only: did Graphite cause the failure?
+
+    graphite_caused_failure = the agent used Graphite, failed, and some
+    ground-truth file it did not touch/list was absent from every Graphite
+    answer it got — a candidate Graphite correctness miss (needs review:
+    the query may simply have been about another symbol).
+    """
+    if record.get("arm") != "B" or record.get("outcome") in ("harness_error", "unjudged", None):
+        return None
+    if not record.get("graphite_calls"):
+        return {"class": "graphite_not_used"}
+    if record.get("success"):
+        return {"class": "graphite_used_success"}
+    truth_files = set(truth["callers"] if is_question else truth.get("expected_src", []))
+    covered_by_agent = set(record.get("answer_files" if is_question else "files_edited") or [])
+    missed = truth_files - covered_by_agent
+    omitted = sorted(missed - set(record.get("graphite_paths") or []))
+    if omitted:
+        return {"class": "graphite_caused_failure", "omitted": omitted}
+    return {"class": "failure_despite_graphite", "missed": sorted(missed)}
 
 
 def run_problem(record: dict) -> str | None:
@@ -135,8 +162,11 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
         with stream_path.open("w") as fh, (out_dir / "stderr.txt").open("w") as err:
             # Own session: signals aimed at the launching shell, a waiter or a
             # monitor's process group must never reach the agent.
+            env = dict(os.environ)
+            if graphite_bin():
+                env["PATH"] = str(Path(graphite_bin()).parent) + os.pathsep + env.get("PATH", "")
             proc = subprocess.Popen(claude_cmd(prompt, args.model, args.max_budget),
-                                    cwd=tree, stdout=fh, stderr=err, text=True,
+                                    cwd=tree, stdout=fh, stderr=err, text=True, env=env,
                                     stdin=subprocess.DEVNULL, start_new_session=True)
             try:
                 proc.wait(timeout=args.timeout)
@@ -157,11 +187,19 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
         diff, edited = agent_changes(tree)
         (out_dir / "agent.diff").write_text(diff)
         record["files_edited"] = edited
+        calls = graphite_calls(stream_path)
+        if calls:
+            with (out_dir / "graphite.jsonl").open("w") as g:
+                for c in calls:
+                    g.write(json.dumps(c) + "\n")
+        record["graphite_calls"] = len(calls)
+        record["graphite_paths"] = sorted(set().union(*(paths_in(c.get("json")) for c in calls)) if calls else set())
         if task.is_question:
             record.update(check_question(task, truth, record.get("final_text", "")))
         else:
             record.update(check_code(task, truth, tree, diff, edited, out_dir,
                                      use_judge=not args.no_judge, judge_model=args.judge_model))
+        record["attribution"] = attribute(record, truth, task.is_question)
     except Exception as exc:  # any harness crash is a harness error, never an agent verdict
         _harness_error(record, f"harness exception: {type(exc).__name__}: {exc}")
     finally:
@@ -187,7 +225,8 @@ def main() -> None:
     args = ap.parse_args()
 
     arm = load_arms()[args.arm]
-    missing = [r for r in arm.get("requires", []) if not shutil.which(r)]
+    missing = [r for r in arm.get("requires", [])
+               if not (graphite_bin() if r == "graphite" else shutil.which(r))]
     if missing:
         raise SystemExit(f"arm {args.arm} needs {missing} on PATH")
     ensure_mirror()

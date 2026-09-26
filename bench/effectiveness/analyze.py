@@ -13,6 +13,7 @@ ratios B/A is reported (robust to a few long tasks dominating).
 """
 
 import json
+import random
 import statistics as st
 import sys
 from collections import defaultdict
@@ -83,35 +84,86 @@ def per_task(rows):
     return out
 
 
+BOOT = 5000
+SUCCESS_MARGIN = 0.05
+
+
+def _ratio(stats, t, key):
+    a, b = stats[(t, "A")][key], stats[(t, "B")][key]
+    return b / a if a and b is not None else None
+
+
+def bootstrap(paired, fn, n=BOOT, seed=7):
+    """95% CI of fn(sample) resampling tasks with replacement (paired A/B)."""
+    rng = random.Random(seed)
+    vals = []
+    for _ in range(n):
+        sample = [rng.choice(paired) for _ in paired]
+        v = fn(sample)
+        if v is not None:
+            vals.append(v)
+    if not vals:
+        return (None, None)
+    vals.sort()
+    return (vals[int(0.025 * len(vals))], vals[int(0.975 * len(vals)) - 1])
+
+
 def verdict(stats) -> tuple[str, list[str]]:
     tasks = sorted({t for t, _ in stats})
     paired = [t for t in tasks if (t, "A") in stats and (t, "B") in stats]
     if not paired:
         return "NO VERDICT — arm B has not run yet (baseline only).", []
-    turn_ratios = [stats[(t, "B")]["turns"] / stats[(t, "A")]["turns"] for t in paired
-                   if stats[(t, "A")]["turns"] and stats[(t, "B")]["turns"] is not None]
-    wall_ratios = [stats[(t, "B")]["wall"] / stats[(t, "A")]["wall"] for t in paired
-                   if stats[(t, "A")]["wall"] and stats[(t, "B")]["wall"] is not None]
-    sa = med([stats[(t, "A")]["success_rate"] for t in paired])
-    sb = med([stats[(t, "B")]["success_rate"] for t in paired])
-    succ_a = st.mean([stats[(t, "A")]["success_rate"] or 0 for t in paired])
-    succ_b = st.mean([stats[(t, "B")]["success_rate"] or 0 for t in paired])
+
+    def med_ratio(key):
+        return lambda ts: med([_ratio(stats, t, key) for t in ts])
+
+    def succ_diff(ts):
+        return (st.mean([stats[(t, "B")]["success_rate"] or 0 for t in ts])
+                - st.mean([stats[(t, "A")]["success_rate"] or 0 for t in ts]))
+
+    tr, wr, sd = med_ratio("turns")(paired), med_ratio("wall")(paired), succ_diff(paired)
+    tr_ci, wr_ci, sd_ci = (bootstrap(paired, med_ratio("turns")), bootstrap(paired, med_ratio("wall")),
+                           bootstrap(paired, succ_diff))
     stale = sum(stats[(t, "B")]["stale"] for t in paired)
-    tr, wr = med(turn_ratios), med(wall_ratios)
+    target = 1 - TARGET_DROP
     lines = [
-        f"- median per-task turns ratio B/A: {fmt(tr, 2)} (target <= {1 - TARGET_DROP:.2f})",
-        f"- median per-task wall-clock ratio B/A: {fmt(wr, 2)} (target <= {1 - TARGET_DROP:.2f})",
-        f"- mean success rate: A {succ_a:.2f} → B {succ_b:.2f} (B must be >= A)",
-        f"- silent-stale Graphite answers: {stale} (must be 0; counts results flagged stale)",
+        f"- paired tasks: {len(paired)} · bootstrap {BOOT} resamples of tasks, 95% CI",
+        f"- turns ratio B/A: {fmt(tr, 2)} [CI {fmt(tr_ci[0], 2)}–{fmt(tr_ci[1], 2)}] "
+        f"(need point <= {target:.2f} and CI upper <= 1.00)",
+        f"- wall-clock ratio B/A: {fmt(wr, 2)} [CI {fmt(wr_ci[0], 2)}–{fmt(wr_ci[1], 2)}] "
+        f"(need point <= {target:.2f} and CI upper <= 1.00)",
+        f"- success rate B−A: {fmt(sd * 100, 1)} pts [CI {fmt(sd_ci[0] * 100 if sd_ci[0] is not None else None, 1)}"
+        f"–{fmt(sd_ci[1] * 100 if sd_ci[1] is not None else None, 1)}] "
+        f"(CI upper must be >= −{SUCCESS_MARGIN * 100:.0f}: B not provably worse by >5 pts)",
+        f"- silent-stale Graphite answers: {stale} (must be 0)",
     ]
-    go = (tr is not None and tr <= 1 - TARGET_DROP and wr is not None and wr <= 1 - TARGET_DROP
-          and succ_b >= succ_a and stale == 0)
+    ok_ratio = lambda p, ci: p is not None and p <= target and ci[1] is not None and ci[1] <= 1.0
+    go = (ok_ratio(tr, tr_ci) and ok_ratio(wr, wr_ci)
+          and sd_ci[1] is not None and sd_ci[1] >= -SUCCESS_MARGIN and stale == 0)
     rethink = []
-    if tr is not None and tr > 1 - TARGET_DROP and succ_b >= succ_a:
-        rethink.append("Graphite did not cut turns enough — check conversion: was it used?")
-    if succ_b < succ_a:
+    if not ok_ratio(tr, tr_ci) and (sd_ci[1] or 0) >= -SUCCESS_MARGIN:
+        rethink.append("Turns not cut enough (or not significantly) — check attribution: was Graphite used?")
+    if sd_ci[1] is not None and sd_ci[1] < -SUCCESS_MARGIN:
         rethink.append("Correctness regressed — stop and investigate before any other wave.")
     return ("GO" if go else "NO-GO"), lines + [f"- {r}" for r in rethink]
+
+
+def attribution_section(rows) -> list[str]:
+    b = [r for r in rows if r.get("arm") == "B" and r.get("attribution")]
+    if not b:
+        return []
+    counts = defaultdict(int)
+    for r in b:
+        counts[r["attribution"]["class"]] += 1
+    out = ["## Arm B failure attribution", ""]
+    out += [f"- {k}: {counts[k]}" for k in ("graphite_not_used", "graphite_used_success",
+                                             "failure_despite_graphite", "graphite_caused_failure")]
+    caused = [r for r in b if r["attribution"]["class"] == "graphite_caused_failure"]
+    if caused:
+        out += ["", "Graphite correctness misses (candidate — review each):", "",
+                "| run | task | omitted file(s) |", "|---|---|---|"]
+        out += [f"| {r['run_id']} | {r['task']} | {', '.join(r['attribution']['omitted'])} |" for r in caused]
+    return out + [""]
 
 
 def render(all_rows) -> str:
@@ -153,6 +205,7 @@ def render(all_rows) -> str:
             f"{fmt(s['wall'])} ({fmt(s['wall_range'][0])}–{fmt(s['wall_range'][1])}) | "
             f"{fmt(s['cost'], 2)} | {fmt(s['tool_calls'])} | {fmt(s['search_calls'])} | {fmt(s['reads'])} | "
             f"{fmt(s['before_edit'])} | {fmt(s['success_rate'], 2)} |")
+    out += [""] + attribution_section(rows)
     paired = sorted({t for t, a in stats if a == "A"} & {t for t, a in stats if a == "B"})
     if paired:
         out += ["", "## Per-task deltas (B vs A)", "", "| task | turns Δ% | wall Δ% | success A→B |", "|---|---|---|---|"]

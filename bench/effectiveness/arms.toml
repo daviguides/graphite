@@ -1,8 +1,9 @@
 # Bench arms. Both arms use the same model, flags, prompt and sandbox;
 # arm B only adds the Graphite setup commands and one prompt line.
 #
-# Placeholders in `setup` / `teardown`: {tree} = task worktree path.
-# `requires` = executables that must be on PATH for the arm to run.
+# Placeholders in `setup` / `teardown`: {tree} = task worktree path,
+# {graphite} = the graphite binary (GRAPHITE_BIN or `graphite` on PATH).
+# `requires` = executables that must resolve for the arm to run.
 
 [arms.A]
 name = "baseline"
@@ -13,17 +14,16 @@ requires = []
 
 [arms.B]
 name = "graphite"
-# Stub until the Graphite CLI exists. Expected v1.0 shape: start/attach the
-# per-repo daemon, build the graph, then hand the agent the CLI.
-setup = [
-  "graphite init --repo {tree} --quiet",
-  "graphite daemon start --repo {tree} --wait-ready",
-]
-teardown = ["graphite daemon stop --repo {tree}"]
+# `init` starts the per-repo daemon if needed and blocks until the first
+# index is built. Setup time is not counted in the agent's wall-clock.
+setup = ["{graphite} init --repo {tree} --json"]
+teardown = ["{graphite} daemon stop --repo {tree} --json"]
 prompt_suffix = """
-A code-graph CLI is available in this repository: `graphite`. Prefer it over
-grep/find/reading many files to locate code, callers and impact:
-`graphite diff-impact --json`, `graphite blast <symbol> --json`,
-`graphite context <symbol> --json`. Results include source inline.
+A code-graph CLI for this repository is on PATH: `graphite`. Use it instead of
+grep/find/reading many files to locate symbols, their callers and the impact
+of a change (source is included in the answers):
+  graphite lookup <symbol> --json            where a symbol is defined
+  graphite blast <symbol> [--depth N] --json  everything that depends on it
+  graphite diff-impact --json                 what your uncommitted changes affect
 """
 requires = ["graphite"]
