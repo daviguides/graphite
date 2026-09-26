@@ -249,8 +249,11 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
                 record["graphite_complete_answer"] = True
             # With interception a grep the hook answers IS a graphite answer: only searches the
             # graph did not answer, after its first complete answer, count as "still searched".
+            # When the first complete answer came from an explicit `graphite` call instead of a hook,
+            # hooks.jsonl has no anchor: fall back to the transcript count.
             record["search_after_complete_stream"] = record.get("search_after_complete_graphite")
-            record["search_after_complete_graphite"] = hooks["searches_after_complete"]
+            if hooks["searches_after_complete"] is not None:
+                record["search_after_complete_graphite"] = hooks["searches_after_complete"]
         record["graphite_paths"] = sorted(paths)
         if task.is_question:
             record.update(check_question(task, truth, record.get("final_text", "")))

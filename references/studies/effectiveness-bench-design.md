@@ -269,6 +269,60 @@ without re-grepping; C adds interception hooks to fix routing and trust.
   answers count as Graphite answers in attribution and in
   `search_after_complete_graphite`. Waits on the `hooks-search` work.
 
+## Pilot — arm C (Graphite CLI text format + interception hooks)
+
+Same 5 tasks × 2 repeats, same model. Binaries from `feat/interception` at
+fe2f5af (`build_interception.sh`), dry smoke passed first. 0 harness errors.
+`results/pilot-C.jsonl`, report `results/pilot-AC.md`.
+
+| task | arm | turns | wall s | tools | files read | searches after complete | graphite calls | hook answers (answer+enrich) | rewrites | fallbacks | overlap intra / cross keys | success | attribution |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| core-consolidate-pin-model | A | 10 | 76.7 | 9 | 5.5 | – | – | – | – | – | – | 2/2 | – |
+| | B | 8 | 50.8 | 7 | 6.5 | 2 | 1 | – | – | – | – | 2/2 | used_success |
+| | C | 8.5 | 53.2 | 7.5 | 6 | 2 | 1 | 4 | 1.5 | 0 | 0 / 0 | 2/2 | used_success |
+| q-resolve-owner | A | 3 | 11.9 | 2 | 0 | – | – | – | – | – | – | 2/2 | – |
+| | B | 3.5 | 10.5 | 2.5 | 0 | 1.5 | 1 | – | – | – | – | 2/2 | used_success |
+| | C | 3 | 11.6 | 2 | 0 | 0 | 2 | 0 | 0 | 0 | 0 / 0 | 2/2 | used_success |
+| regent-is-ancestor-tristate | A | 11 | 65.8 | 10 | 2 | – | – | – | – | – | – | 2/2 | – |
+| | B | 13 | 62.8 | 12 | 2 | – | 0 | – | – | – | – | 2/2 | not_used |
+| | C | 12 | 79.3 | 11 | 1 | – | 0 | 7 | 3 | 0 | 0 / 3 | 2/2 | used_success |
+| runner-pr-base-guard | A | 17 | 95 | 16 | 4.5 | – | – | – | – | – | – | 2/2 | – |
+| | B | 11 | 63.7 | 10 | 1 | 2.5 | 1.5 | – | – | – | – | 2/2 | used_success |
+| | C | 12 | 69 | 11 | 2.5 | 0.5 | 1 | 6 | 0.5 | 0 | 0 / 0 | 2/2 | used_success |
+| sourcerer-monorepo-root | A | 10.5 | 32.5 | 9.5 | 3 | – | – | – | – | – | – | 2/2 | – |
+| | B | 11 | 41.2 | 10 | 2 | 1 | 1 | – | – | – | – | 2/2 | used_success |
+| | C | 10.5 | 41.5 | 9.5 | 4 | 0 | 1 | 8 | 1 | 0 | 0 / 0 | 2/2 | used_success |
+
+(medians over 2 repeats. Searches after complete, arm C: when a hook served the
+first complete answer, only searches the graph did not answer count; when the
+complete answer came from an explicit `graphite` call (7 of 10 runs), the
+transcript count is used.)
+
+Paired, 5 tasks, 5000 bootstrap resamples — CIs wide, pipeline check only:
+- turns C/A **1.00** [0.71–1.09]; wall-clock C/A **0.97** [0.69–1.28]
+- turns C/B **0.95** [0.86–1.09]; wall-clock C/B **1.08** [1.01–1.26]
+- success 10/10 in every arm
+
+Hooks over the 10 runs: 59 Bash PreToolUse decisions → 12 rewritten, 47 passed
+through (24 "unsupported shell construct", 16 "contains a command graphite
+does not handle", 7 "nothing graphite can answer"); 28 graph answers + 22
+enrichments; 0 fallbacks; hook latency median 27.5 ms. Graph answer bytes
+57.2 KB vs 24.6 KB a plain grep would have printed. Overlap: no intra-command
+repeats; cross-call repeats only on regent (3 keys, 300 B per run median).
+
+Reading:
+- **Routing fixed, speed not:** Graphite reached every run (regent went from
+  never used in B to 7 hook answers in C), but turns and wall-clock are flat
+  vs A and slightly worse than B on wall-clock.
+- **Most agent commands bypass the hooks:** 80% of Bash decisions passed
+  through, mostly for shell constructs and commands the hook doesn't parse —
+  the interception surface is the bottleneck, not the answers.
+- **Trust improved:** post-answer searches dropped (median 0 in 4 of 5 tasks,
+  vs 1–2.5 in B).
+- **Answers are larger than the greps they replace** (2.3× bytes), with no
+  measurable turn saving — worth checking whether that size buys anything.
+- Correctness unchanged; no Graphite-caused failure.
+
 ## Full-run estimate (time)
 
 From the clean pilot: code runs ≈ 96 s each including checks, questions ≈ 14 s.
