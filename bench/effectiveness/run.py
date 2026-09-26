@@ -27,7 +27,7 @@ from pathlib import Path
 from checks import check_code, check_question
 from common import (HERE, RESULTS, RUNS, TRUTH, add_worktree, ensure_mirror, git, load_json,
                     load_tasks, remove_worktree, uv_sync)
-from stream import graphite_calls, parse_stream, paths_in
+from stream import answer_is_complete, graphite_calls, parse_stream, paths_in, text_paths
 
 BENCH_RULES = """\
 You are running inside an automated benchmark sandbox: a throwaway git
@@ -91,17 +91,39 @@ def claude_cmd(prompt: str, model: str, budget: float) -> list[str]:
 AGENT_STOP_SUBTYPES = {"success", "error_max_turns", "error_max_budget_usd"}
 
 
+def hook_answers(path: Path) -> list[dict]:
+    """Answers a graphite hook served in place of a search/read, from the
+    daemon's .graphite/hooks.jsonl (one JSON event per line; schema owned by
+    the hooks feature — read defensively)."""
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text(errors="replace").splitlines():
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        text = json.dumps(ev)
+        served = ev.get("action") in ("deny", "answer", "block", "context") or bool(ev.get("answer"))
+        if not served:
+            continue
+        body = ev.get("answer") if isinstance(ev.get("answer"), str) else text
+        out.append({"paths": paths_in(ev) | text_paths(body),
+                    "complete": answer_is_complete(body) or ev.get("complete") is True})
+    return out
+
+
 def attribute(record: dict, truth: dict, is_question: bool) -> dict | None:
-    """Arm B only: did Graphite cause the failure?
+    """Graphite arms (B, B2, C): did Graphite cause the failure?
 
     graphite_caused_failure = the agent used Graphite, failed, and some
     ground-truth file it did not touch/list was absent from every Graphite
     answer it got — a candidate Graphite correctness miss (needs review:
     the query may simply have been about another symbol).
     """
-    if record.get("arm") != "B" or record.get("outcome") in ("harness_error", "unjudged", None):
+    if record.get("arm") == "A" or record.get("outcome") in ("harness_error", "unjudged", None):
         return None
-    if not record.get("graphite_calls"):
+    if not record.get("graphite_calls") and not record.get("graphite_hook_answers"):
         return {"class": "graphite_not_used"}
     if record.get("success"):
         return {"class": "graphite_used_success"}
@@ -185,6 +207,10 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
         problem = run_problem(record)
         if problem:
             return _harness_error(record, problem)
+        for rel in arm.get("collect", []):
+            src = tree / rel
+            if src.exists():
+                shutil.copyfile(src, out_dir / Path(rel).name)
         record["teardown"] = run_hooks(arm.get("teardown", []), tree)
         diff, edited = agent_changes(tree)
         (out_dir / "agent.diff").write_text(diff)
@@ -194,8 +220,18 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
             with (out_dir / "graphite.jsonl").open("w") as g:
                 for c in calls:
                     g.write(json.dumps(c) + "\n")
+        hooks = hook_answers(out_dir / "hooks.jsonl")
         record["graphite_calls"] = len(calls)
-        record["graphite_paths"] = sorted(set().union(*(paths_in(c.get("json")) for c in calls)) if calls else set())
+        record["graphite_hook_answers"] = len(hooks)
+        record["graphite_output_bytes"] = sum(c.get("bytes", 0) for c in calls)
+        paths = set()
+        for c in calls:
+            paths |= set(c.get("paths") or paths_in(c.get("json")))
+        for h in hooks:
+            paths |= h["paths"]
+        record["graphite_paths"] = sorted(paths)
+        if any(h["complete"] for h in hooks):
+            record["graphite_complete_answer"] = True
         if task.is_question:
             record.update(check_question(task, truth, record.get("final_text", "")))
         else:
@@ -214,7 +250,7 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arm", required=True, choices=["A", "B"])
+    ap.add_argument("--arm", required=True, choices=["A", "B", "B2", "C"])
     ap.add_argument("--tasks", default="all")
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--model", default="sonnet")
@@ -229,6 +265,11 @@ def main() -> None:
     arm = load_arms()[args.arm]
     missing = [r for r in arm.get("requires", [])
                if not (graphite_bin() if r == "graphite" else shutil.which(r))]
+    sub = arm.get("requires_subcommand")
+    if sub and not missing:
+        probe = subprocess.run([graphite_bin(), sub, "--help"], capture_output=True, text=True)
+        if probe.returncode != 0:
+            missing.append(f"graphite {sub} (not in this build)")
     if missing:
         raise SystemExit(f"arm {args.arm} needs {missing} on PATH")
     ensure_mirror()

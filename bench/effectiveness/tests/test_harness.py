@@ -268,3 +268,96 @@ def test_search_after_complete_graphite_answer_counted():
     r = parse_stream(stream)
     assert r["graphite_complete_answer"] is True
     assert r["search_after_complete_graphite"] == 2
+
+
+# ---- B2 text format and C hook-served answers
+
+
+def _write_stream(tmp_path, lines):
+    s = tmp_path / "s.jsonl"
+    s.write_text("\n".join(json.dumps(l) for l in lines))
+    return s
+
+
+def _use(i, name, inp):
+    return {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": i, "name": name, "input": inp}]}}
+
+
+def _res(i, content, is_error=False):
+    return {"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": i, "content": content, "is_error": is_error}]}}
+
+
+def test_text_graphite_answer_parsed(tmp_path):
+    from stream import graphite_calls
+    text = ("resolve_owner(explicit=None)  tools/orch/dao-cli/dao_cli/core/project.py:471  [function]\n"
+            "COMPLETE · 7 direct callers\n  tools/orch/runner/runner/core/hooks.py:88  owner = resolve_owner()\n")
+    s = _write_stream(tmp_path, [
+        _use("t1", "Bash", {"command": "graphite blast resolve_owner"}), _res("t1", text),
+        _use("t2", "Bash", {"command": "grep -rn resolve_owner ."}),
+    ])
+    (c,) = graphite_calls(s)
+    assert c["format"] == "text" and c["complete"] and c["bytes"] == len(text.encode())
+    assert set(c["paths"]) == {"tools/orch/dao-cli/dao_cli/core/project.py",
+                               "tools/orch/runner/runner/core/hooks.py"}
+    r = parse_stream(s)
+    assert r["graphite_complete_answer"] and r["search_after_complete_graphite"] == 1
+
+
+def test_lower_bound_is_not_complete():
+    from stream import answer_is_complete
+    assert not answer_is_complete("LOWER-BOUND (2 ambiguous refs named `x` could be hidden callers)")
+    assert not answer_is_complete("INCOMPLETE")
+
+
+def test_hook_served_answer_counts_as_graphite(tmp_path):
+    (tmp_path / "hooks.jsonl").write_text("\n".join([
+        json.dumps({"tool": "Grep", "action": "deny", "answer": "COMPLETE · 2 callers\n  a/b.py:3  x()"}),
+        json.dumps({"tool": "Read", "action": "allow"}),
+    ]))
+    hooks = run.hook_answers(tmp_path / "hooks.jsonl")
+    assert len(hooks) == 1 and hooks[0]["complete"] and hooks[0]["paths"] == {"a/b.py"}
+    rec = {"arm": "C", "outcome": "fail", "success": False, "graphite_calls": 0,
+           "graphite_hook_answers": 1, "files_edited": [], "graphite_paths": ["a/b.py"]}
+    assert run.attribute(rec, {"expected_src": ["a/b.py"]}, False)["class"] == "failure_despite_graphite"
+
+
+def test_denied_search_with_graph_answer_sets_complete(tmp_path):
+    s = _write_stream(tmp_path, [
+        _use("g", "Grep", {"pattern": "x"}),
+        _res("g", "graphite answered: COMPLETE · 1 caller  a.py:3", is_error=True),
+        _use("h", "Grep", {"pattern": "y"}),
+    ])
+    r = parse_stream(s)
+    assert r["hook_answers_in_stream"] == 1 and r["search_after_complete_graphite"] == 1
+
+
+def test_arms_b2_and_c_defined():
+    import tomllib
+    arms = tomllib.loads((HERE.parent / "arms.toml").read_text())["arms"]
+    assert "--json" not in " ".join(arms["B2"]["setup"]) + arms["B2"]["prompt_suffix"]
+    assert any("hooks install" in c for c in arms["C"]["setup"])
+    assert any("hooks uninstall" in c for c in arms["C"]["teardown"])
+    assert arms["C"]["collect"] == [".graphite/hooks.jsonl"]
+
+
+@pytest.mark.skipif(not GRAPHITE.exists(), reason="graphite CLI not built")
+def test_arm_b2_setup_teardown_and_text_answer(monkeypatch):
+    import tomllib
+    from stream import answer_is_complete, text_paths
+    monkeypatch.setenv("GRAPHITE_BIN", str(GRAPHITE))
+    arm = tomllib.loads((HERE.parent / "arms.toml").read_text())["arms"]["B2"]
+    common.ensure_mirror()
+    truth = json.loads((HERE.parent / "truth/q-resolve-owner.json").read_text())
+    tree = common.WORK / "smoke-armB2"
+    common.add_worktree(truth["sha"], tree)
+    try:
+        assert all(h["code"] == 0 for h in run.run_hooks(arm["setup"], tree))
+        out = common.run([str(GRAPHITE), "blast", "resolve_owner", "--repo", str(tree)], check=False).stdout
+        assert out and not out.lstrip().startswith("{")
+        assert text_paths(out) or "AMBIGUOUS" in out
+        assert answer_is_complete(out) or "LOWER-BOUND" in out or "AMBIGUOUS" in out
+        assert all(h["code"] == 0 for h in run.run_hooks(arm["teardown"], tree))
+    finally:
+        common.run([str(GRAPHITE), "daemon", "stop", "--repo", str(tree)], check=False)
+        common.remove_worktree(tree)

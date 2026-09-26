@@ -134,9 +134,27 @@ def graphite_calls(path: Path) -> list[dict]:
                             pass
                 call["json"] = parsed
                 call["raw"] = text if not parsed else ""
+                call["bytes"] = len(text.encode())
+                call["format"] = "json" if parsed else "text"
+                call["complete"] = answer_is_complete(text)
+                call["paths"] = sorted(paths_in(parsed) | text_paths(text))
                 calls.append(call)
     calls.extend(pending.values())
     return calls
+
+
+TEXT_PATH_RE = re.compile(r"(?<![\w/.-])(?:\./)?((?:[\w.-]+/)*[\w-][\w.-]*\.(?:py|rs|ts|tsx|js|jsx)):\d+")
+COMPLETE_TEXT_RE = re.compile(r"(?<![A-Za-z_-])COMPLETE\b")
+COMPLETE_JSON_RE = re.compile(r'"completeness":\{[^{}]*(\{[^{}]*\}[^{}]*)?"status":"complete"')
+
+
+def answer_is_complete(text: str) -> bool:
+    """Complete Graphite answer in either format: JSON envelope or text verdict."""
+    return bool(COMPLETE_JSON_RE.search(text) or COMPLETE_TEXT_RE.search(text))
+
+
+def text_paths(text: str) -> set[str]:
+    return set(TEXT_PATH_RE.findall(text or ""))
 
 
 def paths_in(obj) -> set[str]:
@@ -165,6 +183,7 @@ def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
     pending_graphite: set[str] = set()
     complete_seen = False
     search_after_complete = 0
+    hook_answers = 0
     subagent_calls = 0
     result: dict = {}
     first_edit_index = None
@@ -211,10 +230,14 @@ def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
         elif typ == "user":
             for block in ev.get("message", {}).get("content", []) or []:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
-                    if block.get("tool_use_id") in pending_graphite:
-                        body = _result_text(block.get("content"))
-                        if re.search(r'"completeness":\{[^{}]*(\{[^{}]*\}[^{}]*)?"status":"complete"', body):
-                            complete_seen = True
+                    body = _result_text(block.get("content"))
+                    if block.get("tool_use_id") in pending_graphite and answer_is_complete(body):
+                        complete_seen = True
+                    elif block.get("is_error") and answer_is_complete(body):
+                        # A PreToolUse hook that denies a search returns the graph's answer as the
+                        # (error) tool result.
+                        hook_answers += 1
+                        complete_seen = True
                     text = json.dumps(block.get("content", ""))
                     if '"stale": true' in text or '\\"stale\\": true' in text:
                         graphite_stale += 1
@@ -247,5 +270,6 @@ def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
         "calls_before_first_edit": (first_edit_index - 1) if first_edit_index else None,
         "graphite_stale_results": graphite_stale,
         "graphite_complete_answer": complete_seen,
+        "hook_answers_in_stream": hook_answers,
         "search_after_complete_graphite": search_after_complete if complete_seen else None,
     }

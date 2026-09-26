@@ -27,3 +27,40 @@ of a change (source is included in the answers):
   graphite diff-impact --json                 what your uncommitted changes affect
 """
 requires = ["graphite"]
+
+[arms.B2]
+name = "graphite-text"
+# Same as B, but the agent is pointed at the compact text format (default
+# output since 3d4fdc1..478fbda): verdict line COMPLETE / LOWER-BOUND,
+# call-site lines, no JSON.
+setup = ["{graphite} init --repo {tree}"]
+teardown = ["{graphite} daemon stop --repo {tree}"]
+prompt_suffix = """
+A code-graph CLI for this repository is on PATH: `graphite`. Use it instead of
+grep/find/reading many files to locate symbols, their callers and the impact
+of a change. Answers are complete unless they say LOWER-BOUND, and include
+call-site lines:
+  graphite lookup <symbol>             where a symbol is defined
+  graphite blast <symbol> [--depth N]  everything that depends on it
+  graphite diff-impact                 what your uncommitted changes affect
+"""
+requires = ["graphite"]
+
+[arms.C]
+name = "graphite-text+hooks"
+# B2 plus interception hooks: PreToolUse on Bash / Grep / Read answers with
+# the graph (project .claude/settings.json). Needs `graphite hooks` (feat/hooks).
+setup = ["{graphite} init --repo {tree}", "{graphite} hooks install --repo {tree}"]
+teardown = ["{graphite} hooks uninstall --repo {tree}", "{graphite} daemon stop --repo {tree}"]
+prompt_suffix = """
+A code-graph CLI for this repository is on PATH: `graphite`. Use it instead of
+grep/find/reading many files to locate symbols, their callers and the impact
+of a change. Answers are complete unless they say LOWER-BOUND, and include
+call-site lines:
+  graphite lookup <symbol>             where a symbol is defined
+  graphite blast <symbol> [--depth N]  everything that depends on it
+  graphite diff-impact                 what your uncommitted changes affect
+"""
+requires = ["graphite"]
+collect = [".graphite/hooks.jsonl"]
+requires_subcommand = "hooks"
