@@ -259,3 +259,12 @@ def test_graphite_index_is_not_agent_work(tmp_path):
     (tmp_path / "a.py").write_text("x = 2\n")
     diff, names = run.agent_changes(tmp_path)
     assert names == ["a.py"] and ".graphite" not in diff
+
+
+def test_search_after_complete_graphite_answer_counted():
+    stream = FIX / "smoke-B-q-resolve-owner-B-0-b9560d/stream.jsonl"
+    if not stream.exists():
+        pytest.skip("smoke-B run not present")
+    r = parse_stream(stream)
+    assert r["graphite_complete_answer"] is True
+    assert r["search_after_complete_graphite"] == 2

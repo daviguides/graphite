@@ -80,6 +80,7 @@ def per_task(rows):
             "before_edit": med([r.get("calls_before_first_edit") for r in rs]),
             "success_rate": (sum(1 for s in succ if s) / len(succ)) if succ else None,
             "stale": sum(r.get("graphite_stale_results", 0) or 0 for r in rs),
+            "search_after_complete": med([r.get("search_after_complete_graphite") for r in rs]),
         }
     return out
 
@@ -155,7 +156,12 @@ def attribution_section(rows) -> list[str]:
     counts = defaultdict(int)
     for r in b:
         counts[r["attribution"]["class"]] += 1
-    out = ["## Arm B failure attribution", ""]
+    complete = [r for r in b if r.get("graphite_complete_answer")]
+    kept = [r for r in complete if (r.get("search_after_complete_graphite") or 0) > 0]
+    out = ["## Arm B failure attribution", "",
+           f"- runs that got a complete Graphite answer: {len(complete)}; of those still searched "
+           f"(grep/find/Grep/Glob) afterwards: {len(kept)} "
+           f"(median searches after: {fmt(med([r.get('search_after_complete_graphite') for r in complete]))})"]
     out += [f"- {k}: {counts[k]}" for k in ("graphite_not_used", "graphite_used_success",
                                              "failure_despite_graphite", "graphite_caused_failure")]
     caused = [r for r in b if r["attribution"]["class"] == "graphite_caused_failure"]

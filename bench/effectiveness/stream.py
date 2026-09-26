@@ -162,6 +162,9 @@ def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
     files_read_bash: set[str] = set()
     root = ""
     shell_cwd = "."
+    pending_graphite: set[str] = set()
+    complete_seen = False
+    search_after_complete = 0
     subagent_calls = 0
     result: dict = {}
     first_edit_index = None
@@ -189,6 +192,10 @@ def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
                 if name == "Bash":
                     cat = bash_category(inp.get("command", ""))
                     bash[cat] += 1
+                    if re.search(r"(^|[\s;&|/(])graphite\s", inp.get("command", "")):
+                        pending_graphite.add(block.get("id"))
+                    if complete_seen and not nested and (cat == "search" or cat == "list"):
+                        search_after_complete += 1
                     if known_files is not None and root and not nested:
                         got, shell_cwd = bash_reads(inp.get("command", ""), root, shell_cwd, known_files)
                         files_read_bash |= got
@@ -197,11 +204,17 @@ def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
                 elif name == "Read" and inp.get("file_path"):
                     fp = inp["file_path"]
                     files_read.add(fp[len(root) + 1:] if root and fp.startswith(root + "/") else fp)
+                if name in {"Grep", "Glob"} and complete_seen and not nested:
+                    search_after_complete += 1
                 if name in {"Edit", "Write", "NotebookEdit", "MultiEdit"} and first_edit_index is None:
                     first_edit_index = call_index
         elif typ == "user":
             for block in ev.get("message", {}).get("content", []) or []:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
+                    if block.get("tool_use_id") in pending_graphite:
+                        body = _result_text(block.get("content"))
+                        if re.search(r'"completeness":\{[^{}]*(\{[^{}]*\}[^{}]*)?"status":"complete"', body):
+                            complete_seen = True
                     text = json.dumps(block.get("content", ""))
                     if '"stale": true' in text or '\\"stale\\": true' in text:
                         graphite_stale += 1
@@ -233,4 +246,6 @@ def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
         "has_result_event": bool(result),
         "calls_before_first_edit": (first_edit_index - 1) if first_edit_index else None,
         "graphite_stale_results": graphite_stale,
+        "graphite_complete_answer": complete_seen,
+        "search_after_complete_graphite": search_after_complete if complete_seen else None,
     }
