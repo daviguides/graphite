@@ -376,11 +376,22 @@ fn footer_line(a: &Answer, not_shown: &BTreeMap<String, usize>, summarized: usiz
             .collect();
         parts.push(format!("not shown: {}", list.join(", ")));
     }
+    if parts.is_empty() {
+        return String::new();
+    }
     let mut s = format!("# {}", parts.join(" · "));
     if (!not_shown.is_empty() || (f.import_lines > 0 && !a.all)) && !a.more_hint.is_empty() {
         let _ = write!(s, " — all: {}", a.more_hint);
     }
     s
+}
+
+fn with_nl(s: String) -> String {
+    if s.is_empty() {
+        s
+    } else {
+        s + "\n"
+    }
 }
 
 /// Per-file collapsed line for call sites that don't fit individually.
@@ -432,7 +443,7 @@ pub fn render_model(a: &Answer) -> String {
                 *not_shown.entry(it.class.clone()).or_default() += 1;
             }
         }
-        return format!("{head}{body}{}\n", footer_line(a, &not_shown, 0));
+        return format!("{head}{body}{}", with_nl(footer_line(a, &not_shown, 0)));
     }
 
     // Budgeted: header first; then definitions and direct call sites (full lines if they all
@@ -499,7 +510,10 @@ pub fn render_model(a: &Answer) -> String {
     loop {
         let summarized: usize = kept.iter().map(|c| c.2).sum();
         let body: String = kept.iter().map(|c| c.0.as_str()).collect();
-        let out = format!("{head}{body}{}\n", footer_line(a, &not_shown, summarized));
+        let out = format!(
+            "{head}{body}{}",
+            with_nl(footer_line(a, &not_shown, summarized))
+        );
         if (out.len() <= bytes && out.lines().count() <= lines_max) || kept.is_empty() {
             return out;
         }
@@ -565,7 +579,11 @@ pub fn render_human(a: &Answer, colored: bool) -> String {
         out.push('\n');
     }
     let foot = footer_line(a, &BTreeMap::new(), 0);
-    for part in foot.trim_start_matches("# ").split(" · ") {
+    for part in foot
+        .trim_start_matches("# ")
+        .split(" · ")
+        .filter(|p| !p.is_empty())
+    {
         let _ = writeln!(out, "{}• {part}{reset}", c("\x1b[2m"));
     }
     let _ = writeln!(
@@ -590,8 +608,7 @@ pub fn render_explain(a: &Answer) -> String {
             it.why
         );
     }
-    out.push_str(&footer_line(a, &BTreeMap::new(), 0));
-    out.push('\n');
+    out.push_str(&with_nl(footer_line(a, &BTreeMap::new(), 0)));
     out
 }
 
