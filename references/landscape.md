@@ -106,7 +106,7 @@ Evaluated through Graphite's optimization targets: does it make the AI agent's t
 - Two-tier model with LLM semantic layer (Graft) — adds provider dependency and cost.
 - Non-code ingestion (Graphify) — PDFs, images, video in the graph. Broadens scope but doesn't make code editing faster or more correct. Future consideration.
 - Cross-repo support (Graphify) — valuable for microservices but adds complexity. Not v1.
-- Hook-based strict mode (Graphify) — deny Read to force graph-first. Aggressive, conflicts with agent autonomy. The graph should earn usage by being faster, not by blocking alternatives.
+- Hook-based strict mode (Graphify) — deny Read to force graph-first. Superseded for Graphite by transparent interception: hooks let the agent's habitual commands (grep/rg/find/cat/sed -n/ls) run and enrich them with the graph, dropping only lines the graph provably explains (see features.md v1 steering).
 
 ### What to Avoid
 
