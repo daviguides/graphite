@@ -475,7 +475,10 @@ fn pipeline_stage_table() {
     assert_eq!(budget("head -n 50"), (None, Some(50)));
     assert_eq!(budget("head -50"), (None, Some(50)));
     assert_eq!(budget("head"), (None, Some(10)));
-    assert_eq!(budget("tail -n 20"), (None, Some(20)));
+    // tail wants the end of grep's file order: the original command runs untouched.
+    for t in ["tail -n 20", "tail -20", "tail"] {
+        assert_eq!(stage(t), Stage::Transform, "{t}");
+    }
     for t in [
         "grep -v test",
         "grep -v tests",

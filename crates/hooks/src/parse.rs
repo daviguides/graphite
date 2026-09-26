@@ -39,7 +39,7 @@ const TRANSFORMS: &[&str] = &["wc", "sort", "uniq", "cut", "tr", "column", "nl",
 /// What a pipeline stage after a search means for the answer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stage {
-    /// `head -c N`, `head -n N`, `head -N`, `tail -n N`: an answer budget, not a cut.
+    /// `head -c N`, `head -n N`, `head -N`: an answer budget, not a cut.
     Budget(Budget),
     /// `grep -v test` and friends: drop test matches semantically.
     DropTests(String),
@@ -151,7 +151,10 @@ pub fn stage(st: &str) -> Stage {
         return Stage::Real;
     };
     match cmd {
-        "head" | "tail" => budget_of(&w).map_or(Stage::Real, Stage::Budget),
+        "head" => budget_of(&w).map_or(Stage::Real, Stage::Budget),
+        // `tail` asks for the END of grep's file-ordered output; a relevance-ordered answer has no
+        // meaningful end, so the original command runs untouched (no enrichment, no surprise).
+        "tail" => Stage::Transform,
         "cat" if w.len() == 1 => Stage::Noop,
         "grep" | "egrep" | "fgrep" | "rg" => match grep_filter(&w, st) {
             Some(f)
