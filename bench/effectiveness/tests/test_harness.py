@@ -237,6 +237,28 @@ def test_graphite_calls_parsed_from_stream(tmp_path):
     assert paths_in(calls[0]["json"]) == {"x/y.py"}
 
 
+def test_report_compares_arm_c_and_has_no_money(monkeypatch):
+    import analyze
+    base = {"kind": "bugfix", "difficulty": "medium", "model": "sonnet", "outcome": "success",
+            "success": True, "cost_usd": 0.5, "tool_calls": 5}
+    rows = []
+    for t in ("t1", "t2"):
+        rows.append({**base, "run_id": f"{t}-A", "task": t, "arm": "A", "num_turns": 10, "wall_s": 100})
+        rows.append({**base, "run_id": f"{t}-C", "task": t, "arm": "C", "num_turns": 6, "wall_s": 60,
+                     "graphite_calls": 0, "graphite_hook_answers": 3, "attribution": {"class": "graphite_used_success"},
+                     "hooks": {"answers": 3, "enrich": 0, "fallbacks": 0, "reasks_after_complete": 0,
+                               "answer_bytes": 900, "raw_bytes": 4000, "latency_ms": 30,
+                               "intra_overlap_keys": 0, "intra_overlap_bytes": 0, "intra_overlap_commands": 0,
+                               "cross_overlap_keys": 1, "cross_overlap_bytes": 40, "answer_keys": 9,
+                               "overlap_window_ms": 10000}})
+    monkeypatch.setattr(analyze, "TREAT", "C")
+    report = analyze.render(rows)
+    assert "C/A" in report and "$" not in report and "cost" not in report.lower()
+    assert "overlap across calls" in report
+    c_rows = [l for l in report.splitlines() if l.startswith("| t1 | bugfix | medium | C |")]
+    assert c_rows and "| 0 / 3 |" in c_rows[0]  # graphite calls / hook answers column for arm C
+
+
 def test_go_requires_ci_upper_below_one():
     import analyze
     # 5 tasks, B sometimes much worse: point estimate may pass, CI must not

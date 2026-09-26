@@ -72,7 +72,8 @@ def per_task(rows):
             "turns_range": spread([r.get("num_turns") for r in rs]),
             "wall": med([r.get("wall_s") for r in rs]),
             "wall_range": spread([r.get("wall_s") for r in rs]),
-            "cost": med([r.get("cost_usd") for r in rs]),
+            "graphite_calls": med([r.get("graphite_calls") for r in rs]) if rs[0]["arm"] != "A" else None,
+            "hook_answers": med([r.get("graphite_hook_answers") for r in rs]) if rs[0].get("hooks") else None,
             "tool_calls": med([r.get("tool_calls") for r in rs]),
             "search_calls": med([(r.get("bash") or {}).get("search", 0) + (r.get("tools") or {}).get("Grep", 0)
                                  for r in rs]),
@@ -85,12 +86,13 @@ def per_task(rows):
     return out
 
 
+TREAT = "B"  # treatment arm compared against baseline A; set from the data / --treatment
 BOOT = 5000
 SUCCESS_MARGIN = 0.05
 
 
 def _ratio(stats, t, key):
-    a, b = stats[(t, "A")][key], stats[(t, "B")][key]
+    a, b = stats[(t, "A")][key], stats[(t, TREAT)][key]
     return b / a if a and b is not None else None
 
 
@@ -111,31 +113,31 @@ def bootstrap(paired, fn, n=BOOT, seed=7):
 
 def verdict(stats) -> tuple[str, list[str]]:
     tasks = sorted({t for t, _ in stats})
-    paired = [t for t in tasks if (t, "A") in stats and (t, "B") in stats]
+    paired = [t for t in tasks if (t, "A") in stats and (t, TREAT) in stats]
     if not paired:
-        return "NO VERDICT — arm B has not run yet (baseline only).", []
+        return f"NO VERDICT — arm {TREAT} has not run yet (baseline only).", []
 
     def med_ratio(key):
         return lambda ts: med([_ratio(stats, t, key) for t in ts])
 
     def succ_diff(ts):
-        return (st.mean([stats[(t, "B")]["success_rate"] or 0 for t in ts])
+        return (st.mean([stats[(t, TREAT)]["success_rate"] or 0 for t in ts])
                 - st.mean([stats[(t, "A")]["success_rate"] or 0 for t in ts]))
 
     tr, wr, sd = med_ratio("turns")(paired), med_ratio("wall")(paired), succ_diff(paired)
     tr_ci, wr_ci, sd_ci = (bootstrap(paired, med_ratio("turns")), bootstrap(paired, med_ratio("wall")),
                            bootstrap(paired, succ_diff))
-    stale = sum(stats[(t, "B")]["stale"] for t in paired)
+    stale = sum(stats[(t, TREAT)]["stale"] for t in paired)
     target = 1 - TARGET_DROP
     lines = [
         f"- paired tasks: {len(paired)} · bootstrap {BOOT} resamples of tasks, 95% CI",
-        f"- turns ratio B/A: {fmt(tr, 2)} [CI {fmt(tr_ci[0], 2)}–{fmt(tr_ci[1], 2)}] "
+        f"- turns ratio {TREAT}/A: {fmt(tr, 2)} [CI {fmt(tr_ci[0], 2)}–{fmt(tr_ci[1], 2)}] "
         f"(need point <= {target:.2f} and CI upper <= 1.00)",
-        f"- wall-clock ratio B/A: {fmt(wr, 2)} [CI {fmt(wr_ci[0], 2)}–{fmt(wr_ci[1], 2)}] "
+        f"- wall-clock ratio {TREAT}/A: {fmt(wr, 2)} [CI {fmt(wr_ci[0], 2)}–{fmt(wr_ci[1], 2)}] "
         f"(need point <= {target:.2f} and CI upper <= 1.00)",
-        f"- success rate B−A: {fmt(sd * 100, 1)} pts [CI {fmt(sd_ci[0] * 100 if sd_ci[0] is not None else None, 1)}"
+        f"- success rate {TREAT}−A: {fmt(sd * 100, 1)} pts [CI {fmt(sd_ci[0] * 100 if sd_ci[0] is not None else None, 1)}"
         f"–{fmt(sd_ci[1] * 100 if sd_ci[1] is not None else None, 1)}] "
-        f"(CI upper must be >= −{SUCCESS_MARGIN * 100:.0f}: B not provably worse by >5 pts)",
+        f"(CI upper must be >= −{SUCCESS_MARGIN * 100:.0f}: {TREAT} not provably worse by >5 pts)",
         f"- silent-stale Graphite answers: {stale} (must be 0)",
     ]
     ok_ratio = lambda p, ci: p is not None and p <= target and ci[1] is not None and ci[1] <= 1.0
@@ -150,7 +152,7 @@ def verdict(stats) -> tuple[str, list[str]]:
 
 
 def attribution_section(rows) -> list[str]:
-    b = [r for r in rows if r.get("arm") == "B" and r.get("attribution")]
+    b = [r for r in rows if r.get("arm") == TREAT and r.get("attribution")]
     if not b:
         return []
     counts = defaultdict(int)
@@ -158,7 +160,7 @@ def attribution_section(rows) -> list[str]:
         counts[r["attribution"]["class"]] += 1
     complete = [r for r in b if r.get("graphite_complete_answer")]
     kept = [r for r in complete if (r.get("search_after_complete_graphite") or 0) > 0]
-    out = ["## Arm B failure attribution", "",
+    out = [f"## Arm {TREAT} Graphite use and attribution", "",
            f"- runs that got a complete Graphite answer: {len(complete)}; of those still searched "
            f"(grep/find/Grep/Glob) afterwards: {len(kept)} "
            f"(median searches after: {fmt(med([r.get('search_after_complete_graphite') for r in complete]))})"]
@@ -209,10 +211,7 @@ def render(all_rows) -> str:
         out += [f"## Arm {arm} totals", "",
                 f"- runs {len(rs)}, success {sum(1 for s in succ if s)}/{len(succ)}",
                 f"- median turns {fmt(med([r.get('num_turns') for r in rs]))}, "
-                f"median wall {fmt(med([r.get('wall_s') for r in rs]))} s, "
-                f"median cost ${fmt(med([r.get('cost_usd') for r in rs]), 2)}, "
-                f"total cost ${sum(r.get('cost_usd') or 0 for r in rs):.2f} "
-                f"(+ judge ${sum(((r.get('judge') or {}).get('judge_cost_usd') or 0) for r in rs):.2f})",
+                f"median wall {fmt(med([r.get('wall_s') for r in rs]))} s",
                 f"- median files read {fmt(med([r.get('n_files_read') for r in rs]))} "
                 f"(Read tool {fmt(med([r.get('n_files_read_tool') for r in rs]))}, "
                 f"via Bash {fmt(med([r.get('n_files_read_bash') for r in rs]))})",
@@ -220,21 +219,22 @@ def render(all_rows) -> str:
                 f"median calls before first edit {fmt(med([r.get('calls_before_first_edit') for r in rs]))}",
                 ""]
     out += ["## Per task (medians over repeats)", "",
-            "| task | kind | diff | arm | n | turns (min–max) | wall s (min–max) | cost $ | tools | search | files read | calls before edit | success |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+            "| task | kind | diff | arm | n | turns (min–max) | wall s (min–max) | tools | search | files read | calls before edit | graphite calls / hook answers | searches after complete | success |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for (task, arm), s in sorted(stats.items()):
         out.append(
             f"| {task} | {s['kind']} | {s['difficulty']} | {arm} | {s['n']} | "
             f"{fmt(s['turns'])} ({fmt(s['turns_range'][0])}–{fmt(s['turns_range'][1])}) | "
             f"{fmt(s['wall'])} ({fmt(s['wall_range'][0])}–{fmt(s['wall_range'][1])}) | "
-            f"{fmt(s['cost'], 2)} | {fmt(s['tool_calls'])} | {fmt(s['search_calls'])} | {fmt(s['reads'])} | "
-            f"{fmt(s['before_edit'])} | {fmt(s['success_rate'], 2)} |")
+            f"{fmt(s['tool_calls'])} | {fmt(s['search_calls'])} | {fmt(s['reads'])} | "
+            f"{fmt(s['before_edit'])} | {fmt(s['graphite_calls'])} / {fmt(s['hook_answers'])} | "
+            f"{fmt(s['search_after_complete'])} | {fmt(s['success_rate'], 2)} |")
     out += [""] + attribution_section(rows)
-    paired = sorted({t for t, a in stats if a == "A"} & {t for t, a in stats if a == "B"})
+    paired = sorted({t for t, a in stats if a == "A"} & {t for t, a in stats if a == TREAT})
     if paired:
-        out += ["", "## Per-task deltas (B vs A)", "", "| task | turns Δ% | wall Δ% | success A→B |", "|---|---|---|---|"]
+        out += ["", f"## Per-task deltas ({TREAT} vs A)", "", f"| task | turns Δ% | wall Δ% | success A→{TREAT} |", "|---|---|---|---|"]
         for t in paired:
-            a, b = stats[(t, "A")], stats[(t, "B")]
+            a, b = stats[(t, "A")], stats[(t, TREAT)]
             dt = (b["turns"] / a["turns"] - 1) * 100 if a["turns"] else None
             dw = (b["wall"] / a["wall"] - 1) * 100 if a["wall"] else None
             out.append(f"| {t} | {fmt(dt, 0)} | {fmt(dw, 0)} | {fmt(a['success_rate'], 2)}→{fmt(b['success_rate'], 2)} |")
@@ -250,13 +250,26 @@ def render(all_rows) -> str:
 
 
 def main() -> None:
+    """analyze.py FILE.jsonl ... [-o report.md] [--treatment C]
+    Treatment defaults to the one non-A arm present."""
+    global TREAT
     args = sys.argv[1:]
     out_path = None
+    treatment = None
     if "-o" in args:
         i = args.index("-o")
         out_path = args[i + 1]
         args = args[:i] + args[i + 2:]
-    report = render(load(args))
+    if "--treatment" in args:
+        i = args.index("--treatment")
+        treatment = args[i + 1]
+        args = args[:i] + args[i + 2:]
+    rows = load(args)
+    others = sorted({r["arm"] for r in rows} - {"A"})
+    if treatment is None and len(others) > 1:
+        raise SystemExit(f"several treatment arms {others}: pass --treatment")
+    TREAT = treatment or (others[0] if others else "B")
+    report = render(rows)
     if out_path:
         Path(out_path).write_text(report)
     print(report)

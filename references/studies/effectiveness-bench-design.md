@@ -25,7 +25,7 @@ The binary comes from `GRAPHITE_BIN` or `PATH` and is prepended to the agent's
 Per run it records:
 - turns, tool calls by type (Read, Grep, Edit…, Bash split into search / list /
   read / edit / run / git / graphite), calls before the first edit;
-- wall-clock, API duration, cost and tokens;
+- wall-clock, API duration and tokens (money is recorded but not reported);
 - **files read** — via the Read tool and via Bash (cat / head / sed -n / grep
   FILE / rg FILE…, cd-aware, only paths that exist in the worktree), reported
   separately and as a union;
@@ -141,7 +141,7 @@ python3 build_truth.py                  # freeze ground truth (suites: ~40 s/tas
 python3 run.py --arm A --tasks all --repeats 3 --label full-A
 cargo build --release -p graphite-cli     # from repo root, before any arm-B run
 GRAPHITE_BIN=$PWD/../../target/release/graphite python3 run.py --arm B --tasks all --repeats 3 --label full-B
-python3 analyze.py results/full-A.jsonl results/full-B.jsonl -o results/report.md
+python3 analyze.py results/full-A.jsonl results/full-B.jsonl -o results/report.md   # --treatment C when several arms
 ```
 
 Arm B is a command template in `arms.toml` (`setup`, `teardown`,
@@ -178,15 +178,15 @@ bug to the recorded run that exposed it.
 5 tasks × 2 repeats, `sonnet`, judge `opus`. **10/10 success, 0 harness
 errors.** 12.9 min end to end, sequential. `results/pilot-A-clean.md`.
 
-| task | kind | turns (min–max) | wall s (min–max) | agent $ | files read | calls before 1st edit | success |
-|---|---|---|---|---|---|---|---|
-| core-consolidate-pin-model | refactor | 10 (10–10) | 76.7 (73.6–79.8) | 0.29 | 5.5 | 4.5 | 2/2 |
-| q-resolve-owner | question | 3 (3–3) | 11.9 (11.8–12.1) | 0.17 | 0 | – | 2/2 |
-| regent-is-ancestor-tristate | bugfix | 11 (11–11) | 65.8 (55.4–76.3) | 0.38 | 2 | 5 | 2/2 |
-| runner-pr-base-guard | bugfix | 17 (15–19) | 95.0 (74.1–115.9) | 0.47 | 4.5 | 9 | 2/2 |
-| sourcerer-monorepo-root | signature | 10.5 (9–12) | 32.5 (28.2–36.8) | 0.30 | 3 | 6 | 2/2 |
+| task | kind | turns (min–max) | wall s (min–max) | files read | calls before 1st edit | success |
+|---|---|---|---|---|---|---|
+| core-consolidate-pin-model | refactor | 10 (10–10) | 76.7 (73.6–79.8) | 5.5 | 4.5 | 2/2 |
+| q-resolve-owner | question | 3 (3–3) | 11.9 (11.8–12.1) | 0 | – | 2/2 |
+| regent-is-ancestor-tristate | bugfix | 11 (11–11) | 65.8 (55.4–76.3) | 2 | 5 | 2/2 |
+| runner-pr-base-guard | bugfix | 17 (15–19) | 95.0 (74.1–115.9) | 4.5 | 9 | 2/2 |
+| sourcerer-monorepo-root | signature | 10.5 (9–12) | 32.5 (28.2–36.8) | 3 | 6 | 2/2 |
 
-Totals: median 10.5 turns, 64.5 s, $0.31 per run; agent $3.21 + judge $0.76.
+Totals: median 10.5 turns, 64.5 s per run.
 Hidden reference tests pass 0.26–1.00 on solved runs (runner-pr-base-guard
 0.26: the reference tests mock the reference's own helper names) — confirms
 they are a signal, not a gate. Judge verdicts all first-attempt.
@@ -219,18 +219,18 @@ both runs. Two early signals, not conclusions (n=2):
 Same 5 tasks × 2 repeats, same model, build includes 064cdd7.
 `results/pilot-B.jsonl`, report `results/pilot-AB.md`. 0 harness errors.
 
-| task | arm | turns | wall s | agent $ | files read | searches | graphite calls | searches after complete answer | success | attribution |
-|---|---|---|---|---|---|---|---|---|---|---|
-| core-consolidate-pin-model | A | 10 | 77 | 0.29 | 5.5 | 3 | – | – | 2/2 | – |
-| | B | 8 | 51 | 0.27 | 6.5 | 2 | 1 | 2 | 2/2 | used_success |
-| q-resolve-owner | A | 3 | 12 | 0.17 | 0 | 2 | – | – | 2/2 | – |
-| | B | 3.5 | 10 | 0.19 | 0 | 1.5 | 1 | 1.5 | 2/2 | used_success |
-| regent-is-ancestor-tristate | A | 11 | 66 | 0.38 | 2 | 2 | – | – | 2/2 | – |
-| | B | 13 | 63 | 0.39 | 2 | 3 | 0 | – | 2/2 | **not_used** |
-| runner-pr-base-guard | A | 17 | 95 | 0.47 | 4.5 | 4.5 | – | – | 2/2 | – |
-| | B | 11 | 64 | 0.38 | 1 | 2.5 | 1.5 | 2.5 | 2/2 | used_success |
-| sourcerer-monorepo-root | A | 10.5 | 32 | 0.30 | 3 | 2 | – | – | 2/2 | – |
-| | B | 11 | 41 | 0.35 | 2 | 1 | 1 | 1 | 2/2 | used_success |
+| task | arm | turns | wall s | files read | searches | graphite calls | searches after complete answer | success | attribution |
+|---|---|---|---|---|---|---|---|---|---|
+| core-consolidate-pin-model | A | 10 | 77 | 5.5 | 3 | – | – | 2/2 | – |
+| | B | 8 | 51 | 6.5 | 2 | 1 | 2 | 2/2 | used_success |
+| q-resolve-owner | A | 3 | 12 | 0 | 2 | – | – | 2/2 | – |
+| | B | 3.5 | 10 | 0 | 1.5 | 1 | 1.5 | 2/2 | used_success |
+| regent-is-ancestor-tristate | A | 11 | 66 | 2 | 2 | – | – | 2/2 | – |
+| | B | 13 | 63 | 2 | 3 | 0 | – | 2/2 | **not_used** |
+| runner-pr-base-guard | A | 17 | 95 | 4.5 | 4.5 | – | – | 2/2 | – |
+| | B | 11 | 64 | 1 | 2.5 | 1.5 | 2.5 | 2/2 | used_success |
+| sourcerer-monorepo-root | A | 10.5 | 32 | 3 | 2 | – | – | 2/2 | – |
+| | B | 11 | 41 | 2 | 1 | 1 | 1 | 2/2 | used_success |
 
 (medians over 2 repeats; searches = grep/rg/find/ls via Bash + Grep/Glob)
 
@@ -269,27 +269,23 @@ without re-grepping; C adds interception hooks to fix routing and trust.
   answers count as Graphite answers in attribution and in
   `search_after_complete_graphite`. Waits on the `hooks-search` work.
 
-## Full-run estimate
+## Full-run estimate (time)
 
-From the clean pilot. The pilot's 5 tasks are easier than the full set (6 of
-18 code tasks are "hard"), so code runs are scaled ×1.5 (agent cost) and
-×1.4 (time) from the pilot's code-run means ($0.36, 96 s incl. checks);
-questions at pilot values ($0.17, 14 s). Judge ≈ $0.10 per code run.
+From the clean pilot: code runs ≈ 96 s each including checks, questions ≈ 14 s.
+The full set is harder than the pilot's 5 tasks (6 of 18 code tasks are
+"hard"), so code runs are scaled ×1.4. One pass = 22 tasks × 1 repeat × 1 arm
+≈ **40 min (30–55)** sequential.
 
-One pass = 22 tasks × 1 repeat × 1 arm ≈ **$11 (range $8–16), ≈ 40 min
-(range 30–55)** sequential.
+| plan | passes | wall-clock sequential |
+|---|---|---|
+| A + treatment, 3 repeats | 6 | **≈ 4 h (3–5.5)** |
+| A + treatment, 5 repeats | 10 | **≈ 6.7 h (5–9)** |
+| + placebo arm, 3 repeats | +3 | +≈ 2 h |
+| + placebo arm, 5 repeats | +5 | +≈ 3.3 h |
 
-| plan | passes | cost | wall-clock sequential |
-|---|---|---|---|
-| A + B, 3 repeats | 6 | **≈ $65 ($50–95)** | **≈ 4 h (3–5.5)** |
-| A + B, 5 repeats | 10 | **≈ $110 ($80–160)** | **≈ 6.7 h (5–9)** |
-| + placebo arm, 3 repeats | +3 | +≈ $33 | +≈ 2 h |
-| + placebo arm, 5 repeats | +5 | +≈ $55 | +≈ 3.3 h |
-
-Runs are independent (own worktree, own daemon), so 3–4 in parallel would
-cut wall-clock roughly proportionally, subject to API rate limits; the
-harness runs them sequentially today. A placebo arm (arm B's setup + prompt
-line with a no-op tool) is not built — waiting on the user's call.
+Runs are independent (own worktree, own daemon), so 3–4 in parallel would cut
+wall-clock roughly proportionally, subject to API rate limits; the harness runs
+them sequentially today. A placebo arm is not built.
 
 Recommendation: 3 repeats. Within-task variance is small; more tasks, not
 more repeats, is what narrows the CI.
