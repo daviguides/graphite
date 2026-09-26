@@ -44,7 +44,6 @@ fn spec(root: &Path, pat: &str) -> SearchSpec {
         paths: vec![root.to_string_lossy().into()],
         cwd: root.to_string_lossy().into(),
         label: format!("grep -rn {pat} ."),
-        argv: vec!["grep".into(), "-rn".into(), pat.into(), ".".into()],
         ..Default::default()
     }
 }
@@ -95,8 +94,8 @@ fn non_identifier_patterns_group_by_enclosing_symbol() {
     let res = search::run(&s, &root).unwrap();
     let (text, stats) = judge::render(&engine, &s, &res, false).unwrap();
     assert_eq!(stats["mode"], "grouped");
-    assert!(text.contains("# use.a (function L3-4)"), "{text}");
-    assert!(text.contains("# amb.g (function"), "{text}");
+    assert!(text.contains("# a (function L3-4)"), "{text}");
+    assert!(text.contains("# g (function L1-2)"), "{text}");
     assert!(
         text.contains("pkg/use.py:4:    return resolve_owner()"),
         "{text}"
@@ -117,7 +116,9 @@ fn caps_disclose_the_rest() {
     let res = search::run(&s, &root).unwrap();
     let (text, _) = judge::render(&engine, &s, &res, false).unwrap();
     assert!(
-        text.contains("+250 more matches — all: graphite-hook exec --all --"),
+        text.contains(
+            "+250 more matches — all: graphite-hook run --all -- 'grep -rn needle [0-9]+ .'"
+        ),
         "{text}"
     );
 }
@@ -143,8 +144,5 @@ fn imports_counted_and_multi_definitions_listed() {
     assert!(text.contains("has 2 definitions"), "{text}");
     assert!(text.contains("imports: "), "{text}");
     assert!(!text.contains("pkg/use.py:1:from pkg.core"), "{text}");
-    assert!(
-        text.contains("→ core.resolve_owner") || text.contains("→ resolve_owner"),
-        "{text}"
-    );
+    assert!(text.contains("→ resolve_owner"), "{text}");
 }

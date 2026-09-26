@@ -31,6 +31,7 @@ fn callers_count(engine: &Engine, id: SymbolId) -> usize {
     let adj = engine.adjacency();
     adj.callers_of(id)
         .iter()
+        .filter(|(_, kind, _)| *kind != graphite_model::EdgeKind::Contains)
         .map(|(src, _, _)| *src)
         .collect::<HashSet<_>>()
         .len()

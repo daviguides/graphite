@@ -133,11 +133,11 @@ impl NameFacts {
 }
 
 pub(crate) fn short_label(s: &Symbol) -> String {
-    let parts: Vec<&str> = s.qualified.rsplit('.').take(2).collect();
-    match (parts.first(), parts.get(1), s.parent.is_some()) {
-        (Some(n), Some(p), true) => format!("{p}.{n}"),
-        (Some(n), _, _) => n.to_string(),
-        _ => s.name.clone(),
+    let mut parts = s.qualified.rsplit('.');
+    let name = parts.next().unwrap_or(&s.name);
+    match (s.kind, parts.next()) {
+        (SymbolKind::Method, Some(class)) => format!("{class}.{name}"),
+        _ => name.to_string(),
     }
 }
 
@@ -343,22 +343,6 @@ fn kind_word(k: EdgeKind) -> &'static str {
     }
 }
 
-fn quote_argv(argv: &[String]) -> String {
-    argv.iter()
-        .map(|a| {
-            if !a.is_empty()
-                && a.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-_./=:,@%+".contains(c))
-            {
-                a.clone()
-            } else {
-                format!("'{}'", a.replace('\'', "'\\''"))
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 struct Out<'a> {
     buf: String,
     spec: &'a SearchSpec,
@@ -399,12 +383,12 @@ impl Out<'_> {
 }
 
 fn more_hint(spec: &SearchSpec) -> String {
-    if spec.argv.is_empty() {
+    if spec.label.is_empty() {
         String::new()
     } else {
         format!(
-            " — all: graphite-hook exec --all -- {}",
-            quote_argv(&spec.argv)
+            " — all: graphite-hook run --all -- '{}'",
+            spec.label.replace('\'', "'\\''")
         )
     }
 }
@@ -521,7 +505,13 @@ pub fn render(
     excluded_note(&mut out, res, &cwd);
 
     let text = out.buf;
+    let verdict = match &facts {
+        Some(f) if !f.syms.is_empty() && f.gaps.is_empty() => "complete",
+        Some(f) if !f.syms.is_empty() => "lower_bound",
+        _ => "none",
+    };
     let stats = json!({
+        "graph_verdict": verdict,
         "mode": if facts.is_some() { "identifier" } else { "grouped" },
         "matches": res.hits.len(),
         "files": nfiles.len(),

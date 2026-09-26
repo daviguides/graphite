@@ -52,12 +52,9 @@ pub struct SearchSpec {
     /// Print everything: no per-section caps.
     #[serde(default)]
     pub all: bool,
-    /// The original command, echoed in the answer header.
+    /// The original command, echoed in the answer header and in the "see everything" hint.
     #[serde(default)]
     pub label: String,
-    /// argv of the original command, for the "see everything" hint.
-    #[serde(default)]
-    pub argv: Vec<String>,
 }
 
 /// One matching line.
