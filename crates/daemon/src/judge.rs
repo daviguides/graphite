@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use graphite_model::{EdgeKind, Symbol, SymbolId, SymbolKind};
-use graphite_store::{confidence, Confidence, GraphStore, Outcome, WriteDelta};
+use graphite_store::{confidence, Confidence, GraphStore, Outcome};
 use serde_json::{json, Value};
 
 use crate::engine::Engine;
@@ -104,6 +104,7 @@ pub fn identifier_of(spec: &SearchSpec) -> Option<String> {
 
 struct RefInfo {
     src: SymbolId,
+    dst: SymbolId,
     kind: EdgeKind,
     conf: Confidence,
 }
@@ -147,27 +148,43 @@ pub(crate) fn name_facts(engine: &Engine, name: &str, dotted: &str) -> Result<Na
         syms.retain(|s| s.qualified.ends_with(dotted));
     }
     syms.truncate(MAX_NAME_SYMBOLS);
-    let ids: HashSet<SymbolId> = syms.iter().map(|s| s.id).collect();
-    let delta = WriteDelta {
-        touched_names: vec![name.to_string()],
-        touched_ids: ids.iter().copied().collect(),
-        ..Default::default()
-    };
-    let mut refs = HashMap::new();
-    for r in store.resolve_affected(&delta).map_err(|e| e.to_string())? {
-        if let Outcome::Resolved { dst, provenance } = r.outcome {
-            // Containment is structure (module → its own definition), not a use.
-            if ids.contains(&dst) && r.kind != EdgeKind::Contains {
-                refs.insert(
-                    (r.key.path.clone(), r.site_line),
-                    RefInfo {
-                        src: r.src,
-                        kind: r.kind,
-                        conf: confidence(provenance),
-                    },
-                );
+    // Call-site lines come from the in-memory adjacency; a site's file is its source symbol's file.
+    let mut sites = Vec::new();
+    {
+        let adj = engine.adjacency();
+        for s in &syms {
+            for site in adj.sites_into(s.id) {
+                // Containment is structure (module → its own definition), not a use.
+                if site.kind != EdgeKind::Contains {
+                    sites.push((s.id, site));
+                }
             }
         }
+    }
+    let mut ids: Vec<SymbolId> = sites.iter().map(|(_, site)| site.src).collect();
+    ids.extend(syms.iter().map(|s| s.id));
+    ids.sort();
+    ids.dedup();
+    let known: HashMap<SymbolId, Symbol> = store
+        .symbols(&ids)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|s| (s.id, s))
+        .collect();
+    let mut refs = HashMap::new();
+    for (dst, site) in sites {
+        let Some(src) = known.get(&site.src) else {
+            continue;
+        };
+        refs.insert(
+            (src.path.clone(), site.line),
+            RefInfo {
+                src: site.src,
+                dst,
+                kind: site.kind,
+                conf: confidence(site.provenance),
+            },
+        );
     }
     let mut gaps = HashMap::new();
     for r in store.name_gaps(name).map_err(|e| e.to_string())? {
@@ -177,13 +194,7 @@ pub(crate) fn name_facts(engine: &Engine, name: &str, dotted: &str) -> Result<Na
         };
         gaps.insert((r.key.path.clone(), r.site_line), why);
     }
-    let srcs: Vec<SymbolId> = refs.values().map(|r| r.src).collect();
-    let labels = store
-        .symbols(&srcs)
-        .map_err(|e| e.to_string())?
-        .iter()
-        .map(|s| (s.id, short_label(s)))
-        .collect();
+    let labels = known.values().map(|s| (s.id, short_label(s))).collect();
     Ok(NameFacts {
         name: name.to_string(),
         syms,
@@ -552,6 +563,31 @@ fn render_identifier(
         ));
     }
 
+    if f.syms.len() > 1 {
+        let mut per: HashMap<SymbolId, usize> = HashMap::new();
+        for r in f.refs.values() {
+            *per.entry(r.dst).or_default() += 1;
+        }
+        out.line(&format!(
+            "`{}` has {} definitions — references below are tagged with the one they resolve to:",
+            f.name,
+            f.syms.len()
+        ));
+        for sym in f.syms.iter().take(8) {
+            let abs = engine.paths.root.join(&sym.path);
+            out.line(&format!(
+                "  {}:{} {} ({} refs)",
+                display_path(&abs, cwd),
+                sym.start_line,
+                sym.signature,
+                per.get(&sym.id).copied().unwrap_or(0)
+            ));
+        }
+        if f.syms.len() > 8 {
+            out.line(&format!("  +{} more definitions", f.syms.len() - 8));
+        }
+    }
+
     if spec.files_only {
         render_files_only(out, res, classes);
         return;
@@ -585,28 +621,48 @@ fn render_identifier(
     hidden.sort_by(|a, b| a.0.cmp(b.0));
     *alias_refs = hidden.len();
 
-    if !refs.is_empty() {
-        let files: HashSet<&Path> = refs.iter().map(|&i| res.hits[i].abs.as_path()).collect();
+    let ref_of = |i: usize| -> Option<&RefInfo> {
+        let h = &res.hits[i];
+        let rel = engine.paths.relative(&h.abs)?;
+        f.refs.get(&(rel, h.line))
+    };
+    let (imports, uses): (Vec<usize>, Vec<usize>) = refs
+        .iter()
+        .partition(|&&i| ref_of(i).is_some_and(|r| r.kind == EdgeKind::Imports));
+    if !uses.is_empty() {
+        let files: HashSet<&Path> = uses.iter().map(|&i| res.hits[i].abs.as_path()).collect();
         out.line(&format!(
             "references ({} sites in {} files):",
-            refs.len(),
+            uses.len(),
             files.len()
         ));
         let cap = if spec.all { usize::MAX } else { CAP_REFS };
-        for &i in refs.iter().take(cap) {
+        for &i in uses.iter().take(cap) {
             let h = &res.hits[i];
-            let rel = engine.paths.relative(&h.abs).unwrap_or_default();
-            let note = f
-                .refs
-                .get(&(rel, h.line))
-                .map(|r| ref_note(f, r))
-                .unwrap_or_default();
+            let note = ref_of(i).map(|r| ref_note(f, r)).unwrap_or_default();
             out.hit(&h.display, &h.abs, h.line, &h.text, &note);
         }
-        if refs.len() > cap {
+        if uses.len() > cap {
             out.line(&format!(
                 "+{} more references{}",
-                refs.len() - cap,
+                uses.len() - cap,
+                more_hint(spec)
+            ));
+        }
+    }
+    if !imports.is_empty() {
+        let files: HashSet<&Path> = imports.iter().map(|&i| res.hits[i].abs.as_path()).collect();
+        if spec.all {
+            out.line(&format!("imports ({}):", imports.len()));
+            for &i in &imports {
+                let h = &res.hits[i];
+                out.hit(&h.display, &h.abs, h.line, &h.text, "");
+            }
+        } else {
+            out.line(&format!(
+                "imports: {} lines in {} files (not listed{})",
+                imports.len(),
+                files.len(),
                 more_hint(spec)
             ));
         }
@@ -690,7 +746,15 @@ fn ref_note(f: &NameFacts, r: &RefInfo) -> String {
         Confidence::Inferred => ", inferred",
         Confidence::Ambiguous => ", name guess",
     };
-    format!("    ← {src} ({}{conf})", kind_word(r.kind))
+    let target = if f.syms.len() > 1 {
+        f.labels
+            .get(&r.dst)
+            .map(|l| format!(" → {l}"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    format!("    ← {src} ({}{conf}){target}", kind_word(r.kind))
 }
 
 fn render_files_only(out: &mut Out, res: &SearchOutcome, classes: &[Class]) {

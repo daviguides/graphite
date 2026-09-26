@@ -121,3 +121,30 @@ fn caps_disclose_the_rest() {
         "{text}"
     );
 }
+
+#[test]
+fn imports_counted_and_multi_definitions_listed() {
+    let (_d, root) = fixture();
+    write(
+        &root,
+        "other/core.py",
+        "def resolve_owner(x):\n    return x\n",
+    );
+    write(
+        &root,
+        "other/use2.py",
+        "from other.core import resolve_owner\n\ndef z():\n    return resolve_owner(1)\n",
+    );
+    let engine = Engine::open(RepoPaths::new(&root)).unwrap();
+    engine.index_all().unwrap();
+    let s = spec(&root, "resolve_owner");
+    let res = search::run(&s, &root).unwrap();
+    let (text, _) = judge::render(&engine, &s, &res, false).unwrap();
+    assert!(text.contains("has 2 definitions"), "{text}");
+    assert!(text.contains("imports: "), "{text}");
+    assert!(!text.contains("pkg/use.py:1:from pkg.core"), "{text}");
+    assert!(
+        text.contains("→ core.resolve_owner") || text.contains("→ resolve_owner"),
+        "{text}"
+    );
+}
