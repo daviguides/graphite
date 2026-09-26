@@ -4,13 +4,16 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::process::Command;
 
-use graphite_model::{Symbol, SymbolId};
+use graphite_model::{EdgeKind, Symbol, SymbolId};
 use serde::{Deserialize, Serialize};
 
-use crate::blast::{build_dependents, Dependents, SymbolCache};
+use crate::blast::{build_dependents, trim_call_sites, Dependents, SymbolCache};
 use crate::compress::{finish, Tiered};
 use crate::envelope::{
     role, Causes, Disclosure, Envelope, Risk, RiskLevel, Role, SymbolView, Tier,
+};
+use crate::sites::{
+    direct_sites, indirect, overrides, CallerSites, DirectSummary, Indirect, OverrideRef, Tests,
 };
 use crate::source::{SourceBlock, SourceReader, SourceState, SOURCE_CAP};
 use crate::traverse::name_gaps;
@@ -89,6 +92,11 @@ pub struct ChangedSymbol {
     pub reference_gaps: u32,
     pub risk: RiskLevel,
     pub source: Option<SourceBlock>,
+    /// Counts over every direct reference to this symbol.
+    pub direct: DirectSummary,
+    /// Direct callers with the exact lines where they reference this symbol.
+    pub call_sites: Vec<CallerSites>,
+    pub overrides: Vec<OverrideRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -109,14 +117,23 @@ pub struct DiffImpact {
     pub covering_tests: Vec<SymbolView>,
     /// How `covering_tests` was derived.
     pub tests_basis: &'static str,
+    /// Dependents at depth ≥ 2 grouped by directory; survives every tier.
+    pub indirect: Indirect,
+    /// Runnable tests reaching the changed symbols, with pytest node ids.
+    pub tests: Tests,
 }
 
 pub const MAX_COVERING_TESTS: usize = 50;
+/// Callers listed with call-site lines per changed symbol.
+pub const MAX_CHANGED_CALLERS: usize = 30;
 
 impl Tiered for DiffImpact {
     fn degrade(&mut self, tier: Tier) -> Vec<Disclosure> {
         let mut out = self.dependents.degrade(tier);
         if tier == Tier::ByDirectory {
+            for c in &mut self.changed {
+                out.extend(trim_call_sites(&mut c.call_sites, "changed_call_sites"));
+            }
             let n = self
                 .changed
                 .iter_mut()
@@ -232,7 +249,7 @@ pub fn diff_impact(
         let callers = ctx.adj.callers_of(sym.id);
         let (mut prod, mut test) = (0, 0);
         for (src, kind, _) in &callers {
-            if !opts.kinds.contains(kind) {
+            if !opts.kinds.contains(kind) || *kind == EdgeKind::Imports {
                 continue;
             }
             match cache.get(ctx, *src)?.map(role) {
@@ -250,6 +267,15 @@ pub fn diff_impact(
             }
             Some(block)
         };
+        let (call_sites, direct, cut) = direct_sites(
+            ctx,
+            &[sym.id],
+            &opts.kinds,
+            &mut cache,
+            opts.max_callers.min(MAX_CHANGED_CALLERS),
+        )?;
+        disclosures.extend(cut);
+        let overrides = overrides(ctx, sym, &mut cache)?;
         changed_views.push(ChangedSymbol {
             symbol: SymbolView::from(sym),
             hunks: ranges.clone(),
@@ -258,6 +284,9 @@ pub fn diff_impact(
             reference_gaps: amb + unres,
             risk: Risk::assess(prod, prod, test, amb + unres).level,
             source,
+            direct,
+            call_sites,
+            overrides,
         });
     }
     changed_views.sort_by(|a, b| {
@@ -293,8 +322,14 @@ pub fn diff_impact(
         tests.truncate(MAX_COVERING_TESTS);
     }
 
-    let s = &built.dependents.summary;
-    let risk = Risk::assess(built.prod_direct, s.prod, s.test, gaps_total);
+    let indirect = indirect(&built.dependents.items);
+    let test_refs = crate::sites::tests(ctx, &roots, opts.depth.max(3), &mut cache)?;
+    let risk = Risk::assess(
+        built.prod_direct,
+        built.prod_total,
+        built.test_total,
+        gaps_total,
+    );
     let result = DiffImpact {
         changed: changed_views,
         unmapped,
@@ -302,6 +337,8 @@ pub fn diff_impact(
         dependents: built.dependents,
         covering_tests: tests.into_iter().map(|(_, v)| v).collect(),
         tests_basis: "test symbols among changed symbols and their dependents (no dedicated tests relation yet)",
+        indirect,
+        tests: test_refs,
     };
     Ok(finish(
         ctx,

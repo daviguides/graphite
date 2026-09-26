@@ -65,10 +65,10 @@
     "source": null,
     "risk": {
       "level": "low",
-      "prod_direct": 2,
-      "prod_total": 4,
-      "test_total": 2,
-      "reason": "2 direct / 4 total production dependents"
+      "prod_direct": 1,
+      "prod_total": 2,
+      "test_total": 1,
+      "reason": "1 direct / 2 total production dependents"
     },
     "dependents": {
       "summary": {
@@ -86,6 +86,79 @@
       "items": [],
       "by_file": [],
       "by_directory": []
-    }
+    },
+    "direct": {
+      "callers": 1,
+      "sites": 1,
+      "files": 1,
+      "prod": 1,
+      "test": 0,
+      "imported_by_files": 1
+    },
+    "call_sites": [
+      {
+        "caller": {
+          "id": "9f04bd83ed7c05d98f035140c3fe6ca5",
+          "qualified": "app.service.build",
+          "kind": "function",
+          "path": "app/service.py",
+          "start_line": 4,
+          "end_line": 6,
+          "signature": "def build(path)",
+          "role": "prod"
+        },
+        "lines": [
+          5
+        ],
+        "edge": "calls",
+        "confidence": "extracted",
+        "called_by": [
+          "handler",
+          "test_build"
+        ],
+        "called_by_total": 2
+      }
+    ],
+    "indirect": {
+      "total": 2,
+      "prod": 1,
+      "test": 1,
+      "modules": 2,
+      "groups": [
+        {
+          "module": "app",
+          "count": 1,
+          "prod": 1,
+          "test": 0,
+          "min_depth": 2,
+          "top": [
+            "handler"
+          ]
+        },
+        {
+          "module": "tests",
+          "count": 1,
+          "prod": 0,
+          "test": 1,
+          "min_depth": 2,
+          "top": [
+            "test_build"
+          ]
+        }
+      ]
+    },
+    "tests": {
+      "total": 1,
+      "depth_limit": 3,
+      "items": [
+        {
+          "node_id": "tests/test_service.py::test_build",
+          "path": "tests/test_service.py",
+          "line": 4,
+          "depth": 2
+        }
+      ]
+    },
+    "overrides": []
   }
 }

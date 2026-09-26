@@ -8,6 +8,10 @@ use serde::Serialize;
 use crate::compress::{finish, Tiered};
 use crate::envelope::{Causes, ConfidenceView, Disclosure, Envelope, Risk, Role, SymbolView, Tier};
 use crate::lookup::{resolve_ref, Lookup};
+use crate::sites::{
+    direct_sites, fill_lines, indirect, overrides, tests, CallerSites, DirectSummary, Indirect,
+    OverrideRef, Tests,
+};
 use crate::source::{SourceBlock, SourceReader, SourceState, SOURCE_CAP};
 use crate::traverse::{dependents, name_gaps};
 use crate::{Options, QueryContext, Result};
@@ -24,7 +28,11 @@ pub struct DependentItem {
     /// Weakest edge on the path back to the root.
     pub confidence: ConfidenceView,
     pub fan_in: u32,
+    /// Lines in this dependent where it references `via`.
+    pub lines: Vec<u32>,
     pub source: Option<SourceBlock>,
+    #[serde(skip)]
+    pub(crate) via_id: SymbolId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -79,13 +87,24 @@ pub struct BlastRadius {
     pub source: Option<SourceBlock>,
     pub risk: Option<Risk>,
     pub dependents: Dependents,
+    /// Counts over every direct reference to the target.
+    pub direct: DirectSummary,
+    /// Direct callers with the exact lines where they reference the target.
+    pub call_sites: Vec<CallerSites>,
+    /// Dependents at depth ≥ 2 grouped by directory; survives every tier.
+    pub indirect: Indirect,
+    pub tests: Tests,
+    pub overrides: Vec<OverrideRef>,
 }
 
 const FILE_GROUP_SYMBOLS: usize = 10;
 
 pub(crate) struct Built {
     pub dependents: Dependents,
+    /// Risk inputs count symbols only: a module reached through an import is not a caller.
     pub prod_direct: u32,
+    pub prod_total: u32,
+    pub test_total: u32,
     pub disclosures: Vec<Disclosure>,
     pub source_changed: u32,
 }
@@ -156,9 +175,12 @@ pub(crate) fn build_dependents(
             edge_confidence: r.edge_conf.into(),
             confidence: r.path_conf.into(),
             fan_in: ctx.adj.callers_of(r.id).len() as u32,
+            lines: Vec::new(),
             source: None,
+            via_id: r.via,
         });
     }
+    fill_lines(ctx, &mut items);
     items.sort_by(|a, b| {
         (
             a.depth,
@@ -231,16 +253,23 @@ pub(crate) fn build_dependents(
         by_depth: vec![0; opts.depth as usize],
         ..Default::default()
     };
-    let mut prod_direct = 0;
+    let (mut prod_direct, mut prod_total, mut test_total) = (0, 0, 0);
     for it in &items {
         match it.symbol.role {
             Role::Prod => summary.prod += 1,
             Role::Test => summary.test += 1,
         }
+        summary.by_depth[(it.depth - 1) as usize] += 1;
+        if it.symbol.kind == "module" {
+            continue;
+        }
+        match it.symbol.role {
+            Role::Prod => prod_total += 1,
+            Role::Test => test_total += 1,
+        }
         if it.depth == 1 && it.symbol.role == Role::Prod {
             prod_direct += 1;
         }
-        summary.by_depth[(it.depth - 1) as usize] += 1;
     }
     let (by_file, by_dir) = group(&items);
     Ok(Built {
@@ -253,6 +282,8 @@ pub(crate) fn build_dependents(
             pending_by_directory: by_dir,
         },
         prod_direct,
+        prod_total,
+        test_total,
         disclosures,
         source_changed,
     })
@@ -389,9 +420,30 @@ impl Dependents {
     }
 }
 
+/// Call sites kept once the answer is degraded to directory groups.
+pub(crate) const COARSE_CALL_SITES: usize = 20;
+
+/// Keep the top call sites when degrading to directories; returns the disclosure if any were cut.
+pub(crate) fn trim_call_sites(sites: &mut Vec<CallerSites>, what: &str) -> Option<Disclosure> {
+    if sites.len() <= COARSE_CALL_SITES {
+        return None;
+    }
+    let cut = sites.len() - COARSE_CALL_SITES;
+    sites.truncate(COARSE_CALL_SITES);
+    Some(Disclosure::new(
+        what,
+        COARSE_CALL_SITES,
+        cut,
+        format!("tier by_directory: call sites kept for the top {COARSE_CALL_SITES} callers"),
+    ))
+}
+
 impl Tiered for BlastRadius {
     fn degrade(&mut self, tier: Tier) -> Vec<Disclosure> {
         let mut out = self.dependents.degrade(tier);
+        if tier == Tier::ByDirectory {
+            out.extend(trim_call_sites(&mut self.call_sites, "call_sites"));
+        }
         if tier == Tier::ByDirectory && self.source.take().is_some() {
             out.push(Disclosure::new(
                 "target_source",
@@ -430,6 +482,11 @@ pub fn blast_radius(
             source: None,
             risk: None,
             dependents: Dependents::default(),
+            direct: DirectSummary::default(),
+            call_sites: Vec::new(),
+            indirect: Indirect::default(),
+            tests: Tests::default(),
+            overrides: Vec::new(),
         };
         return Ok(finish(
             ctx,
@@ -450,16 +507,31 @@ pub fn blast_radius(
     let built = build_dependents(ctx, &[sym.id], opts, &mut reader, &mut cache)?;
     causes.source_changed += built.source_changed;
     disclosures.extend(built.disclosures);
+    let (call_sites, direct, cut) =
+        direct_sites(ctx, &[sym.id], &opts.kinds, &mut cache, opts.max_callers)?;
+    disclosures.extend(cut);
+    let indirect = indirect(&built.dependents.items);
+    let tests = tests(ctx, &[sym.id], opts.depth.max(3), &mut cache)?;
+    let overrides = overrides(ctx, &sym, &mut cache)?;
     let (ambiguous, unresolved) = name_gaps(ctx.store, &sym, &opts.kinds)?;
     causes.ambiguous_refs = ambiguous;
     causes.unresolved_refs = unresolved;
-    let s = &built.dependents.summary;
-    let risk = Risk::assess(built.prod_direct, s.prod, s.test, ambiguous + unresolved);
+    let risk = Risk::assess(
+        built.prod_direct,
+        built.prod_total,
+        built.test_total,
+        ambiguous + unresolved,
+    );
     let result = BlastRadius {
         target,
         source: Some(source),
         risk: Some(risk),
         dependents: built.dependents,
+        direct,
+        call_sites,
+        indirect,
+        tests,
+        overrides,
     };
     Ok(finish(
         ctx,

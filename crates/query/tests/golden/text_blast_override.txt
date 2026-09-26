@@ -1,0 +1,6 @@
+def handle(self, req)  shop/base.py:2  [method]
+COMPLETE · no direct callers · risk LOW (0 prod direct; 0 prod / 0 test total)
+tests: none reach Handler.handle within depth 3 ⚠
+overridden in subclass: JsonHandler.handle  shop/handlers.py:6  — keep signatures compatible
+overridden in subclass: XmlHandler.handle  shop/handlers.py:11  — keep signatures compatible
+more: --depth N · --all · --json

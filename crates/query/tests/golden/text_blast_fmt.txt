@@ -1,0 +1,12 @@
+def fmt(x)  shop/util.py:1  [function]
+COMPLETE · 5 call sites in 3 callers across 2 files (imported in 1 file) · risk MEDIUM (3 prod direct; 5 prod / 1 test total)
+direct:
+  shop/handlers.py:7  in JsonHandler.handle
+  shop/handlers.py:12  in XmlHandler.handle
+  shop/util.py:6,7,8  in render  ← called by serve, serve_twice, test_render
+indirect (depth 2–3): 3 symbols (2 prod, 1 test) in 2 dirs
+  shop/  2  e.g. serve, serve_twice
+  tests/  1  e.g. test_render
+tests reaching fmt: 1 (nearest first)
+  tests/test_util.py::test_render  (depth 2)
+more: --depth N · --all · --json

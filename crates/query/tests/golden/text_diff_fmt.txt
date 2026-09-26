@@ -1,0 +1,13 @@
+diff: 1 changed symbol in 1 file · 1 hunk not in any indexed symbol
+COMPLETE · risk MEDIUM (3 prod direct; 5 prod / 1 test total)
+changed shop/util.py:2  fmt  [function] · 5 call sites in 3 callers across 2 files (imported in 1 file) · risk MEDIUM
+    shop/handlers.py:7  in JsonHandler.handle
+    shop/handlers.py:12  in XmlHandler.handle
+    shop/util.py:6,7,8  in render  ← called by serve, serve_twice, test_render
+indirect (depth 2–3): 3 symbols (2 prod, 1 test) in 2 dirs
+  shop/  2  e.g. serve, serve_twice
+  tests/  1  e.g. test_render
+tests to run: 1 (nearest first)
+  tests/test_util.py::test_render
+unmapped README.md:1+1  (file not indexed)
+more: --depth N · --all · --json

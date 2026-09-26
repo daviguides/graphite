@@ -50,7 +50,37 @@
           "start_line": 5,
           "text": "5| def parse(text):\n6|     return text.split()\n",
           "truncated": false
-        }
+        },
+        "direct": {
+          "callers": 1,
+          "sites": 1,
+          "files": 1,
+          "prod": 1,
+          "test": 0,
+          "imported_by_files": 0
+        },
+        "call_sites": [
+          {
+            "caller": {
+              "id": "a718205900f57530aa5f1e587d928c79",
+              "qualified": "app.core.Config.__init__",
+              "kind": "method",
+              "path": "app/core.py",
+              "start_line": 10,
+              "end_line": 11,
+              "signature": "def __init__(self, path)",
+              "role": "prod"
+            },
+            "lines": [
+              11
+            ],
+            "edge": "calls",
+            "confidence": "extracted",
+            "called_by": [],
+            "called_by_total": 0
+          }
+        ],
+        "overrides": []
       },
       {
         "symbol": {
@@ -78,7 +108,17 @@
           "start_line": 13,
           "text": "13| def get(self, key):\n14|         return self.data\n",
           "truncated": false
-        }
+        },
+        "direct": {
+          "callers": 0,
+          "sites": 0,
+          "files": 0,
+          "prod": 0,
+          "test": 0,
+          "imported_by_files": 0
+        },
+        "call_sites": [],
+        "overrides": []
       }
     ],
     "unmapped": [
@@ -127,6 +167,9 @@
           "edge_confidence": "extracted",
           "confidence": "extracted",
           "fan_in": 1,
+          "lines": [
+            11
+          ],
           "source": {
             "state": "fresh",
             "start_line": 10,
@@ -139,6 +182,18 @@
       "by_directory": []
     },
     "covering_tests": [],
-    "tests_basis": "test symbols among changed symbols and their dependents (no dedicated tests relation yet)"
+    "tests_basis": "test symbols among changed symbols and their dependents (no dedicated tests relation yet)",
+    "indirect": {
+      "total": 0,
+      "prod": 0,
+      "test": 0,
+      "modules": 0,
+      "groups": []
+    },
+    "tests": {
+      "total": 0,
+      "depth_limit": 3,
+      "items": []
+    }
   }
 }

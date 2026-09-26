@@ -1,0 +1,26 @@
+def load_yaml(path)  core/io.py:1  [function]
+COMPLETE · 80 call sites in 80 callers across 40 files (imported in 40 files) · risk HIGH (80 prod direct; 81 prod / 5 test total)
+direct:
+  svc/m00.py:5  in read_0  ← called by use_0, test_read_0
+  svc/m00.py:10  in use_0  ← called by main
+  svc/m01.py:5  in read_1  ← called by use_1, test_read_1
+  svc/m01.py:10  in use_1  ← called by main
+  svc/m02.py:5  in read_2  ← called by use_2, test_read_2
+  svc/m02.py:10  in use_2  ← called by main
+  svc/m03.py:5  in read_3  ← called by use_3, test_read_3
+  svc/m03.py:10  in use_3  ← called by main
+  svc/m04.py:5  in read_4  ← called by use_4, test_read_4
+  svc/m04.py:10  in use_4  ← called by main
+  svc/m05.py:5  in read_5  ← called by use_5
+  svc/m05.py:10  in use_5  ← called by main
+  … 68 more callers — `--all` lists every call site
+indirect (depth 2–3): 6 symbols (1 prod, 5 test) in 2 dirs
+  app/  1  e.g. main
+  tests/  5  e.g. test_read_0, test_read_1, test_read_2
+tests reaching load_yaml: 5 (nearest first)
+  tests/test_m00.py::test_read_0  (depth 2)
+  tests/test_m01.py::test_read_1  (depth 2)
+  tests/test_m02.py::test_read_2  (depth 2)
+  tests/test_m03.py::test_read_3  (depth 2)
+  tests/test_m04.py::test_read_4  (depth 2)
+more: --depth N · --all · --json

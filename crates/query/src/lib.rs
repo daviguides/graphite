@@ -5,7 +5,9 @@ mod compress;
 mod diff;
 mod envelope;
 mod lookup;
+mod sites;
 mod source;
+mod text;
 mod traverse;
 
 use std::path::Path;
@@ -26,7 +28,12 @@ pub use envelope::{
     RiskLevel, Role, SymbolView, Tier, SCHEMA_VERSION,
 };
 pub use lookup::{lookup, Lookup, LookupStatus, MAX_CANDIDATES};
+pub use sites::{
+    local_name, node_id, CallerSites, DirectSummary, Indirect, ModuleImpact, OverrideRef, TestRef,
+    Tests, MAX_CALLERS,
+};
 pub use source::{SourceBlock, SourceReader, SourceState, SOURCE_CAP};
+pub use text::{render_text, TextOptions};
 
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
@@ -59,6 +66,8 @@ pub struct Options {
     pub compact: bool,
     /// How many top-ranked dependents get inline source at tier full.
     pub source_items: usize,
+    /// Direct callers listed with their call-site lines; counts always cover all.
+    pub max_callers: usize,
     pub kinds: Vec<EdgeKind>,
 }
 
@@ -69,6 +78,7 @@ impl Default for Options {
             token_budget: 8_000,
             compact: false,
             source_items: 12,
+            max_callers: MAX_CALLERS,
             kinds: DEPENDENCY_KINDS.to_vec(),
         }
     }

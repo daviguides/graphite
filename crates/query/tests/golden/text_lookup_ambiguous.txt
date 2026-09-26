@@ -1,0 +1,4 @@
+AMBIGUOUS: 3 symbols match 'handle' — pass a qualified name:
+  shop.base.Handler.handle  shop/base.py:2  [method]
+  shop.handlers.JsonHandler.handle  shop/handlers.py:6  [method]
+  shop.handlers.XmlHandler.handle  shop/handlers.py:11  [method]

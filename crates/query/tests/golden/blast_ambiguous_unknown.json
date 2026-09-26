@@ -60,6 +60,28 @@
       "items": [],
       "by_file": [],
       "by_directory": []
-    }
+    },
+    "direct": {
+      "callers": 0,
+      "sites": 0,
+      "files": 0,
+      "prod": 0,
+      "test": 0,
+      "imported_by_files": 0
+    },
+    "call_sites": [],
+    "indirect": {
+      "total": 0,
+      "prod": 0,
+      "test": 0,
+      "modules": 0,
+      "groups": []
+    },
+    "tests": {
+      "total": 0,
+      "depth_limit": 3,
+      "items": []
+    },
+    "overrides": []
   }
 }

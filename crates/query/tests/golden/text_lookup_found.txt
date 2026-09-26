@@ -1,0 +1,2 @@
+def render(x)  shop/util.py:5  [function]
+qualified: shop.util.render
