@@ -347,6 +347,52 @@ def test_hooks_summary_real_schema(tmp_path):
     assert h["passthrough_reasons"]["daemon timeout"] == 1
 
 
+LINE_B3 = len("  a/b.py:3  x()".encode()) + 1
+
+
+def test_cross_call_overlap_from_text_within_window():
+    from stream import answer_overlap
+    a = {"ts": 0, "event": "exec", "original_command": "grep -rn x a", "answer": "COMPLETE\n  a/b.py:3  x()\n  a/c.py:9  y()"}
+    b = {"ts": 4_000, "event": "exec", "original_command": "grep -rn z a", "answer": "COMPLETE\n  a/b.py:3  x()\n  a/d.py:1  z()"}
+    late = {"ts": 30_000, "event": "exec", "original_command": "grep -rn w a", "answer": "  a/b.py:3  x()"}
+    o = answer_overlap([a, b, late])
+    assert o["cross_overlap_answers"] == 1 and o["cross_overlap_keys"] == 1 and o["cross_overlap_bytes"] == LINE_B3
+    assert o["intra_overlap_keys"] == 0 and o["answer_keys"] == 5
+
+
+def test_intra_command_overlap_across_segments():
+    from stream import answer_overlap
+    cmd = "grep -rn x a; grep -rn x b && grep -rn xy a"
+    s1 = {"ts": 0, "event": "exec", "original_command": cmd, "segment": "grep -rn x a", "answer": "  a/b.py:3  x()\n  a/c.py:9  y()"}
+    s2 = {"ts": 5, "event": "exec", "original_command": cmd, "segment": "grep -rn x b", "answer": "  a/e.py:2  x()"}
+    s3 = {"ts": 9, "event": "exec", "original_command": cmd, "segment": "grep -rn xy a", "answer": "  a/b.py:3  x()"}
+    other = {"ts": 2_000, "event": "exec", "original_command": "grep -rn y a", "answer": "  a/c.py:9  y()"}
+    o = answer_overlap([s1, s2, s3, other])
+    assert o["intra_overlap_commands"] == 1 and o["intra_overlap_keys"] == 1 and o["intra_overlap_bytes"] == LINE_B3
+    assert o["cross_overlap_keys"] == 1  # a/c.py:9 repeated by a different command
+
+
+def test_overlap_uses_logged_keys_ids_and_sessions():
+    from stream import answer_overlap
+    a = {"ts": 0, "session_id": "s1", "call_id": "c1", "keys": ["a.py:1", "b.py:2"], "answer_bytes": 100}
+    other_session = {"ts": 1_000, "session_id": "s2", "call_id": "c2", "keys": ["a.py:1"], "answer_bytes": 40}
+    same = {"ts": 2_000, "session_id": "s1", "call_id": "c3", "keys": [{"path": "a.py", "line": 1}, "c.py:3"],
+            "answer_bytes": 60}
+    same_call = {"ts": 2_001, "session_id": "s1", "call_id": "c3", "keys": ["c.py:3"], "answer_bytes": 10}
+    o = answer_overlap([a, other_session, same, same_call])
+    assert o["cross_overlap_answers"] == 1 and o["cross_overlap_keys"] == 1 and o["cross_overlap_bytes"] == 30
+    assert o["intra_overlap_keys"] == 1 and o["intra_overlap_bytes"] == 10
+
+
+def test_hooks_summary_reports_overlap(tmp_path):
+    from stream import hooks_summary
+    p = tmp_path / "hooks.jsonl"
+    p.write_text("\n".join(json.dumps(e) for e in HOOK_EVENTS))
+    h = hooks_summary(p)
+    # the Read enrich (ts 7) repeats a/b.py:3 from the first grep answer (ts 2): a different call
+    assert h["cross_overlap_keys"] == 1 and h["cross_overlap_bytes"] > 0 and h["intra_overlap_keys"] == 0
+
+
 def test_hooks_summary_no_log(tmp_path):
     from stream import hooks_summary
     h = hooks_summary(tmp_path / "missing.jsonl")

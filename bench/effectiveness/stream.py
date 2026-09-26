@@ -173,6 +173,87 @@ def paths_in(obj) -> set[str]:
 
 GRAPH_ANSWER_ACTIONS = {"answer", "enrich"}   # exec: Graphite produced the output; post: context added
 UNANSWERED_EXEC = {"fallback", "plain"}        # exec: the original command ran
+OVERLAP_WINDOW_MS = 10_000
+KEY_LINE_RE = re.compile(r"(?<![\w/.-])(?:\./)?((?:[\w.-]+/)*[\w-][\w.-]*\.(?:py|rs|ts|tsx|js|jsx)):(\d+)")
+KEY_FIELDS = ("keys", "path_lines", "locations", "answer_keys")
+
+
+def _answer_keys(e: dict) -> dict[str, int]:
+    """`path:line` keys an answer showed, with the bytes each accounts for.
+    Uses the event's own key list when the hook logs one (strings "path:line"
+    or {path, line} objects); otherwise parses the answer text line by line."""
+    for field in KEY_FIELDS:
+        raw = e.get(field)
+        if isinstance(raw, list) and raw:
+            keys = []
+            for k in raw:
+                if isinstance(k, str):
+                    keys.append(k)
+                elif isinstance(k, dict) and k.get("path") is not None:
+                    keys.append(f"{k['path']}:{k.get('line', k.get('start_line', ''))}")
+            if keys:
+                per = (e.get("answer_bytes") or len((e.get("answer") or "").encode())) / len(keys)
+                return {k: int(per) for k in keys}
+    out: dict[str, int] = {}
+    for line in (e.get("answer") or "").splitlines():
+        m = KEY_LINE_RE.search(line)
+        if m:
+            key = f"{m.group(1)}:{m.group(2)}"
+            out[key] = out.get(key, 0) + len(line.encode()) + 1
+    return out
+
+
+def _command_id(e: dict, i: int) -> str:
+    """Which agent command an answer belongs to: the hook's call id when logged,
+    else the command as the agent wrote it (all exec segments of one compound
+    command share it); a post-hook enrich is its own call."""
+    for f in ("call_id", "id", "tool_use_id"):
+        if e.get(f):
+            return f"{f}:{e[f]}"
+    if e.get("event") == "exec" and e.get("original_command"):
+        return f"cmd:{e.get('session_id')}:{e['original_command']}"
+    return f"event:{i}"
+
+
+def answer_overlap(answers: list[dict], window_ms: int = OVERLAP_WINDOW_MS) -> dict:
+    """path:line keys a graph answer repeats — context the agent paid for twice.
+
+    intra: repeats across segments of ONE compound command (`grep a; grep b`,
+           `&&`, `||`: same call, several exec answers), no time window.
+    cross: repeats from answers of OTHER calls in the same session (session_id
+           when logged) within `window_ms`.
+    """
+    intra_keys = intra_bytes = intra_cmds = 0
+    cross_keys = cross_bytes = cross_answers = 0
+    seen: list[tuple[int, str | None, str, dict[str, int]]] = []
+    by_cmd: dict[str, set[str]] = {}
+    intra_hit: set[str] = set()
+    total_keys = 0
+    for i, e in enumerate(answers):
+        ts, sess, cid, keys = e.get("ts", 0), e.get("session_id"), _command_id(e, i), _answer_keys(e)
+        total_keys += len(keys)
+        same_cmd = by_cmd.setdefault(cid, set())
+        rep_intra = [k for k in keys if k in same_cmd]
+        if rep_intra:
+            intra_hit.add(cid)
+            intra_keys += len(rep_intra)
+            intra_bytes += sum(keys[k] for k in rep_intra)
+        others = [k for t, s, c, k in seen
+                  if c != cid and ts - t <= window_ms and (sess is None or s is None or s == sess)]
+        prior = set().union(*others) if others else set()
+        rep_cross = [k for k in keys if k in prior and k not in rep_intra]
+        if rep_cross:
+            cross_answers += 1
+            cross_keys += len(rep_cross)
+            cross_bytes += sum(keys[k] for k in rep_cross)
+        same_cmd |= set(keys)
+        seen.append((ts, sess, cid, keys))
+    intra_cmds = len(intra_hit)
+    return {"answer_keys": total_keys, "overlap_window_ms": window_ms,
+            "intra_overlap_commands": intra_cmds, "intra_overlap_keys": intra_keys,
+            "intra_overlap_bytes": intra_bytes,
+            "cross_overlap_answers": cross_answers, "cross_overlap_keys": cross_keys,
+            "cross_overlap_bytes": cross_bytes}
 
 
 def hooks_summary(path: Path) -> dict:
@@ -214,7 +295,10 @@ def hooks_summary(path: Path) -> dict:
               and bash_category(e.get("original_command", "")) in ("search", "list")):
             searches_after += 1
     answers = sum(1 for e in events if e.get("event") == "exec" and e.get("action") == "answer")
+    overlap = answer_overlap([e for e in events if e.get("action") in GRAPH_ANSWER_ACTIONS])
     return {
+        **overlap,
+        "sessions": sorted({e["session_id"] for e in events if e.get("session_id")}),
         "events": len(events),
         "actions": dict(actions),
         "rewrites": actions.get("pre:rewrite", 0),

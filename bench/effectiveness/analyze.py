@@ -164,6 +164,24 @@ def attribution_section(rows) -> list[str]:
            f"(median searches after: {fmt(med([r.get('search_after_complete_graphite') for r in complete]))})"]
     out += [f"- {k}: {counts[k]}" for k in ("graphite_not_used", "graphite_used_success",
                                              "failure_despite_graphite", "graphite_caused_failure")]
+    hooked = [r for r in b if r.get("hooks")]
+    if hooked:
+        H = lambda k: [r["hooks"].get(k) for r in hooked]
+        out += [
+            f"- hooks ({len(hooked)} runs): median graph answers {fmt(med(H('answers')))}, "
+            f"enrich {fmt(med(H('enrich')))}, fallbacks {fmt(med(H('fallbacks')))}, "
+            f"re-asks after complete {fmt(med(H('reasks_after_complete')))}",
+            f"- hook answer bytes: median {fmt(med(H('answer_bytes')))} vs raw grep "
+            f"{fmt(med(H('raw_bytes')))}; hook latency median {fmt(med(H('latency_ms')))} ms",
+            f"- overlap inside one compound command (segments of `a; b`, `&&`, `||`): median "
+            f"duplicated path:line keys {fmt(med(H('intra_overlap_keys')))}, bytes "
+            f"{fmt(med(H('intra_overlap_bytes')))} (total {sum(v or 0 for v in H('intra_overlap_bytes'))} B; "
+            f"{sum(v or 0 for v in H('intra_overlap_commands'))} commands)",
+            f"- overlap across calls (same session, ≤{hooked[0]['hooks'].get('overlap_window_ms', 10000) // 1000} s): "
+            f"median duplicated keys {fmt(med(H('cross_overlap_keys')))} of "
+            f"{fmt(med(H('answer_keys')))}, bytes {fmt(med(H('cross_overlap_bytes')))} "
+            f"(total {sum(v or 0 for v in H('cross_overlap_bytes'))} B over {len(hooked)} runs)",
+        ]
     caused = [r for r in b if r["attribution"]["class"] == "graphite_caused_failure"]
     if caused:
         out += ["", "Graphite correctness misses (candidate — review each):", "",
