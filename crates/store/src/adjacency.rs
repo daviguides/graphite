@@ -21,6 +21,16 @@ struct Link {
     dst: SymbolId,
     kind: EdgeKind,
     provenance: Provenance,
+    line: u32,
+}
+
+/// One resolved reference into a symbol, at the line where it is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Site {
+    pub src: SymbolId,
+    pub kind: EdgeKind,
+    pub provenance: Provenance,
+    pub line: u32,
 }
 
 /// Resolved edges only, keyed by raw edge so a write can replace exactly what it touched.
@@ -94,6 +104,7 @@ impl Adjacency {
                 dst,
                 kind: r.kind,
                 provenance,
+                line: r.site_line,
             };
             self.callers.entry(dst).or_default().insert(r.key.clone());
             self.callees.entry(r.src).or_default().insert(r.key.clone());
@@ -104,6 +115,25 @@ impl Adjacency {
     /// Direct dependents of `id` as (src, kind, provenance).
     pub fn callers_of(&self, id: SymbolId) -> Vec<(SymbolId, EdgeKind, Provenance)> {
         self.neighbors(&self.callers, id, |l| l.src)
+    }
+
+    /// Every resolved reference into `id`, one per raw edge, sorted by (src, kind, provenance, line).
+    pub fn sites_into(&self, id: SymbolId) -> Vec<Site> {
+        let mut out: Vec<Site> = self
+            .callers
+            .get(&id)
+            .into_iter()
+            .flatten()
+            .filter_map(|k| self.links.get(k))
+            .map(|l| Site {
+                src: l.src,
+                kind: l.kind,
+                provenance: l.provenance,
+                line: l.line,
+            })
+            .collect();
+        out.sort();
+        out
     }
 
     /// Direct dependencies of `id` as (dst, kind, provenance).

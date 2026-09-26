@@ -4,7 +4,7 @@ mod adjacency;
 mod cozo_store;
 mod rows;
 
-pub use adjacency::{Adjacency, EdgeSnapshot, DEPENDENCY_KINDS};
+pub use adjacency::{Adjacency, EdgeSnapshot, Site, DEPENDENCY_KINDS};
 pub use cozo_store::CozoStore;
 
 use std::collections::HashMap;

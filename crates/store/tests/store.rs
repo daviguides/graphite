@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 use graphite_model::{
     EdgeKind, FileFacts, Lang, Provenance, RawEdge, Symbol, SymbolId, SymbolKind, Target,
 };
-use graphite_store::{Adjacency, CozoStore, GraphStore, Outcome, Resolution, DEPENDENCY_KINDS};
+use graphite_store::{
+    Adjacency, CozoStore, GraphStore, Outcome, Resolution, Site, DEPENDENCY_KINDS,
+};
 
 struct Rng(u64);
 
@@ -172,6 +174,12 @@ fn random_file(file: u64, n_files: u64, rng: &mut Rng) -> FileFacts {
     }
 }
 
+/// Every symbol's incoming call sites, for comparing adjacencies line by line.
+fn call_sites(adj: &Adjacency) -> Vec<(SymbolId, Vec<Site>)> {
+    let dsts: BTreeSet<SymbolId> = adj.snapshot().iter().map(|e| e.2).collect();
+    dsts.into_iter().map(|d| (d, adj.sites_into(d))).collect()
+}
+
 fn sorted(mut v: Vec<Resolution>) -> Vec<Resolution> {
     v.sort();
     v
@@ -230,6 +238,11 @@ fn incremental_equals_full_rebuild() {
             "seed {seed}: incremental adjacency diverged"
         );
         assert_eq!(adj.snapshot(), Adjacency::rebuild(&inc).unwrap().snapshot());
+        assert_eq!(
+            call_sites(&adj),
+            call_sites(&rebuilt),
+            "seed {seed}: call-site lines diverged"
+        );
         assert_eq!(adj.rev(), inc.graph_rev());
     }
     for tier in [
