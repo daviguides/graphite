@@ -58,10 +58,14 @@ enum Cmd {
         #[command(subcommand)]
         cmd: DaemonCmd,
     },
-    /// Claude Code hooks that let Graphite answer the agent's grep/cat/find (install|uninstall|status).
+    /// Claude Code hooks that let Graphite answer the agent's grep/cat/find:
+    /// install | uninstall | status | log [-n N] | show N (what the agent received, re-rendered).
     Hooks {
-        #[arg(value_parser = ["install", "uninstall", "status"])]
+        #[arg(value_parser = ["install", "uninstall", "status", "log", "show"])]
         action: String,
+        /// Extra arguments (`show N`, `log -n N`).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 }
 
@@ -110,7 +114,7 @@ fn main() -> ExitCode {
 }
 
 /// `graphite hooks …` runs the sibling `graphite-hook` binary, which owns hook installation.
-fn hooks(action: &str, paths: &RepoPaths) -> Result<ExitCode, String> {
+fn hooks(action: &str, args: &[String], paths: &RepoPaths) -> Result<ExitCode, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let hook = exe.with_file_name("graphite-hook");
     if !hook.exists() {
@@ -121,6 +125,7 @@ fn hooks(action: &str, paths: &RepoPaths) -> Result<ExitCode, String> {
     }
     let status = std::process::Command::new(&hook)
         .arg(action)
+        .args(args)
         .arg("--repo")
         .arg(&paths.root)
         .status()
@@ -134,7 +139,7 @@ fn hooks(action: &str, paths: &RepoPaths) -> Result<ExitCode, String> {
 
 fn run(cli: &Cli, paths: &RepoPaths) -> Result<ExitCode, String> {
     let op = match &cli.cmd {
-        Cmd::Hooks { action } => return hooks(action, paths),
+        Cmd::Hooks { action, args } => return hooks(action, args, paths),
         Cmd::Daemon {
             cmd: DaemonCmd::Run,
         } => {
