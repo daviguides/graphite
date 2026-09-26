@@ -36,6 +36,25 @@ pub enum Op {
     Nudge {
         paths: Vec<String>,
     },
+    /// Text search (grep/rg/ack semantics) judged against the graph; answer is agent-facing text.
+    Search {
+        spec: crate::search::SearchSpec,
+    },
+    /// One-line graph header per indexed file (used when the agent reads files).
+    FileInfo {
+        paths: Vec<String>,
+        cwd: String,
+    },
+    /// One-line graph summary per directory (used when the agent lists directories).
+    DirInfo {
+        paths: Vec<String>,
+        cwd: String,
+    },
+    /// What the graph knows about a name (appended after native search tools).
+    NameInfo {
+        name: String,
+        cwd: String,
+    },
     Shutdown,
 }
 

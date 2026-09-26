@@ -3,9 +3,12 @@
 pub mod client;
 pub mod engine;
 pub mod freshness;
+pub mod info;
+pub mod judge;
 pub mod paths;
 pub mod protocol;
 pub mod queries;
+pub mod search;
 pub mod server;
 pub mod watcher;
 
@@ -13,6 +16,7 @@ pub use engine::Engine;
 pub use paths::RepoPaths;
 pub use protocol::{Op, Request, Response};
 pub use queries::{GraphQueries, Knobs, QueryHandler};
+pub use search::SearchSpec;
 
 /// Daemon error.
 #[derive(Debug, thiserror::Error)]

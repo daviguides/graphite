@@ -18,6 +18,25 @@ pub struct RepoPaths {
 /// Name of the per-repo state directory.
 pub const STATE_DIR: &str = ".graphite";
 
+/// Directory names skipped by both the indexer and embedded search, on top of `.gitignore`.
+pub const DEFAULT_EXCLUDES: &[&str] = &[
+    ".git",
+    STATE_DIR,
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "site-packages",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    ".ruff_cache",
+    ".DS_Store",
+];
+
 const STATE_GITIGNORE: &str = "*\n";
 
 /// Unix socket paths must fit `sockaddr_un.sun_path` (104 bytes on macOS, 108 on Linux).

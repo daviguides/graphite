@@ -20,6 +20,9 @@ use crate::{watcher, DaemonError, Result};
 /// How long a query waits for already-observed edits before answering `stale: true`.
 pub const FRESHNESS_WAIT: Duration = Duration::from_millis(200);
 
+/// Hook ops answer inside the agent's tool call: their text part is read from disk and always current.
+pub const HOOK_FRESHNESS_WAIT: Duration = Duration::from_millis(50);
+
 struct State {
     engine: Arc<Engine>,
     handler: Box<dyn QueryHandler>,
@@ -104,6 +107,9 @@ fn handle(state: &State, op: Op) -> Response {
     let engine = &state.engine;
     let fresh = match op {
         Op::Nudge { .. } | Op::Shutdown => true,
+        Op::Search { .. } | Op::FileInfo { .. } | Op::DirInfo { .. } | Op::NameInfo { .. } => {
+            engine.fresh.wait_current(HOOK_FRESHNESS_WAIT)
+        }
         _ => engine.fresh.wait_current(FRESHNESS_WAIT),
     };
     let stale = !fresh;
@@ -139,6 +145,17 @@ fn handle(state: &State, op: Op) -> Response {
                 .diff_impact(engine, stale, base.as_deref(), knobs)
         }
         Op::Nudge { paths } => nudge(engine, paths),
+        Op::Search { spec } => search(engine, spec, stale),
+        Op::FileInfo { paths, cwd } => {
+            Ok(json!({"text": crate::info::file_header(engine, std::path::Path::new(cwd), paths)}))
+        }
+        Op::DirInfo { paths, cwd } => {
+            Ok(json!({"text": crate::info::dir_summary(engine, std::path::Path::new(cwd), paths)}))
+        }
+        Op::NameInfo { name, cwd } => {
+            crate::info::name_summary(engine, std::path::Path::new(cwd), name)
+                .map(|text| json!({ "text": text }))
+        }
         Op::Shutdown => {
             state.shutdown.store(true, Ordering::SeqCst);
             Ok(json!({"stopping": true}))
@@ -162,6 +179,20 @@ fn status(state: &State) -> Value {
         "pending_events": e.fresh.pending(),
         "init": *state.init.lock().unwrap(),
     })
+}
+
+fn search(
+    engine: &Engine,
+    spec: &crate::search::SearchSpec,
+    stale: bool,
+) -> std::result::Result<Value, String> {
+    let t = Instant::now();
+    let res = crate::search::run(spec, &engine.paths.root)?;
+    let search_ms = t.elapsed().as_millis();
+    let (text, mut stats) = crate::judge::render(engine, spec, &res, stale)?;
+    stats["search_ms"] = json!(search_ms);
+    stats["total_ms"] = json!(t.elapsed().as_millis());
+    Ok(json!({"text": text, "stats": stats, "matches": res.hits.len()}))
 }
 
 fn nudge(engine: &Engine, paths: &[String]) -> std::result::Result<Value, String> {
