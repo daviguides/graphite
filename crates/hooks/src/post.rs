@@ -22,6 +22,13 @@ pub fn handle(input: &Value) -> Option<Value> {
     let t = std::time::Instant::now();
     let mut ev = Map::new();
     ev.insert("tool".into(), tool.into());
+    if let Some(sid) = input.get("session_id").and_then(Value::as_str) {
+        ev.insert("session_id".into(), sid.into());
+    }
+    ev.insert("call_id".into(), log::call_id().into());
+    if let Some(t) = input.get("tool_use_id").and_then(Value::as_str) {
+        ev.insert("turn_id".into(), t.into());
+    }
     let result = match tool {
         "Read" => {
             let f = ti.get("file_path")?.as_str()?;
@@ -86,6 +93,7 @@ pub fn handle(input: &Value) -> Option<Value> {
                 ev.insert("action".into(), "enrich".into());
                 ev.insert("answer".into(), text.into());
                 ev.insert("answer_bytes".into(), (text.len() as u64).into());
+                ev.insert("keys".into(), log::answer_keys(text).into());
                 Some(json!({
                     "hookSpecificOutput": {
                         "hookEventName": "PostToolUse",

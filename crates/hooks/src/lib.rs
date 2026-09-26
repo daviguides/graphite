@@ -12,6 +12,7 @@
 pub mod exec;
 pub mod install;
 pub mod log;
+pub mod logview;
 pub mod parse;
 pub mod post;
 pub mod pre;

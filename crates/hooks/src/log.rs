@@ -17,6 +17,18 @@
 //! - `residue` (search: match counts by class — definition, reference, import, graph_gap, code_untracked,
 //!   string_or_comment, other_language, not_indexed, docs_config, other_identifier)
 //! - `latency_ms`, `reason` (why passthrough/fallback), `error`
+//! - `session_id` (Claude Code session, from the hook payload; carried from `pre` to `exec` through
+//!   the rewritten command), `call_id` (unique per intercepted call; the `pre` event and its `exec`
+//!   events share it)
+//! - `turn_id` (the Claude Code `tool_use_id` of the Bash/Read/Grep call, when the payload has it)
+//! - `keys` (exec answer / post enrich: the `path:line` keys the answer showed — collapsed
+//!   call-site lines expand to one key per line; file reads use `path:0`), for measuring overlap
+//!   between answers in one session. Measurement only.
+//! - `format` (exec: "model" | "human" | "json" | "explain"), `record` (exec search: the canonical
+//!   answer record the views render from; omitted above 200 KB, `record_omitted` says so), `pipeline`
+//!   (exec search: notices about how head/tail/grep stages were honored)
+//!
+//! `graphite hooks log` lists recent events; `graphite hooks show N` re-renders one from `record`.
 
 use std::io::Write;
 use std::path::Path;
@@ -24,6 +36,42 @@ use std::path::Path;
 use serde_json::{Map, Value};
 
 const ANSWER_CAP: usize = 20_000;
+const RECORD_CAP: usize = 200_000;
+
+/// Unique id for one intercepted call.
+pub fn call_id() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    format!(
+        "{:x}-{:x}-{}",
+        now_ms(),
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// `path:line` keys an answer showed (grep-shaped lines and collapsed `path:1,2,3` lines).
+pub fn answer_keys(text: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    for l in text.lines() {
+        if l.starts_with('#') || l.is_empty() {
+            continue;
+        }
+        let head = l.split("    ").next().unwrap_or(l);
+        let mut parts = head.splitn(3, ':');
+        let (Some(path), Some(lines)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        for n in lines.split(',') {
+            if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) {
+                keys.push(format!("{path}:{n}"));
+            }
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
 
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -46,6 +94,13 @@ pub fn event(state_dir: &Path, event: &str, mut fields: Map<String, Value>) {
             a.truncate(cut);
         }
     }
+    if fields
+        .get("record")
+        .is_some_and(|r| r.to_string().len() > RECORD_CAP)
+    {
+        fields.remove("record");
+        fields.insert("record_omitted".into(), true.into());
+    }
     fields.insert("ts".into(), now_ms().into());
     fields.insert("event".into(), event.into());
     let Ok(mut line) = serde_json::to_string(&Value::Object(fields)) else {
@@ -59,4 +114,13 @@ pub fn event(state_dir: &Path, event: &str, mut fields: Map<String, Value>) {
     {
         let _ = f.write_all(line.as_bytes());
     }
+}
+
+/// Every event in the log, oldest first.
+pub fn read_all(state_dir: &Path) -> Vec<Value> {
+    std::fs::read_to_string(state_dir.join("hooks.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
 }

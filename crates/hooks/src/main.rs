@@ -4,11 +4,12 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use graphite_daemon::answer::OutFormat;
 use graphite_daemon::RepoPaths;
-use graphite_hooks::{exec, install, post, pre};
+use graphite_hooks::{exec, install, logview, post, pre};
 use serde_json::Value;
 
-const USAGE: &str = "usage: graphite-hook pre | post | run [--all] [--cwd DIR] -- COMMAND | install|uninstall|status [--repo DIR]";
+const USAGE: &str = "usage: graphite-hook pre | post | run [--all] [--human|--json|--explain] [--session ID] [--call ID] [--turn ID] [--cwd DIR] -- COMMAND | install|uninstall|status|log [-n N]|show N [--repo DIR]";
 
 fn stdin_json() -> Option<Value> {
     let mut s = String::new();
@@ -47,7 +48,29 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             };
             let opts = &args[1..sep];
-            let all = opts.iter().any(|a| a == "--all");
+            let val = |k: &str| {
+                opts.iter()
+                    .position(|a| a == k)
+                    .and_then(|i| opts.get(i + 1))
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let has = |k: &str| opts.iter().any(|a| a == k);
+            let run_opts = exec::RunOpts {
+                all: has("--all"),
+                format: if has("--human") {
+                    OutFormat::Human
+                } else if has("--json") {
+                    OutFormat::Json
+                } else if has("--explain") {
+                    OutFormat::Explain
+                } else {
+                    OutFormat::Model
+                },
+                session: val("--session"),
+                call: val("--call"),
+                turn: val("--turn"),
+            };
             let cwd = opts
                 .iter()
                 .position(|a| a == "--cwd")
@@ -55,8 +78,36 @@ fn main() -> ExitCode {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
             let command = args[sep + 1..].join(" ");
-            let code = exec::run(&command, &cwd, all);
+            let code = exec::run(&command, &cwd, &run_opts);
             ExitCode::from(code.clamp(0, 255) as u8)
+        }
+        Some("log") => {
+            let root = repo_arg(&args);
+            let n = args
+                .iter()
+                .position(|a| a == "-n")
+                .and_then(|i| args.get(i + 1))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20);
+            print!("{}", logview::list(&RepoPaths::new(&root).dir, n));
+            ExitCode::SUCCESS
+        }
+        Some("show") => {
+            let root = repo_arg(&args);
+            let Some(n) = args.get(1).and_then(|v| v.parse::<usize>().ok()) else {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            };
+            match logview::show(&RepoPaths::new(&root).dir, n) {
+                Some(t) => {
+                    print!("{t}");
+                    ExitCode::SUCCESS
+                }
+                None => {
+                    eprintln!("graphite-hook: no event #{n} in .graphite/hooks.jsonl");
+                    ExitCode::FAILURE
+                }
+            }
         }
         Some(cmd @ ("install" | "uninstall" | "status")) => {
             let root = repo_arg(&args);

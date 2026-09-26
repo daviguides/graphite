@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use graphite_daemon::answer::OutFormat;
 use graphite_daemon::{Op, RepoPaths};
 use serde_json::{Map, Value};
 
@@ -35,8 +36,18 @@ fn text_of(r: &graphite_daemon::Response) -> String {
         .to_string()
 }
 
+/// How `graphite-hook run` was invoked.
+#[derive(Debug, Clone, Default)]
+pub struct RunOpts {
+    pub all: bool,
+    pub format: OutFormat,
+    pub session: String,
+    pub call: String,
+    pub turn: String,
+}
+
 /// Run the whole command; returns the exit status of the last executed segment.
-pub fn run(command: &str, cwd: &Path, all: bool) -> i32 {
+pub fn run(command: &str, cwd: &Path, opts: &RunOpts) -> i32 {
     let paths = RepoPaths::discover(cwd);
     let segs = split(command);
     let actions = segs.as_ref().and_then(|s| plan(s, cwd, &paths.root));
@@ -58,6 +69,21 @@ pub fn run(command: &str, cwd: &Path, all: bool) -> i32 {
         let t = std::time::Instant::now();
         let mut ev = Map::new();
         ev.insert("tool".into(), "Bash".into());
+        if !opts.session.is_empty() {
+            ev.insert("session_id".into(), opts.session.clone().into());
+        }
+        if !opts.turn.is_empty() {
+            ev.insert("turn_id".into(), opts.turn.clone().into());
+        }
+        ev.insert(
+            "call_id".into(),
+            if opts.call.is_empty() {
+                crate::log::call_id()
+            } else {
+                opts.call.clone()
+            }
+            .into(),
+        );
         ev.insert("original_command".into(), command.into());
         ev.insert("segment".into(), seg.raw.clone().into());
         status = match action {
@@ -71,14 +97,41 @@ pub fn run(command: &str, cwd: &Path, all: bool) -> i32 {
                 sh(&seg.raw, &dir, None)
             }
             Action::Search { mut spec, filters } => {
-                spec.all = all;
+                spec.all = opts.all;
+                spec.format = opts.format;
                 ev.insert("kind".into(), "search".into());
-                match ask(&paths, Op::Search { spec }, ANSWER_TIMEOUT) {
+                ev.insert(
+                    "format".into(),
+                    serde_json::to_value(opts.format).unwrap_or(Value::Null),
+                );
+                match ask(&paths, Op::Search { spec: *spec }, ANSWER_TIMEOUT) {
                     Ok(r) => {
-                        let text = text_of(&r);
+                        let mut text = text_of(&r);
+                        if opts.format == OutFormat::Human {
+                            // Color only for a terminal; the daemon can't know.
+                            if let Some(rec) = r
+                                .data
+                                .get("record")
+                                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                            {
+                                use std::io::IsTerminal;
+                                let color = std::io::stdout().is_terminal()
+                                    && std::env::var_os("NO_COLOR").is_none();
+                                text = graphite_daemon::answer::render_human(&rec, color);
+                            }
+                        }
                         let stats = r.data.get("stats").cloned().unwrap_or(Value::Null);
                         let matches = r.data.get("matches").and_then(Value::as_u64).unwrap_or(0);
                         answer_fields(&mut ev, &text, &stats, matches);
+                        if let Some(rec) = r.data.get("record") {
+                            if let Some(n) = rec
+                                .get("notices")
+                                .filter(|n| n.as_array().is_some_and(|a| !a.is_empty()))
+                            {
+                                ev.insert("pipeline".into(), n.clone());
+                            }
+                            ev.insert("record".into(), rec.clone());
+                        }
                         if filters.is_empty() {
                             print!("{text}");
                             if matches > 0 {
@@ -141,6 +194,7 @@ fn answer_fields(ev: &mut Map<String, Value>, text: &str, stats: &Value, matches
     ev.insert("action".into(), "answer".into());
     ev.insert("answer".into(), text.into());
     ev.insert("answer_bytes".into(), (text.len() as u64).into());
+    ev.insert("keys".into(), crate::log::answer_keys(text).into());
     let verdict = stats
         .get("graph_verdict")
         .cloned()

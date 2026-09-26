@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use graphite_daemon::answer::{Budget, LineFilter};
 use graphite_daemon::SearchSpec;
 
 use crate::shell::{words, Segment};
@@ -9,9 +10,11 @@ use crate::shell::{words, Segment};
 /// What a segment becomes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
-    /// grep/rg/ag/ack answered from embedded search + graph judgment; `filters` are downstream stages fed our text.
+    /// grep/rg/ag/ack answered from embedded search + graph judgment. Budget, test and grep
+    /// filters from the pipeline are folded into `spec`; `filters` are the remaining stages,
+    /// run for real over our text.
     Search {
-        spec: SearchSpec,
+        spec: Box<SearchSpec>,
         filters: Vec<String>,
     },
     /// cat/head/tail/sed -n/nl of files: real output, graph header first.
@@ -29,6 +32,145 @@ const SAFE_FILTERS: &[&str] = &[
     "head", "tail", "grep", "egrep", "fgrep", "rg", "sort", "uniq", "wc", "cut", "tr", "jq", "cat",
     "column", "nl",
 ];
+
+/// Downstream stages that compute over raw matches; the whole segment then runs verbatim.
+const TRANSFORMS: &[&str] = &["wc", "sort", "uniq", "cut", "tr", "column", "nl", "jq"];
+
+/// What a pipeline stage after a search means for the answer.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stage {
+    /// `head -c N`, `head -n N`, `head -N`, `tail -n N`: an answer budget, not a cut.
+    Budget(Budget),
+    /// `grep -v test` and friends: drop test matches semantically.
+    DropTests(String),
+    /// A plain grep filter we apply to match lines ourselves (header/footer kept).
+    Line(LineFilter),
+    /// Computation over the raw output: run the original command.
+    Transform,
+    /// `cat`: a no-op.
+    Noop,
+    /// Anything else: run for real over our text.
+    Real,
+}
+
+const TESTISH: &[&str] = &[
+    "test", "tests", "/tests/", "tests/", "/test/", "test/", "_test", "test_", "/tests", "/test",
+];
+
+fn budget_of(w: &[String]) -> Option<Budget> {
+    let tool = w[0].as_str();
+    let source = w.join(" ");
+    let n = |s: &str| s.parse::<usize>().ok().filter(|v| *v > 0);
+    let mut out = Budget {
+        source,
+        ..Default::default()
+    };
+    match w.len() {
+        1 => out.lines = Some(10),
+        2 => {
+            let a = w[1].as_str();
+            if let Some(v) = a.strip_prefix("--bytes=") {
+                out.bytes = Some(n(v)?);
+            } else if let Some(v) = a.strip_prefix("--lines=") {
+                out.lines = Some(n(v)?);
+            } else if let Some(v) = a.strip_prefix("-c") {
+                out.bytes = Some(n(v)?);
+            } else if let Some(v) = a.strip_prefix("-n") {
+                out.lines = Some(n(v)?);
+            } else if let Some(v) = a.strip_prefix('-') {
+                out.lines = Some(n(v)?);
+            } else {
+                return None;
+            }
+        }
+        3 => match w[1].as_str() {
+            "-c" | "--bytes" => out.bytes = Some(n(&w[2])?),
+            "-n" | "--lines" => out.lines = Some(n(&w[2])?),
+            _ => return None,
+        },
+        _ => return None,
+    }
+    let _ = tool;
+    Some(out)
+}
+
+fn grep_filter(w: &[String], raw: &str) -> Option<LineFilter> {
+    let tool = w[0].as_str();
+    let mut f = LineFilter {
+        source: raw.trim().to_string(),
+        fixed: tool == "fgrep",
+        ..Default::default()
+    };
+    let mut extended = tool != "grep";
+    let mut pat: Option<String> = None;
+    let mut i = 1;
+    while i < w.len() {
+        let a = w[i].as_str();
+        i += 1;
+        if a == "-e" {
+            pat = Some(w.get(i)?.clone());
+            i += 1;
+            continue;
+        }
+        if let Some(flags) = a
+            .strip_prefix('-')
+            .filter(|f| !f.is_empty() && !a.starts_with("--"))
+        {
+            for c in flags.chars() {
+                match c {
+                    'v' => f.invert = true,
+                    'i' => f.ignore_case = true,
+                    'E' => extended = true,
+                    'F' => f.fixed = true,
+                    'w' => f.word = true,
+                    _ => return None,
+                }
+            }
+            continue;
+        }
+        if a.starts_with('-') || pat.is_some() {
+            return None; // long flags or file operands: not a plain stdin filter
+        }
+        pat = Some(a.to_string());
+    }
+    let p = pat?;
+    f.pattern = if tool == "grep" && !extended && !f.fixed {
+        bre_to_ere(&p)
+    } else {
+        p
+    };
+    Some(f)
+}
+
+/// Classify a pipeline stage that reads a search's output.
+pub fn stage(st: &str) -> Stage {
+    let Some(w) = words(st) else {
+        return Stage::Real;
+    };
+    let Some(cmd) = w.first().map(String::as_str) else {
+        return Stage::Real;
+    };
+    match cmd {
+        "head" | "tail" => budget_of(&w).map_or(Stage::Real, Stage::Budget),
+        "cat" if w.len() == 1 => Stage::Noop,
+        "grep" | "egrep" | "fgrep" | "rg" => match grep_filter(&w, st) {
+            Some(f)
+                if f.invert
+                    && TESTISH.iter().any(|t| {
+                        f.pattern
+                            .trim_matches(|c| c == '\'')
+                            .eq_ignore_ascii_case(t)
+                    }) =>
+            {
+                Stage::DropTests(st.trim().to_string())
+            }
+            Some(f) => Stage::Line(f),
+            None => Stage::Real,
+        },
+        c if TRANSFORMS.contains(&c) => Stage::Transform,
+        _ => Stage::Real,
+    }
+}
 
 /// Commands allowed to run untouched next to answered segments.
 const PLAIN_OK: &[&str] = &["echo", "printf", "pwd", "true", "wc"];
@@ -78,10 +220,25 @@ pub fn classify(seg: &Segment, cwd: &Path, root: &Path) -> Option<Action> {
     let filters_ok = rest.iter().all(|s| safe_filter(s));
     match cmd {
         "grep" | "egrep" | "fgrep" | "rg" | "ag" | "ack" => {
-            let spec = search_spec(&first, cwd, root, &seg.stages[0])?;
-            filters_ok.then(|| Action::Search {
-                spec,
-                filters: rest.to_vec(),
+            let mut spec = search_spec(&first, cwd, root, &seg.stages[0])?;
+            if !filters_ok {
+                return None;
+            }
+            let mut filters = Vec::new();
+            for st in rest {
+                match stage(st) {
+                    // A computation over the raw matches (count, sort, cut…): run it verbatim.
+                    Stage::Transform => return Some(Action::Plain),
+                    Stage::Noop => {}
+                    Stage::Budget(b) => spec.budget = Some(b),
+                    Stage::DropTests(src) if filters.is_empty() => spec.drop_tests = Some(src),
+                    Stage::Line(f) if filters.is_empty() => spec.line_filters.push(f),
+                    _ => filters.push(st.clone()),
+                }
+            }
+            Some(Action::Search {
+                spec: Box::new(spec),
+                filters,
             })
         }
         "cat" | "head" | "tail" | "nl" | "sed" => {
