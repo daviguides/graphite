@@ -306,6 +306,7 @@ Not scheduled because no measured effect on the targets justifies them now. Each
 | Item | Source | Why parked | Revisit when |
 |---|---|---|---|
 | Go grammar | RG, vision | No active Go repo (sensemesh was only a reference and is no longer active). | A Go repo becomes an active target for agent work. |
+| Per-session dedup of overlapping hook answers | user, 2026-09-27 | Agents send several greps in one turn (one turn, many tool calls); answers may repeat the same `path:line` lines. Only tokens are wasted, not turns, and it is unmeasured. Measurement added first: `session_id` + answer keys in `hooks.jsonl`, overlap metric in the effectiveness bench (arm C). | The bench shows material overlap (duplicated lines/bytes per session) between hook answers close in time. |
 | `rename` tool (graph + regex multi-file edit) | GN | Editing is the agent's job; v2 references give it the sites. | Agents repeatedly miss sites in multi-file renames despite references. |
 | Many listed tools (~90 / 17) | CT (ig), GN | Measured to cost turns and context every session. | Routing bench shows a specific extra tool is picked correctly and saves turns. |
 | Two-step `symbol_id` lookups | CT (ig) | Costs a turn; v1 disambiguates in the envelope. | Disambiguation in the envelope measurably fails. |
