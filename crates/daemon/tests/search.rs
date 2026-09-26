@@ -78,7 +78,7 @@ fn identifier_search_accounts_for_every_match() {
     assert_eq!(total, res.hits.len() as u64);
     assert!(text.contains("pkg/alias.py:4:    return ro()"), "{text}");
     assert!(
-        text.contains("not searched (default excludes): .venv/"),
+        text.contains("1 match in hidden/excluded dirs omitted: .venv/"),
         "{text}"
     );
     assert!(text.contains("name guess"), "{text}");

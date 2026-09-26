@@ -50,6 +50,9 @@ pub struct SearchSpec {
     /// Disable .gitignore and default excludes (rg -u / --no-ignore).
     #[serde(default)]
     pub no_ignore: bool,
+    /// Descend into hidden directories (rg --hidden / -.).
+    #[serde(default)]
+    pub hidden: bool,
     /// Print everything: no per-section caps.
     #[serde(default)]
     pub all: bool,
@@ -117,10 +120,20 @@ pub fn display_path(abs: &Path, cwd: &Path) -> String {
     }
 }
 
-/// True if any component of `p` is a default-excluded directory name.
+/// True if any component of `p` is a default-excluded or hidden directory name.
 pub fn under_excluded(p: &Path) -> bool {
-    p.components()
-        .any(|c| DEFAULT_EXCLUDES.contains(&c.as_os_str().to_string_lossy().as_ref()))
+    p.components().any(|c| match c {
+        std::path::Component::Normal(n) => {
+            let n = n.to_string_lossy();
+            DEFAULT_EXCLUDES.contains(&n.as_ref()) || n.starts_with('.')
+        }
+        _ => false,
+    })
+}
+
+/// Directory skipped by a filtered walk: default excludes, and hidden dirs unless `hidden`.
+fn excluded_dir_name(name: &str, hidden: bool) -> bool {
+    DEFAULT_EXCLUDES.contains(&name) || (!hidden && name.starts_with('.'))
 }
 
 /// Matching lines of one file, in line order.
@@ -172,10 +185,11 @@ fn walker(
         }
     }
     if filtered {
+        let hidden = spec.hidden;
         b.filter_entry(move |e| {
             let is_dir = e.file_type().is_some_and(|t| t.is_dir());
             let name = e.file_name().to_string_lossy();
-            if is_dir && e.depth() > 0 && DEFAULT_EXCLUDES.contains(&name.as_ref()) {
+            if is_dir && e.depth() > 0 && excluded_dir_name(&name, hidden) {
                 // VCS and Graphite state never hold matches worth disclosing.
                 if name != ".git" && name != crate::paths::STATE_DIR {
                     skipped.lock().unwrap().push(e.path().to_path_buf());
@@ -296,6 +310,46 @@ mod tests {
         let mut s = spec(&root, "needle");
         s.paths = vec![root.join(".venv").to_string_lossy().into()];
         assert_eq!(run(&s, &root).unwrap().hits.len(), 1);
+    }
+
+    #[test]
+    fn skips_hidden_dirs_unless_targeted_or_hidden_flag() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join(".claude/worktrees/a/pkg")).unwrap();
+        std::fs::create_dir_all(root.join("pkg")).unwrap();
+        std::fs::write(
+            root.join(".claude/worktrees/a/pkg/a.py"),
+            "needle()\nneedle()\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("pkg/a.py"), "needle()\n").unwrap();
+        std::fs::write(root.join(".env.py"), "needle\n").unwrap();
+
+        let out = run(&spec(&root, "needle"), &root).unwrap();
+        let shown: Vec<&str> = out.hits.iter().map(|h| h.display.as_str()).collect();
+        assert_eq!(
+            shown,
+            vec![".env.py", "pkg/a.py"],
+            "hidden files stay; hidden dirs go"
+        );
+        assert_eq!(out.excluded_matches, 2);
+        assert!(out.excluded_scan_complete);
+        assert_eq!(out.excluded_dirs, vec![root.join(".claude")]);
+
+        let mut s = spec(&root, "needle");
+        s.paths = vec![root.join(".claude/worktrees").to_string_lossy().into()];
+        assert_eq!(
+            run(&s, &root).unwrap().hits.len(),
+            2,
+            "explicit hidden path"
+        );
+
+        let mut s = spec(&root, "needle");
+        s.hidden = true;
+        let out = run(&s, &root).unwrap();
+        assert_eq!(out.hits.len(), 4, "--hidden searches hidden dirs");
+        assert_eq!(out.excluded_matches, 0);
     }
 
     #[test]

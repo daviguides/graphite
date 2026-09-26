@@ -438,13 +438,18 @@ fn excluded_note(out: &mut Out, res: &SearchOutcome, cwd: &Path) {
     dirs.sort();
     let shown: Vec<String> = dirs.iter().take(6).cloned().collect();
     let extra = dirs.len().saturating_sub(shown.len());
-    let count = if res.excluded_scan_complete {
-        format!("{} matches there", res.excluded_matches)
+    let noun = if res.excluded_matches == 1 {
+        "match"
     } else {
-        format!("≥{} matches there (scan cut short)", res.excluded_matches)
+        "matches"
+    };
+    let count = if res.excluded_scan_complete {
+        format!("{} {noun}", res.excluded_matches)
+    } else {
+        format!("≥{} {noun} (count cut short)", res.excluded_matches)
     };
     out.line(&format!(
-        "not searched (default excludes): {}{} — {count}; name the dir explicitly to search it.",
+        "{count} in hidden/excluded dirs omitted: {}{} — name the dir explicitly (or rg --hidden) to search it.",
         shown.join(" "),
         if extra > 0 {
             format!(" +{extra} more")

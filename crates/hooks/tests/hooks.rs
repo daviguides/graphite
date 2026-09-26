@@ -110,6 +110,22 @@ fn command_table() {
     }
 }
 
+#[test]
+fn rg_hidden_flags_reach_the_search_spec() {
+    let (_d, root) = repo();
+    let hidden = |cmd: &str| {
+        let acts = plan(&split(cmd).unwrap(), &root, &root).unwrap();
+        match &acts[0] {
+            Action::Search { spec, .. } => spec.hidden,
+            other => panic!("{cmd} → {other:?}"),
+        }
+    };
+    assert!(!hidden("rg -n resolve_owner"));
+    assert!(hidden("rg --hidden -n resolve_owner"));
+    assert!(hidden("rg -. resolve_owner"));
+    assert!(!hidden("grep -rn resolve_owner ."));
+}
+
 fn payload(cmd: &str, cwd: &Path) -> Value {
     json!({
         "hook_event_name": "PreToolUse",

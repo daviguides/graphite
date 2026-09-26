@@ -219,7 +219,8 @@ pub fn search_spec(w: &[String], cwd: &Path, root: &Path, raw: &str) -> Option<S
             match k {
                 "recursive" | "dereference-recursive" => recursive = true,
                 "line-number" | "with-filename" | "no-heading" | "heading" | "no-messages"
-                | "no-filename" | "hidden" | "color" | "colour" => {}
+                | "no-filename" | "color" | "colour" => {}
+                "hidden" if !is_grep => spec.hidden = true,
                 "ignore-case" => spec.ignore_case = true,
                 "smart-case" => spec.smart_case = true,
                 "case-sensitive" => {}
@@ -274,6 +275,7 @@ pub fn search_spec(w: &[String], cwd: &Path, root: &Path, raw: &str) -> Option<S
                 'E' => extended = true,
                 'l' => spec.files_only = true,
                 'u' if !is_grep => spec.no_ignore = true,
+                '.' if !is_grep => spec.hidden = true,
                 'e' => {
                     spec.patterns.push(value(&mut i)?);
                     explicit_patterns = true;
