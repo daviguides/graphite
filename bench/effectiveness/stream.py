@@ -229,8 +229,10 @@ def answer_overlap(answers: list[dict], window_ms: int = OVERLAP_WINDOW_MS) -> d
     by_cmd: dict[str, set[str]] = {}
     intra_hit: set[str] = set()
     total_keys = 0
+    turn_of: dict[str, object] = {}
     for i, e in enumerate(answers):
         ts, sess, cid, keys = e.get("ts", 0), e.get("session_id"), _command_id(e, i), _answer_keys(e)
+        turn = e.get("turn_id")
         total_keys += len(keys)
         same_cmd = by_cmd.setdefault(cid, set())
         rep_intra = [k for k in keys if k in same_cmd]
@@ -238,8 +240,15 @@ def answer_overlap(answers: list[dict], window_ms: int = OVERLAP_WINDOW_MS) -> d
             intra_hit.add(cid)
             intra_keys += len(rep_intra)
             intra_bytes += sum(keys[k] for k in rep_intra)
-        others = [k for t, s, c, k in seen
-                  if c != cid and ts - t <= window_ms and (sess is None or s is None or s == sess)]
+        def near(t, s, c):
+            if c == cid or not (sess is None or s is None or s == sess):
+                return False
+            other_turn = turn_of.get(c)
+            if turn is not None and other_turn is not None and other_turn == turn:
+                return True  # same assistant turn, however far apart in time
+            return ts - t <= window_ms
+        others = [k for t, s, c, k in seen if near(t, s, c)]
+        turn_of.setdefault(cid, turn)
         prior = set().union(*others) if others else set()
         rep_cross = [k for k in keys if k in prior and k not in rep_intra]
         if rep_cross:

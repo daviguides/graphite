@@ -406,6 +406,15 @@ def test_overlap_uses_logged_keys_ids_and_sessions():
     assert o["intra_overlap_keys"] == 1 and o["intra_overlap_bytes"] == 10
 
 
+def test_cross_call_overlap_same_turn_ignores_window():
+    from stream import answer_overlap
+    a = {"ts": 0, "session_id": "s", "call_id": "c1", "turn_id": "t1", "keys": ["a.py:1"], "answer_bytes": 10}
+    b = {"ts": 60_000, "session_id": "s", "call_id": "c2", "turn_id": "t1", "keys": ["a.py:1"], "answer_bytes": 10}
+    c = {"ts": 120_000, "session_id": "s", "call_id": "c3", "turn_id": "t2", "keys": ["a.py:1"], "answer_bytes": 10}
+    o = answer_overlap([a, b, c])
+    assert o["cross_overlap_answers"] == 1  # b repeats a in the same turn; c is a later turn, > 10 s
+
+
 def test_hooks_summary_reports_overlap(tmp_path):
     from stream import hooks_summary
     p = tmp_path / "hooks.jsonl"
