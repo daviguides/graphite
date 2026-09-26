@@ -95,10 +95,12 @@ fn non_identifier_patterns_group_by_enclosing_symbol() {
     let res = search::run(&s, &root).unwrap();
     let (text, stats) = judge::render(&engine, &s, &res, false).unwrap();
     assert_eq!(stats["mode"], "grouped");
-    assert!(text.contains("# a (function L3-4)"), "{text}");
-    assert!(text.contains("# g (function L1-2)"), "{text}");
     assert!(
-        text.contains("pkg/use.py:4:    return resolve_owner()"),
+        text.contains("pkg/use.py:4:    return resolve_owner()    [in a]"),
+        "{text}"
+    );
+    assert!(
+        text.contains("pkg/amb.py:2:    return obj.resolve_owner()    [in g]"),
         "{text}"
     );
     assert_eq!(stats["matches"], res.hits.len());
@@ -118,7 +120,7 @@ fn caps_disclose_the_rest() {
     let (text, _) = judge::render(&engine, &s, &res, false).unwrap();
     assert!(
         text.contains(
-            "+250 more matches — all: graphite-hook run --all -- 'grep -rn needle [0-9]+ .'"
+            "not shown: match 376 — all: graphite-hook run --all -- 'grep -rn needle [0-9]+ .'"
         ),
         "{text}"
     );
@@ -145,5 +147,102 @@ fn imports_counted_and_multi_definitions_listed() {
     assert!(text.contains("has 2 definitions"), "{text}");
     assert!(text.contains("imports: "), "{text}");
     assert!(!text.contains("pkg/use.py:1:from pkg.core"), "{text}");
-    assert!(text.contains("→ resolve_owner"), "{text}");
+    assert!(
+        text.contains("pkg/use.py:4:    return resolve_owner()    ← a → pkg/core.py:1"),
+        "{text}"
+    );
+    assert!(
+        text.contains("other/use2.py:4:    return resolve_owner(1)    ← z → other/core.py:1"),
+        "{text}"
+    );
+}
+
+fn build(root: &Path, s: &SearchSpec) -> (graphite_daemon::answer::Answer, String) {
+    let engine = Engine::open(RepoPaths::new(root)).unwrap();
+    engine.index_all().unwrap();
+    let res = search::run(s, root).unwrap();
+    let (a, _) = judge::build(&engine, s, &res, false).unwrap();
+    let text = graphite_daemon::answer::render_model(&a);
+    (a, text)
+}
+
+#[test]
+fn integrated_list_is_relevance_ordered_single_list() {
+    let (_d, root) = fixture();
+    let (a, text) = build(&root, &spec(&root, "resolve_owner"));
+    let first = text.lines().nth(1).unwrap();
+    assert!(
+        first.starts_with("pkg/core.py:1:def resolve_owner"),
+        "{text}"
+    );
+    assert!(first.ends_with("[definition]"), "{text}");
+    // one header, one footer, everything else is a self-contained path:line: line
+    let body: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).collect();
+    assert!(body.iter().all(|l| l.contains(':')), "{text}");
+    assert_eq!(
+        text.lines().filter(|l| l.starts_with("# ")).count(),
+        2,
+        "{text}"
+    );
+    assert!(text.lines().next().unwrap().contains("graph "), "{text}");
+    // ranks never decrease
+    let ranks: Vec<u8> = a
+        .items
+        .iter()
+        .map(|i| graphite_daemon::answer::rank(&i.class, i.test))
+        .collect();
+    assert!(ranks.windows(2).all(|w| w[0] <= w[1]), "{ranks:?}");
+}
+
+#[test]
+fn drop_tests_is_semantic_and_disclosed() {
+    let (_d, root) = fixture();
+    write(&root, "tests/test_core.py", "from unittest.mock import patch\n\ndef test_x():\n    with patch(\"pkg.core.resolve_owner\"):\n        pass\n");
+    let mut s = spec(&root, "resolve_owner");
+    s.drop_tests = Some("grep -v test".into());
+    let (_a, text) = build(&root, &s);
+    assert!(!text.contains("tests/test_core.py"), "{text}");
+    assert!(
+        text.contains("`grep -v test` → 1 test matches (1 mocks) omitted"),
+        "{text}"
+    );
+}
+
+#[test]
+fn line_filter_keeps_header_and_footer() {
+    let (_d, root) = fixture();
+    let mut s = spec(&root, "resolve_owner");
+    s.line_filters = vec![graphite_daemon::answer::LineFilter {
+        pattern: "alias".into(),
+        source: "grep alias".into(),
+        ..Default::default()
+    }];
+    let (_a, text) = build(&root, &s);
+    let body: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).collect();
+    assert_eq!(body.len(), 1, "{text}");
+    assert!(body[0].starts_with("pkg/alias.py:4:"), "{text}");
+    assert!(text.starts_with("# graphite:"), "{text}");
+    assert!(
+        text.lines().last().unwrap().contains("covering tests"),
+        "{text}"
+    );
+}
+
+#[test]
+fn budget_replaces_byte_cut() {
+    let (_d, root) = fixture();
+    let mut s = spec(&root, "resolve_owner");
+    s.budget = Some(graphite_daemon::answer::Budget {
+        bytes: Some(900),
+        lines: None,
+        source: "head -c 900".into(),
+    });
+    let (_a, text) = build(&root, &s);
+    assert!(text.len() <= 900, "{}\n{text}", text.len());
+    assert!(text.contains("pkg/core.py:1:def resolve_owner"), "{text}");
+    assert!(
+        text.contains("`head -c 900` applied as answer budget"),
+        "{text}"
+    );
+    assert!(text.lines().last().unwrap().starts_with("# "), "{text}");
 }

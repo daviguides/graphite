@@ -774,6 +774,7 @@ dependencies = [
  "ignore",
  "notify",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

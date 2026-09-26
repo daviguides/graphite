@@ -59,6 +59,18 @@ pub struct SearchSpec {
     /// The original command, echoed in the answer header and in the "see everything" hint.
     #[serde(default)]
     pub label: String,
+    /// Which view of the answer to return.
+    #[serde(default)]
+    pub format: crate::answer::OutFormat,
+    /// The agent's `| head …`/`| tail …`, honored as an answer budget instead of a byte cut.
+    #[serde(default)]
+    pub budget: Option<crate::answer::Budget>,
+    /// The agent filtered test lines out (`| grep -v test`): drop test matches, disclose counts.
+    #[serde(default)]
+    pub drop_tests: Option<String>,
+    /// Other grep-style filters from the agent's pipeline, applied to match lines only.
+    #[serde(default)]
+    pub line_filters: Vec<crate::answer::LineFilter>,
 }
 
 /// One matching line.

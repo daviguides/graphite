@@ -189,10 +189,12 @@ fn search(
     let t = Instant::now();
     let res = crate::search::run(spec, &engine.paths.root)?;
     let search_ms = t.elapsed().as_millis();
-    let (text, mut stats) = crate::judge::render(engine, spec, &res, stale)?;
+    let (answer, mut stats) = crate::judge::build(engine, spec, &res, stale)?;
+    let text = crate::answer::render(&answer, spec.format);
     stats["search_ms"] = json!(search_ms);
     stats["total_ms"] = json!(t.elapsed().as_millis());
-    Ok(json!({"text": text, "stats": stats, "matches": res.hits.len()}))
+    stats["out_bytes"] = json!(text.len());
+    Ok(json!({"text": text, "stats": stats, "matches": res.hits.len(), "record": answer}))
 }
 
 fn nudge(engine: &Engine, paths: &[String]) -> std::result::Result<Value, String> {

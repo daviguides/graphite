@@ -1,5 +1,6 @@
 //! Per-repo Graphite daemon: owns the store, the derived adjacency and the watcher; serves thin clients over a unix socket.
 
+pub mod answer;
 pub mod client;
 pub mod engine;
 pub mod freshness;

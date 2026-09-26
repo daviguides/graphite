@@ -2,20 +2,16 @@
 //! Every hit is either printed or counted in an explicit "+N more" line; nothing is dropped silently.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use graphite_model::{EdgeKind, Symbol, SymbolId, SymbolKind};
 use graphite_store::{confidence, Confidence, GraphStore, Outcome};
 use serde_json::{json, Value};
 
+use crate::answer::{rank, Answer, Item, LineFilter, Target};
 use crate::engine::Engine;
 use crate::search::{display_path, Hit, SearchOutcome, SearchSpec};
 
-const CAP_REFS: usize = 60;
-const CAP_RESIDUE: usize = 12;
-const CAP_GROUPED: usize = 150;
-const CAP_FILES: usize = 80;
 const MAX_NAME_SYMBOLS: usize = 200;
 
 /// Why a matching line is there.
@@ -48,31 +44,6 @@ impl Class {
             Class::OtherIdentifier => "other_identifier",
         }
     }
-
-    fn label(self) -> &'static str {
-        match self {
-            Class::GraphGap => "graph gap — calls the graph could not resolve to one target",
-            Class::CodeUntracked => {
-                "code the graph does not track as a reference (value or attribute use)"
-            }
-            Class::StringOrComment => "in strings or comments",
-            Class::OtherLanguage => "in source the graph does not index yet",
-            Class::NotIndexed => "in Python files outside the index",
-            Class::DocsConfig => "in docs / config",
-            Class::OtherIdentifier => "part of a different identifier",
-            Class::Definition | Class::Reference | Class::Import => "",
-        }
-    }
-
-    const RESIDUE: [Class; 7] = [
-        Class::GraphGap,
-        Class::CodeUntracked,
-        Class::StringOrComment,
-        Class::OtherLanguage,
-        Class::NotIndexed,
-        Class::DocsConfig,
-        Class::OtherIdentifier,
-    ];
 }
 
 const CODE_EXTS: &[&str] = &[
@@ -118,6 +89,7 @@ pub(crate) struct NameFacts {
     refs: HashMap<(String, u32), RefInfo>,
     gaps: HashMap<(String, u32), String>,
     labels: HashMap<SymbolId, String>,
+    test_srcs: HashSet<SymbolId>,
 }
 
 impl NameFacts {
@@ -127,6 +99,10 @@ impl NameFacts {
 
     pub(crate) fn gap_count(&self) -> usize {
         self.gaps.len()
+    }
+
+    fn syms_known_test(&self, id: SymbolId) -> bool {
+        self.test_srcs.contains(&id)
     }
 
     pub(crate) fn ref_paths(&self) -> impl Iterator<Item = &str> {
@@ -197,12 +173,14 @@ pub(crate) fn name_facts(engine: &Engine, name: &str, dotted: &str) -> Result<Na
         gaps.insert((r.key.path.clone(), r.site_line), why);
     }
     let labels = known.values().map(|s| (s.id, short_label(s))).collect();
+    let test_srcs = known.values().filter(|s| s.is_test).map(|s| s.id).collect();
     Ok(NameFacts {
         name: name.to_string(),
         syms,
         refs,
         gaps,
         labels,
+        test_srcs,
     })
 }
 
@@ -376,59 +354,20 @@ fn kind_word(k: EdgeKind) -> &'static str {
     }
 }
 
-struct Out<'a> {
-    buf: String,
-    spec: &'a SearchSpec,
-    files: &'a mut Files,
-}
-
-impl Out<'_> {
-    fn line(&mut self, s: &str) {
-        self.buf.push_str(s);
-        self.buf.push('\n');
-    }
-
-    /// One hit in grep format, with -A/-B context rendered from the file.
-    fn hit(&mut self, display: &str, abs: &Path, line: u32, text: &str, note: &str) {
-        let (b, a) = (self.spec.before, self.spec.after);
-        if b > 0 || a > 0 {
-            for n in line.saturating_sub(b).max(1)..line {
-                let t = self.files.line(abs, n);
-                let _ = writeln!(self.buf, "{display}-{n}-{t}");
-            }
-        }
-        let _ = writeln!(self.buf, "{display}:{line}:{text}{note}");
-        if b > 0 || a > 0 {
-            for n in line + 1..=line + a {
-                let Some(t) = self
-                    .files
-                    .lines(abs)
-                    .and_then(|l| l.get(n as usize - 1))
-                    .cloned()
-                else {
-                    break;
-                };
-                let _ = writeln!(self.buf, "{display}-{n}-{t}");
-            }
-            self.buf.push_str("--\n");
-        }
-    }
-}
-
 fn more_hint(spec: &SearchSpec) -> String {
     if spec.label.is_empty() {
         String::new()
     } else {
         format!(
-            " — all: graphite-hook run --all -- '{}'",
+            "graphite-hook run --all -- '{}'",
             spec.label.replace('\'', "'\\''")
         )
     }
 }
 
-fn excluded_note(out: &mut Out, res: &SearchOutcome, cwd: &Path) {
+fn excluded_note(res: &SearchOutcome, cwd: &Path) -> Option<String> {
     if res.excluded_dirs.is_empty() || (res.excluded_matches == 0 && res.excluded_scan_complete) {
-        return;
+        return None;
     }
     let mut dirs: Vec<String> = res
         .excluded_dirs
@@ -448,24 +387,184 @@ fn excluded_note(out: &mut Out, res: &SearchOutcome, cwd: &Path) {
     } else {
         format!("≥{} {noun} (count cut short)", res.excluded_matches)
     };
-    out.line(&format!(
-        "{count} in hidden/excluded dirs omitted: {}{} — name the dir explicitly (or rg --hidden) to search it.",
+    Some(format!(
+        "{count} in hidden/excluded dirs omitted: {}{} — name the dir explicitly (or rg --hidden) to search it",
         shown.join(" "),
         if extra > 0 {
             format!(" +{extra} more")
         } else {
             String::new()
         }
-    ));
+    ))
 }
 
-/// Render the agent-facing answer for a search; returns (text, stats).
-pub fn render(
+/// Per-caller facts from the query layer, keyed by (caller path, site line).
+#[derive(Default)]
+struct TargetFacts {
+    target: Target,
+    called_by: HashMap<(String, u32), (Vec<String>, u32)>,
+    indirect_total: u32,
+    indirect: Vec<String>,
+    tests_total: u32,
+    tests: Vec<String>,
+    overrides: Vec<String>,
+}
+
+fn target_facts(engine: &Engine, stale: bool, sym: &Symbol, cwd: &Path) -> TargetFacts {
+    let abs = engine.paths.root.join(&sym.path);
+    let mut out = TargetFacts {
+        target: Target {
+            def: format!("{}:{}", display_path(&abs, cwd), sym.start_line),
+            signature: sym.signature.clone(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let opts = graphite_query::Options {
+        compact: true,
+        source_items: 0,
+        token_budget: 1_000_000,
+        ..Default::default()
+    };
+    let v = {
+        let adj = engine.adjacency();
+        let ctx = graphite_query::QueryContext {
+            store: &engine.store,
+            adj: &adj,
+            root: &engine.paths.root,
+            stale,
+            parse_failures: engine.parse_failures(),
+        };
+        match graphite_query::blast_radius(&ctx, &sym.id.to_hex(), &opts)
+            .ok()
+            .and_then(|e| serde_json::to_value(e).ok())
+        {
+            Some(v) => v,
+            None => return out,
+        }
+    };
+    let r = &v["result"];
+    let u = |x: &Value| x.as_u64().unwrap_or(0) as u32;
+    let d = &r["direct"];
+    out.target.callers = u(&d["callers"]);
+    out.target.sites = u(&d["sites"]);
+    out.target.files = u(&d["files"]);
+    out.target.prod = u(&d["prod"]);
+    out.target.test = u(&d["test"]);
+    out.target.risk = r["risk"]["level"].as_str().map(String::from);
+    for cs in r["call_sites"].as_array().into_iter().flatten() {
+        let path = cs["caller"]["path"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let by: Vec<String> = cs["called_by"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect();
+        let total = u(&cs["called_by_total"]);
+        for l in cs["lines"].as_array().into_iter().flatten() {
+            out.called_by
+                .insert((path.clone(), u(l)), (by.clone(), total));
+        }
+    }
+    let ind = &r["indirect"];
+    out.indirect_total = u(&ind["total"]);
+    for g in ind["groups"].as_array().into_iter().flatten().take(5) {
+        let top: Vec<&str> = g["top"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .take(3)
+            .collect();
+        out.indirect.push(format!(
+            "{} {} ({})",
+            g["module"].as_str().unwrap_or("?"),
+            u(&g["count"]),
+            top.join(", ")
+        ));
+    }
+    out.tests_total = u(&r["tests"]["total"]);
+    out.tests = r["tests"]["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t["node_id"].as_str().map(String::from))
+        .take(4)
+        .collect();
+    for o in r["overrides"].as_array().into_iter().flatten() {
+        let s = &o["symbol"];
+        let name: Vec<&str> = s["qualified"]
+            .as_str()
+            .unwrap_or_default()
+            .rsplit('.')
+            .take(2)
+            .collect();
+        out.overrides.push(format!(
+            "{} {} at {}:{}",
+            o["relation"].as_str().unwrap_or("related"),
+            name.into_iter().rev().collect::<Vec<_>>().join("."),
+            display_path(
+                &engine
+                    .paths
+                    .root
+                    .join(s["path"].as_str().unwrap_or_default()),
+                cwd
+            ),
+            u(&s["start_line"])
+        ));
+    }
+    out
+}
+
+type Context = Vec<(u32, String)>;
+
+fn context(files: &mut Files, spec: &SearchSpec, abs: &Path, line: u32) -> (Context, Context) {
+    let (b, a) = (spec.before, spec.after);
+    if b == 0 && a == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    let before = (line.saturating_sub(b).max(1)..line)
+        .map(|n| (n, files.line(abs, n)))
+        .collect();
+    let mut after = Vec::new();
+    for n in line + 1..=line + a {
+        let Some(t) = files
+            .lines(abs)
+            .and_then(|l| l.get(n as usize - 1))
+            .cloned()
+        else {
+            break;
+        };
+        after.push((n, t));
+    }
+    (before, after)
+}
+
+fn looks_like_mock(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    ["patch", "mock", "monkeypatch", "setattr"]
+        .iter()
+        .any(|k| t.contains(k))
+}
+
+fn conf_word(c: Confidence) -> Option<String> {
+    match c {
+        Confidence::Extracted => None,
+        Confidence::Inferred => Some("inferred".into()),
+        Confidence::Ambiguous => Some("name guess".into()),
+    }
+}
+
+/// Judge a search against the graph: the canonical record plus stats for logging.
+pub fn build(
     engine: &Engine,
     spec: &SearchSpec,
     res: &SearchOutcome,
     stale: bool,
-) -> Result<(String, Value), String> {
+) -> Result<(Answer, Value), String> {
     let cwd = PathBuf::from(&spec.cwd);
     let name = identifier_of(spec);
     let facts = match &name {
@@ -493,305 +592,301 @@ pub fn render(
         .map(|h| h.display.len() + h.text.len() + 8)
         .sum();
 
-    let mut out = Out {
-        buf: String::new(),
-        spec,
-        files: &mut files,
+    let mut a = Answer {
+        query: if spec.label.is_empty() {
+            spec.patterns.join(" | ")
+        } else {
+            spec.label.clone()
+        },
+        matches: res.hits.len(),
+        files: nfiles.len(),
+        name: facts.as_ref().map(|f| f.name.clone()),
+        all: spec.all,
+        more_hint: more_hint(spec),
+        budget: spec.budget.clone(),
+        ..Default::default()
     };
-    let label = if spec.label.is_empty() {
-        spec.patterns.join(" | ")
-    } else {
-        spec.label.clone()
-    };
-    let explained = [Class::Reference, Class::Definition, Class::Import]
-        .iter()
-        .map(|c| counts.get(c).copied().unwrap_or(0))
-        .sum::<usize>();
-    let mut header = format!(
-        "[graphite] {label} → {} matches in {} files",
-        res.hits.len(),
-        nfiles.len()
-    );
-    if facts.is_some() {
-        let _ = write!(header, " · graph explains {explained}");
-    }
-    out.line(&header);
     if stale {
-        out.line(
-            "graph may lag your latest edit (indexing in progress); the text matches are current.",
+        a.omitted.push(
+            "graph may lag your latest edit (indexing in progress); text matches are current"
+                .into(),
         );
     }
     if res.truncated {
-        out.line(&format!(
-            "search stopped at {} matches — narrow the pattern or path.",
+        a.omitted.push(format!(
+            "search stopped at {} matches — narrow the pattern or path",
             crate::search::MAX_MATCHES
         ));
     }
+    if let Some(n) = excluded_note(res, &cwd) {
+        a.omitted.push(n);
+    }
 
     let mut alias_refs = 0usize;
-    match &facts {
-        Some(f) => render_identifier(
-            &mut out,
+    if spec.files_only {
+        a.mode = "files".into();
+        a.verdict = "none".into();
+        files_items(&mut a, res, &classes);
+    } else if let Some(f) = &facts {
+        a.mode = "identifier".into();
+        identifier_items(
+            &mut a,
             engine,
             spec,
             res,
             &classes,
             f,
             &cwd,
+            stale,
+            &mut files,
             &mut alias_refs,
-        ),
-        None => render_grouped(&mut out, engine, spec, res),
+        );
+    } else {
+        a.mode = "grouped".into();
+        a.verdict = "none".into();
+        a.verdict_note =
+            "non-identifier pattern; each match tagged with its enclosing symbol".into();
+        grouped_items(&mut a, engine, spec, res, &mut files);
     }
-    excluded_note(&mut out, res, &cwd);
+    a.items.sort_by_key(|i| rank(&i.class, i.test));
+    apply_pipeline(&mut a, spec);
 
-    let text = out.buf;
-    let verdict = match &facts {
-        Some(f) if !f.syms.is_empty() && f.gaps.is_empty() => "complete",
-        Some(f) if !f.syms.is_empty() => "lower_bound",
-        _ => "none",
-    };
+    let mut class_counts = serde_json::Map::new();
+    for (c, n) in &counts {
+        class_counts.insert(c.key().to_string(), json!(n));
+    }
     let stats = json!({
-        "graph_verdict": verdict,
-        "mode": if facts.is_some() { "identifier" } else { "grouped" },
+        "graph_verdict": if a.verdict.is_empty() { "none" } else { a.verdict.as_str() },
+        "mode": a.mode,
         "matches": res.hits.len(),
         "files": nfiles.len(),
-        "classes": counts.iter().map(|(c, n)| (c.key().to_string(), json!(n))).collect::<serde_json::Map<_,_>>(),
+        "classes": class_counts,
         "alias_refs": alias_refs,
         "excluded_matches": res.excluded_matches,
-        "out_bytes": text.len(),
         "raw_bytes": raw_bytes,
     });
+    Ok((a, stats))
+}
+
+/// Model-format text + stats (the record is `build`'s first value).
+pub fn render(
+    engine: &Engine,
+    spec: &SearchSpec,
+    res: &SearchOutcome,
+    stale: bool,
+) -> Result<(String, Value), String> {
+    let (a, mut stats) = build(engine, spec, res, stale)?;
+    let text = crate::answer::render(&a, spec.format);
+    stats["out_bytes"] = json!(text.len());
     Ok((text, stats))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_identifier(
-    out: &mut Out,
+fn identifier_items(
+    a: &mut Answer,
     engine: &Engine,
     spec: &SearchSpec,
     res: &SearchOutcome,
     classes: &[Class],
     f: &NameFacts,
     cwd: &Path,
+    stale: bool,
+    files: &mut Files,
     alias_refs: &mut usize,
 ) {
     let gaps = f.gaps.len();
     if f.syms.is_empty() {
-        out.line(&format!(
-            "graph: no symbol named `{}` in the index — matches grouped by kind below.",
-            f.name
-        ));
+        a.verdict = "none".into();
+        a.verdict_note = format!("no symbol named `{}` in the index", f.name);
     } else if gaps == 0 {
-        out.line(&format!(
-            "graph: complete — every reference the graph resolved to `{}` is listed; 0 unresolved or ambiguous calls with that name.",
+        a.verdict = "complete".into();
+        a.verdict_note = format!(
+            "every reference the graph resolved to `{}` is listed; 0 unresolved or ambiguous calls with that name",
             f.name
-        ));
+        );
     } else {
-        out.line(&format!(
-            "graph: lower bound — {gaps} calls named `{}` could not be resolved to one target (listed under graph gap if they matched).",
+        a.verdict = "lower_bound".into();
+        a.verdict_note = format!(
+            "{gaps} calls named `{}` unresolved/ambiguous — tagged [unresolved call] where they matched",
             f.name
-        ));
+        );
     }
 
-    if f.syms.len() > 1 {
-        let mut per: HashMap<SymbolId, usize> = HashMap::new();
-        for r in f.refs.values() {
-            *per.entry(r.dst).or_default() += 1;
+    // Query-layer facts per definition (bounded: common names can have many).
+    let mut called_by: HashMap<(String, u32), (Vec<String>, u32)> = HashMap::new();
+    let mut def_display: HashMap<SymbolId, String> = HashMap::new();
+    for sym in f.syms.iter().take(8) {
+        let tf = target_facts(engine, stale, sym, cwd);
+        def_display.insert(sym.id, tf.target.def.clone());
+        called_by.extend(tf.called_by);
+        a.footer.indirect_total += tf.indirect_total;
+        a.footer.indirect.extend(tf.indirect);
+        a.footer.tests_total += tf.tests_total;
+        for t in tf.tests {
+            if a.footer.tests.len() < 4 {
+                a.footer.tests.push(t);
+            }
         }
-        out.line(&format!(
-            "`{}` has {} definitions — references below are tagged with the one they resolve to:",
-            f.name,
-            f.syms.len()
-        ));
-        for sym in f.syms.iter().take(8) {
-            let abs = engine.paths.root.join(&sym.path);
-            out.line(&format!(
-                "  {}:{} {} ({} refs)",
-                display_path(&abs, cwd),
-                sym.start_line,
-                sym.signature,
-                per.get(&sym.id).copied().unwrap_or(0)
-            ));
-        }
-        if f.syms.len() > 8 {
-            out.line(&format!("  +{} more definitions", f.syms.len() - 8));
-        }
+        a.footer.overrides.extend(tf.overrides);
+        a.targets.push(tf.target);
     }
-
-    if spec.files_only {
-        render_files_only(out, res, classes);
-        return;
+    for sym in f.syms.iter().skip(8) {
+        let abs = engine.paths.root.join(&sym.path);
+        def_display.insert(
+            sym.id,
+            format!("{}:{}", display_path(&abs, cwd), sym.start_line),
+        );
     }
+    let multi = f.syms.len() > 1;
 
-    let idx =
-        |c: Class| -> Vec<usize> { (0..classes.len()).filter(|&i| classes[i] == c).collect() };
-
-    let defs = idx(Class::Definition);
-    if !defs.is_empty() {
-        out.line("definition:");
-        for i in defs {
-            let h = &res.hits[i];
-            out.hit(&h.display, &h.abs, h.line, &h.text, "");
+    let enrich = |it: &mut Item, rel: &str, r: &RefInfo| {
+        it.in_fn = f.labels.get(&r.src).cloned();
+        if let Some((by, total)) = called_by.get(&(rel.to_string(), it.line)) {
+            it.called_by = by.clone();
+            it.called_by_total = *total;
         }
-    }
+        it.confidence = conf_word(r.conf);
+        if multi {
+            it.resolves_to = def_display.get(&r.dst).cloned();
+        }
+        it.why = format!(
+            "{} edge from {} resolved by the graph ({})",
+            kind_word(r.kind),
+            f.labels.get(&r.src).cloned().unwrap_or_default(),
+            match r.conf {
+                Confidence::Extracted => "extracted",
+                Confidence::Inferred => "inferred",
+                Confidence::Ambiguous => "unique-name guess",
+            }
+        );
+    };
 
-    let refs = idx(Class::Reference);
-    let seen: HashSet<(String, u32)> = refs
-        .iter()
-        .filter_map(|&i| {
-            let h = &res.hits[i];
-            engine.paths.relative(&h.abs).map(|r| (r, h.line))
-        })
-        .collect();
+    let mut seen: HashSet<(String, u32)> = HashSet::new();
+    let mut import_files: HashSet<String> = HashSet::new();
+    for (i, h) in res.hits.iter().enumerate() {
+        let rel = engine.paths.relative(&h.abs).unwrap_or_default();
+        let is_test = graphite_extract_python::is_test_path(&rel);
+        let (before, after) = context(files, spec, &h.abs, h.line);
+        let mut it = Item {
+            path: h.display.clone(),
+            line: h.line,
+            text: h.text.clone(),
+            test: is_test,
+            before,
+            after,
+            ..Default::default()
+        };
+        let key = (rel.clone(), h.line);
+        match classes[i] {
+            Class::Definition => {
+                it.class = "definition".into();
+                it.test = false;
+                it.why = "`def`/`class` line of an indexed symbol with this name".into();
+            }
+            Class::Reference => {
+                seen.insert(key.clone());
+                it.class = "call".into();
+                if let Some(r) = f.refs.get(&key) {
+                    it.test = is_test || f.syms_known_test(r.src);
+                    enrich(&mut it, &rel, r);
+                }
+            }
+            Class::Import => {
+                seen.insert(key.clone());
+                it.class = "import".into();
+                import_files.insert(rel.clone());
+                it.why =
+                    "import line (edge resolved, or continuation of a resolved `from … import (`)"
+                        .into();
+            }
+            Class::GraphGap => {
+                it.class = "unresolved_call".into();
+                it.gap = f.gaps.get(&key).cloned();
+                it.why = format!(
+                    "call named `{}` the graph could not resolve to one target ({})",
+                    f.name,
+                    it.gap.clone().unwrap_or_default()
+                );
+            }
+            Class::StringOrComment => {
+                if is_test && looks_like_mock(&h.text) {
+                    it.class = "mock_in_test".into();
+                    it.why = "string in test code patching/mocking this name".into();
+                } else {
+                    it.class = "string_comment".into();
+                    it.why = "inside a string or comment (tree-sitter)".into();
+                }
+            }
+            Class::CodeUntracked => {
+                it.class = if is_test && looks_like_mock(&h.text) {
+                    "mock_in_test"
+                } else {
+                    "untracked_code"
+                }
+                .into();
+                it.why =
+                    "code use the graph does not track as a reference (value/attribute use)".into();
+            }
+            Class::OtherLanguage => {
+                it.class = "other_language".into();
+                it.why = "source language the graph does not index yet".into();
+            }
+            Class::NotIndexed => {
+                it.class = "not_indexed".into();
+                it.why = "Python file outside the index (ignored or unindexable path)".into();
+            }
+            Class::DocsConfig => {
+                it.class = "docs".into();
+                it.why = "non-code file (docs/config)".into();
+            }
+            Class::OtherIdentifier => {
+                it.class = "other_identifier".into();
+                it.why = format!(
+                    "matched inside `{}`, a different identifier",
+                    token_at(&h.text, h.col)
+                );
+            }
+        }
+        a.items.push(it);
+    }
+    a.footer.import_lines = a.items.iter().filter(|i| i.class == "import").count();
+    a.footer.import_files = import_files.len();
+
+    // References the text search could not see (aliased import, renamed call).
     let mut hidden: Vec<(&(String, u32), &RefInfo)> = f
         .refs
         .iter()
         .filter(|(k, r)| {
-            // Imports are counted, not listed; only uses the text search missed are shown.
             r.kind != EdgeKind::Imports
                 && !seen.contains(*k)
                 && res.searched.contains(&engine.paths.root.join(&k.0))
         })
         .collect();
-    hidden.sort_by(|a, b| a.0.cmp(b.0));
+    hidden.sort_by(|x, y| x.0.cmp(y.0));
     *alias_refs = hidden.len();
-
-    let ref_of = |i: usize| -> Option<&RefInfo> {
-        let h = &res.hits[i];
-        let rel = engine.paths.relative(&h.abs)?;
-        f.refs.get(&(rel, h.line))
-    };
-    let imports = idx(Class::Import);
-    let uses = refs;
-    if !uses.is_empty() {
-        let files: HashSet<&Path> = uses.iter().map(|&i| res.hits[i].abs.as_path()).collect();
-        out.line(&format!(
-            "references ({} sites in {} files):",
-            uses.len(),
-            files.len()
-        ));
-        let cap = if spec.all { usize::MAX } else { CAP_REFS };
-        for &i in uses.iter().take(cap) {
-            let h = &res.hits[i];
-            let note = ref_of(i).map(|r| ref_note(f, r)).unwrap_or_default();
-            out.hit(&h.display, &h.abs, h.line, &h.text, &note);
-        }
-        if uses.len() > cap {
-            out.line(&format!(
-                "+{} more references{}",
-                uses.len() - cap,
-                more_hint(spec)
-            ));
-        }
-    }
-    if !imports.is_empty() {
-        let files: HashSet<&Path> = imports.iter().map(|&i| res.hits[i].abs.as_path()).collect();
-        if spec.all {
-            out.line(&format!("imports ({}):", imports.len()));
-            for &i in &imports {
-                let h = &res.hits[i];
-                out.hit(&h.display, &h.abs, h.line, &h.text, "");
-            }
-        } else {
-            out.line(&format!(
-                "imports: {} lines in {} files (not listed{})",
-                imports.len(),
-                files.len(),
-                more_hint(spec)
-            ));
-        }
-    }
-    if !hidden.is_empty() {
-        out.line("references the text search cannot see (aliased import or renamed call):");
-        for ((path, line), r) in hidden.iter().take(CAP_REFS) {
-            let abs = engine.paths.root.join(path);
-            let text = out.files.line(&abs, *line);
-            let note = ref_note(f, r);
-            out.hit(&display_path(&abs, cwd), &abs, *line, &text, &note);
-        }
-        if hidden.len() > CAP_REFS {
-            out.line(&format!("+{} more", hidden.len() - CAP_REFS));
-        }
-    }
-
-    let residue: usize = Class::RESIDUE.iter().map(|c| idx(*c).len()).sum();
-    if residue > 0 {
-        out.line(&format!("other matches ({residue}):"));
-    }
-    for c in Class::RESIDUE {
-        let items = idx(c);
-        if items.is_empty() {
-            continue;
-        }
-        out.line(&format!("  {} ({}):", c.label(), items.len()));
-        let cap = if spec.all { usize::MAX } else { CAP_RESIDUE };
-        if c == Class::OtherIdentifier {
-            let mut by_tok: BTreeMap<String, Vec<String>> = BTreeMap::new();
-            for &i in &items {
-                let h = &res.hits[i];
-                by_tok
-                    .entry(token_at(&h.text, h.col))
-                    .or_default()
-                    .push(format!("{}:{}", h.display, h.line));
-            }
-            for (tok, locs) in by_tok {
-                let shown: Vec<&String> = locs.iter().take(cap.min(4)).collect();
-                let more = locs.len() - shown.len();
-                out.line(&format!(
-                    "    {tok} ×{}: {}{}",
-                    locs.len(),
-                    shown
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    if more > 0 {
-                        format!(" +{more} more")
-                    } else {
-                        String::new()
-                    }
-                ));
-            }
-            continue;
-        }
-        for &i in items.iter().take(cap) {
-            let h = &res.hits[i];
-            let note = if c == Class::GraphGap {
-                let rel = engine.paths.relative(&h.abs).unwrap_or_default();
-                f.gaps
-                    .get(&(rel, h.line))
-                    .map(|w| format!("    [{w}]"))
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-            out.hit(&h.display, &h.abs, h.line, &h.text, &note);
-        }
-        if items.len() > cap {
-            out.line(&format!("  +{} more{}", items.len() - cap, more_hint(spec)));
-        }
+    for ((path, line), r) in hidden {
+        let abs = engine.paths.root.join(path);
+        let (before, after) = context(files, spec, &abs, *line);
+        let mut it = Item {
+            path: display_path(&abs, cwd),
+            line: *line,
+            text: files.line(&abs, *line),
+            class: "graph_only".into(),
+            test: graphite_extract_python::is_test_path(path) || f.syms_known_test(r.src),
+            before,
+            after,
+            ..Default::default()
+        };
+        enrich(&mut it, path, r);
+        it.why = format!(
+            "{} — the text search cannot see it (aliased import or renamed call)",
+            it.why
+        );
+        a.items.push(it);
     }
 }
 
-fn ref_note(f: &NameFacts, r: &RefInfo) -> String {
-    let src = f.labels.get(&r.src).cloned().unwrap_or_default();
-    let conf = match r.conf {
-        Confidence::Extracted => "",
-        Confidence::Inferred => ", inferred",
-        Confidence::Ambiguous => ", name guess",
-    };
-    let target = if f.syms.len() > 1 {
-        f.labels
-            .get(&r.dst)
-            .map(|l| format!(" → {l}"))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
-    format!("    ← {src} ({}{conf}){target}", kind_word(r.kind))
-}
-
-fn render_files_only(out: &mut Out, res: &SearchOutcome, classes: &[Class]) {
+fn files_items(a: &mut Answer, res: &SearchOutcome, classes: &[Class]) {
     let mut per: Vec<(String, BTreeMap<Class, usize>)> = Vec::new();
     let mut pos: HashMap<String, usize> = HashMap::new();
     for (h, c) in res.hits.iter().zip(classes) {
@@ -801,85 +896,120 @@ fn render_files_only(out: &mut Out, res: &SearchOutcome, classes: &[Class]) {
         });
         *per[i].1.entry(*c).or_default() += 1;
     }
-    per.sort_by_key(|(d, m)| {
+    for (d, m) in per {
         let graph = m.get(&Class::Definition).copied().unwrap_or(0)
             + m.get(&Class::Reference).copied().unwrap_or(0);
-        (graph == 0, d.clone())
-    });
-    let cap = if out.spec.all { usize::MAX } else { CAP_FILES };
-    for (d, m) in per.iter().take(cap) {
         let parts: Vec<String> = m
             .iter()
             .map(|(c, n)| format!("{n} {}", c.key().replace('_', " ")))
             .collect();
-        out.line(&format!("{d}    ({})", parts.join(", ")));
-    }
-    if per.len() > cap {
-        let hint = more_hint(out.spec);
-        out.line(&format!("+{} more files{hint}", per.len() - cap));
+        a.items.push(Item {
+            path: d,
+            line: 0,
+            text: parts.join(", "),
+            class: if graph > 0 { "call" } else { "match" }.into(),
+            why: "file with matches (-l)".into(),
+            ..Default::default()
+        });
     }
 }
 
-/// Non-identifier patterns: hits in grep format, grouped under their enclosing symbol.
-fn render_grouped(out: &mut Out, engine: &Engine, spec: &SearchSpec, res: &SearchOutcome) {
-    if spec.files_only {
-        let mut seen = HashSet::new();
-        let files: Vec<&str> = res
-            .hits
-            .iter()
-            .filter(|h| seen.insert(h.display.as_str()))
-            .map(|h| h.display.as_str())
-            .collect();
-        let cap = if spec.all { usize::MAX } else { CAP_FILES * 2 };
-        for d in files.iter().take(cap) {
-            out.line(d);
-        }
-        if files.len() > cap {
-            out.line(&format!(
-                "+{} more files{}",
-                files.len() - cap,
-                more_hint(spec)
-            ));
-        }
-        return;
-    }
-    let cap = if spec.all { usize::MAX } else { CAP_GROUPED };
+fn grouped_items(
+    a: &mut Answer,
+    engine: &Engine,
+    spec: &SearchSpec,
+    res: &SearchOutcome,
+    files: &mut Files,
+) {
     let mut syms_cache: HashMap<String, Vec<Symbol>> = HashMap::new();
-    let mut last_group: Option<(PathBuf, Option<SymbolId>)> = None;
-    for h in res.hits.iter().take(cap) {
-        let group = engine
-            .paths
-            .relative(&h.abs)
+    for h in &res.hits {
+        let rel = engine.paths.relative(&h.abs);
+        let group = rel
+            .as_ref()
             .filter(|r| engine.is_indexable(r))
             .and_then(|r| {
                 let syms = syms_cache
                     .entry(r.clone())
-                    .or_insert_with(|| engine.store.symbols_in_file(&r).unwrap_or_default());
+                    .or_insert_with(|| engine.store.symbols_in_file(r).unwrap_or_default());
                 syms.iter()
                     .filter(|s| s.start_line <= h.line && h.line <= s.end_line)
                     .min_by_key(|s| (s.end_line - s.start_line, s.kind == SymbolKind::Module))
                     .cloned()
             });
-        let key = (h.abs.clone(), group.as_ref().map(|s| s.id));
-        if last_group.as_ref() != Some(&key) {
-            if let Some(s) = &group {
-                out.line(&format!(
-                    "# {} ({} L{}-{})",
+        let (before, after) = context(files, spec, &h.abs, h.line);
+        let test = rel
+            .as_deref()
+            .is_some_and(graphite_extract_python::is_test_path);
+        a.items.push(Item {
+            path: h.display.clone(),
+            line: h.line,
+            text: h.text.clone(),
+            class: "match".into(),
+            in_fn: group.as_ref().map(short_label),
+            test,
+            why: match &group {
+                Some(s) => format!(
+                    "text match inside {} ({} L{}-{})",
                     short_label(s),
                     s.kind.as_str(),
                     s.start_line,
                     s.end_line
-                ));
-            }
-            last_group = Some(key);
-        }
-        out.hit(&h.display, &h.abs, h.line, &h.text, "");
+                ),
+                None => "text match outside any indexed symbol".into(),
+            },
+            before,
+            after,
+            ..Default::default()
+        });
     }
-    if res.hits.len() > cap {
-        out.line(&format!(
-            "+{} more matches{}",
-            res.hits.len() - cap,
-            more_hint(spec)
+}
+
+fn filter_regex(f: &LineFilter) -> Option<regex::Regex> {
+    let mut p = if f.fixed {
+        regex::escape(&f.pattern)
+    } else {
+        f.pattern.clone()
+    };
+    if f.word {
+        p = format!(r"\b(?:{p})\b");
+    }
+    regex::RegexBuilder::new(&p)
+        .case_insensitive(f.ignore_case)
+        .build()
+        .ok()
+}
+
+/// Honor the agent's pipeline: test filter → semantic, grep filters → match lines only.
+fn apply_pipeline(a: &mut Answer, spec: &SearchSpec) {
+    if let Some(src) = &spec.drop_tests {
+        let before = a.items.len();
+        let mocks = a.items.iter().filter(|i| i.class == "mock_in_test").count();
+        a.items.retain(|i| !i.test && i.class != "mock_in_test");
+        let dropped = before - a.items.len();
+        a.notices.push(format!(
+            "`{src}` → {dropped} test matches ({mocks} mocks) omitted (you filtered tests)"
+        ));
+    }
+    for f in &spec.line_filters {
+        let Some(re) = filter_regex(f) else { continue };
+        let before = a.items.len();
+        a.items
+            .retain(|i| re.is_match(&crate::answer::item_line(i)) != f.invert);
+        a.notices.push(format!(
+            "`{}` applied to match lines ({} of {before} kept; header/footer kept)",
+            f.source,
+            a.items.len()
+        ));
+    }
+    if let Some(b) = &spec.budget {
+        let what = match (b.bytes, b.lines) {
+            (Some(n), _) => format!("{n} bytes"),
+            (_, Some(n)) => format!("{n} lines"),
+            _ => "budget".into(),
+        };
+        a.notices.push(format!(
+            "`{}` applied as answer budget ({what}); nothing cut mid-line",
+            b.source
         ));
     }
 }
