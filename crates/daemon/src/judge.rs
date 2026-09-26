@@ -51,6 +51,43 @@ const CODE_EXTS: &[&str] = &[
     "cpp", "hpp", "rb", "php", "sh", "bash", "zsh", "lua", "scala", "cs", "sql", "pyx", "pyi",
 ];
 
+const CONFIG_EXTS: &[&str] = &[
+    "toml",
+    "ini",
+    "cfg",
+    "conf",
+    "yaml",
+    "yml",
+    "json",
+    "jsonc",
+    "properties",
+    "env",
+];
+
+/// Class of a non-code match by where it lives: CI definition, tool/dot config, or docs.
+pub(crate) fn non_code_class(rel: &str) -> &'static str {
+    let lower = rel.to_ascii_lowercase();
+    let file = lower.rsplit('/').next().unwrap_or(&lower);
+    let ci = lower.starts_with(".github/workflows/")
+        || lower.contains("/.github/workflows/")
+        || lower.starts_with(".circleci/")
+        || lower.starts_with(".buildkite/")
+        || file == ".gitlab-ci.yml"
+        || file == ".travis.yml"
+        || file == "azure-pipelines.yml"
+        || file == "jenkinsfile";
+    if ci {
+        return "ci";
+    }
+    let hidden = lower.split('/').any(|c| c.starts_with('.') && c.len() > 1);
+    let ext = file.rsplit_once('.').map(|x| x.1).unwrap_or("");
+    if hidden || CONFIG_EXTS.contains(&ext) {
+        "config"
+    } else {
+        "docs"
+    }
+}
+
 /// Name to look up when the pattern is a plain identifier (optionally dotted, optionally `\b`-wrapped).
 pub fn identifier_of(spec: &SearchSpec) -> Option<String> {
     if spec.patterns.len() != 1 {
@@ -354,48 +391,38 @@ fn kind_word(k: EdgeKind) -> &'static str {
     }
 }
 
-fn more_hint(spec: &SearchSpec) -> String {
-    if spec.label.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "graphite-hook run --all -- '{}'",
-            spec.label.replace('\'', "'\\''")
-        )
+/// The agent's own search, reduced to a grep it can re-run on a narrower path ("see more" hints
+/// stay in the vocabulary the agent believes it used).
+fn hint_base(spec: &SearchSpec) -> String {
+    let Some(p) = spec.patterns.first() else {
+        return String::new();
+    };
+    let mut flags = String::from("-rn");
+    if spec.ignore_case {
+        flags.push('i');
     }
+    if spec.word {
+        flags.push('w');
+    }
+    if spec.fixed {
+        flags.push('F');
+    } else if p.contains('|') || p.contains('+') || p.contains('?') {
+        flags.push('E');
+    }
+    let quoted = if p
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+    {
+        p.clone()
+    } else {
+        format!("'{}'", p.replace('\'', "'\\''"))
+    };
+    format!("grep {flags} {quoted}")
 }
 
-fn excluded_note(res: &SearchOutcome, cwd: &Path) -> Option<String> {
-    if res.excluded_dirs.is_empty() || (res.excluded_matches == 0 && res.excluded_scan_complete) {
-        return None;
-    }
-    let mut dirs: Vec<String> = res
-        .excluded_dirs
-        .iter()
-        .map(|d| format!("{}/", display_path(d, cwd)))
-        .collect();
-    dirs.sort();
-    let shown: Vec<String> = dirs.iter().take(6).cloned().collect();
-    let extra = dirs.len().saturating_sub(shown.len());
-    let noun = if res.excluded_matches == 1 {
-        "match"
-    } else {
-        "matches"
-    };
-    let count = if res.excluded_scan_complete {
-        format!("{} {noun}", res.excluded_matches)
-    } else {
-        format!("≥{} {noun} (count cut short)", res.excluded_matches)
-    };
-    Some(format!(
-        "{count} in hidden/excluded dirs omitted: {}{} — name the dir explicitly (or rg --hidden) to search it",
-        shown.join(" "),
-        if extra > 0 {
-            format!(" +{extra} more")
-        } else {
-            String::new()
-        }
-    ))
+fn secrets_note(res: &SearchOutcome) -> Option<String> {
+    (res.secrets_skipped > 0)
+        .then(|| "secret-looking files skipped unread (.env, keys, credentials)".to_string())
 }
 
 /// Per-caller facts from the query layer, keyed by (caller path, site line).
@@ -404,7 +431,7 @@ struct TargetFacts {
     target: Target,
     called_by: HashMap<(String, u32), (Vec<String>, u32)>,
     indirect_total: u32,
-    indirect: Vec<String>,
+    indirect: Vec<crate::answer::IndirectGroup>,
     tests_total: u32,
     tests: Vec<String>,
     overrides: Vec<String>,
@@ -457,13 +484,14 @@ fn target_facts(engine: &Engine, stale: bool, sym: &Symbol, cwd: &Path) -> Targe
             .as_str()
             .unwrap_or_default()
             .to_string();
-        let by: Vec<String> = cs["called_by"]
+        // Caller chains are production-only; tests live in the covering-tests list.
+        let by: Vec<String> = cs["called_by_prod"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(|x| x.as_str().map(String::from))
             .collect();
-        let total = u(&cs["called_by_total"]);
+        let total = u(&cs["called_by_prod_total"]);
         for l in cs["lines"].as_array().into_iter().flatten() {
             out.called_by
                 .insert((path.clone(), u(l)), (by.clone(), total));
@@ -472,19 +500,18 @@ fn target_facts(engine: &Engine, stale: bool, sym: &Symbol, cwd: &Path) -> Targe
     let ind = &r["indirect"];
     out.indirect_total = u(&ind["total"]);
     for g in ind["groups"].as_array().into_iter().flatten().take(5) {
-        let top: Vec<&str> = g["top"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .take(3)
-            .collect();
-        out.indirect.push(format!(
-            "{} {} ({})",
-            g["module"].as_str().unwrap_or("?"),
-            u(&g["count"]),
-            top.join(", ")
-        ));
+        out.indirect.push(crate::answer::IndirectGroup {
+            module: g["module"].as_str().unwrap_or("?").to_string(),
+            count: u(&g["count"]),
+            top: g["top"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .take(3)
+                .map(String::from)
+                .collect(),
+        });
     }
     out.tests_total = u(&r["tests"]["total"]);
     out.tests = r["tests"]["items"]
@@ -492,7 +519,7 @@ fn target_facts(engine: &Engine, stale: bool, sym: &Symbol, cwd: &Path) -> Targe
         .into_iter()
         .flatten()
         .filter_map(|t| t["node_id"].as_str().map(String::from))
-        .take(4)
+        .take(crate::answer::MAX_TESTS_LISTED)
         .collect();
     for o in r["overrides"].as_array().into_iter().flatten() {
         let s = &o["symbol"];
@@ -607,7 +634,7 @@ pub fn build(
         files: nfiles.len(),
         name: facts.as_ref().map(|f| f.name.clone()),
         all: spec.all,
-        more_hint: more_hint(spec),
+        hint_base: hint_base(spec),
         budget: spec.budget.clone(),
         ..Default::default()
     };
@@ -623,7 +650,7 @@ pub fn build(
             crate::search::MAX_MATCHES
         ));
     }
-    if let Some(n) = excluded_note(res, &cwd) {
+    if let Some(n) = secrets_note(res) {
         a.omitted.push(n);
     }
 
@@ -667,7 +694,7 @@ pub fn build(
         "files": nfiles.len(),
         "classes": class_counts,
         "alias_refs": alias_refs,
-        "excluded_matches": res.excluded_matches,
+        "secrets_skipped": res.secrets_skipped,
         "raw_bytes": raw_bytes,
     });
     Ok((a, stats))
@@ -728,7 +755,7 @@ fn identifier_items(
         a.footer.indirect.extend(tf.indirect);
         a.footer.tests_total += tf.tests_total;
         for t in tf.tests {
-            if a.footer.tests.len() < 4 {
+            if a.footer.tests.len() < crate::answer::MAX_TESTS_LISTED {
                 a.footer.tests.push(t);
             }
         }
@@ -841,8 +868,14 @@ fn identifier_items(
                 it.why = "Python file outside the index (ignored or unindexable path)".into();
             }
             Class::DocsConfig => {
-                it.class = "docs".into();
-                it.why = "non-code file (docs/config)".into();
+                let c = non_code_class(&rel);
+                it.class = c.into();
+                it.why = match c {
+                    "ci" => "CI definition (non-code file)",
+                    "config" => "tool/dot configuration (non-code file)",
+                    _ => "documentation or other non-code file",
+                }
+                .into();
             }
             Class::OtherIdentifier => {
                 it.class = "other_identifier".into();
@@ -945,11 +978,17 @@ fn grouped_items(
         let test = rel
             .as_deref()
             .is_some_and(graphite_extract_python::is_test_path);
+        let ext = ext_of(&h.abs);
+        let non_code = ext != "py" && !CODE_EXTS.contains(&ext.as_str());
+        let class = match (&rel, non_code) {
+            (Some(r), true) => non_code_class(r),
+            _ => "match",
+        };
         a.items.push(Item {
             path: h.display.clone(),
             line: h.line,
             text: h.text.clone(),
-            class: "match".into(),
+            class: class.into(),
             in_fn: group.as_ref().map(short_label),
             test,
             why: match &group {
@@ -1046,6 +1085,17 @@ mod tests {
             fixed,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn non_code_classes_by_location() {
+        assert_eq!(non_code_class(".github/workflows/ci.yml"), "ci");
+        assert_eq!(non_code_class("site/.github/workflows/deploy.yml"), "ci");
+        assert_eq!(non_code_class(".gitlab-ci.yml"), "ci");
+        assert_eq!(non_code_class(".pre-commit-config.yaml"), "config");
+        assert_eq!(non_code_class(".agents/notes.md"), "config");
+        assert_eq!(non_code_class("pyproject.toml"), "config");
+        assert_eq!(non_code_class("docs/owner.md"), "docs");
     }
 
     #[test]

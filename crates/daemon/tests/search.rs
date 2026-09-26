@@ -67,7 +67,7 @@ fn identifier_search_accounts_for_every_match() {
     assert_eq!(c["docs_config"], 1, "{text}");
     assert_eq!(c["other_language"], 1, "{text}");
     assert_eq!(stats["alias_refs"], 1, "{text}"); // ro() via `as ro`
-    assert_eq!(stats["excluded_matches"], 1, "{text}");
+    assert_eq!(stats["secrets_skipped"], 0, "{text}");
     // Every text match is accounted for: printed or counted.
     let total: u64 = c
         .as_object()
@@ -77,10 +77,8 @@ fn identifier_search_accounts_for_every_match() {
         .sum();
     assert_eq!(total, res.hits.len() as u64);
     assert!(text.contains("pkg/alias.py:4:    return ro()"), "{text}");
-    assert!(
-        text.contains("1 match in hidden/excluded dirs omitted: .venv/"),
-        "{text}"
-    );
+    // .venv is noise: never searched, never mentioned.
+    assert!(!text.contains(".venv"), "{text}");
     assert!(text.contains("name guess"), "{text}");
     assert!(!text.contains(".git/"), "{text}");
 }
@@ -119,9 +117,7 @@ fn caps_disclose_the_rest() {
     let res = search::run(&s, &root).unwrap();
     let (text, _) = judge::render(&engine, &s, &res, false).unwrap();
     assert!(
-        text.contains(
-            "not shown: match 376 — all: graphite-hook run --all -- 'grep -rn needle [0-9]+ .'"
-        ),
+        text.contains("not shown: docs 376 — to see them: grep -rnE 'needle [0-9]+' notes.txt"),
         "{text}"
     );
 }
@@ -234,7 +230,10 @@ fn line_filter_keeps_header_and_footer() {
     assert!(body[0].starts_with("pkg/alias.py:4:"), "{text}");
     assert!(text.starts_with("# graphite:"), "{text}");
     assert!(
-        text.lines().last().unwrap().contains("covering tests"),
+        text.lines()
+            .last()
+            .unwrap()
+            .contains("no test covers `resolve_owner` ⚠"),
         "{text}"
     );
 }

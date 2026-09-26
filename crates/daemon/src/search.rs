@@ -1,9 +1,14 @@
-//! Embedded text search (ripgrep crates, in-process) with the indexer's excludes.
+//! Embedded text search (ripgrep crates, in-process).
+//!
+//! Exclusion is by reason, not by leading dot: noise (VCS/Graphite state, dependency envs,
+//! caches, build output, duplicate checkouts) is never entered; secrets are never opened, not
+//! even to count, unless the command names that exact file; every other hidden file or dir
+//! (`.github/`, tool configs) is searched like any other, respecting `.gitignore`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use grep_matcher::Matcher;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
@@ -14,13 +19,10 @@ use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::paths::DEFAULT_EXCLUDES;
+use crate::paths::{is_noise_dir, is_secret_name, NOISE_DIRS};
 
 /// Hard stop so a pathological pattern can't exhaust memory; always disclosed.
 pub const MAX_MATCHES: usize = 20_000;
-
-/// Time spent counting matches inside excluded dirs, for the "omitted" disclosure.
-const EXCLUDED_SCAN_BUDGET: Duration = Duration::from_millis(100);
 
 /// A grep/rg/ack/ag invocation normalized by the hook; patterns are Rust-regex syntax unless `fixed`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -47,10 +49,10 @@ pub struct SearchSpec {
     pub paths: Vec<String>,
     /// Directory the command ran in; display paths are relative to it.
     pub cwd: String,
-    /// Disable .gitignore and default excludes (rg -u / --no-ignore).
+    /// Disable .gitignore and noise excludes (rg -u / --no-ignore). Secrets stay unread.
     #[serde(default)]
     pub no_ignore: bool,
-    /// Descend into hidden directories (rg --hidden / -.).
+    /// rg --hidden / -. — accepted for compatibility; non-noise hidden paths are always searched.
     #[serde(default)]
     pub hidden: bool,
     /// Print everything: no per-section caps.
@@ -62,7 +64,7 @@ pub struct SearchSpec {
     /// Which view of the answer to return.
     #[serde(default)]
     pub format: crate::answer::OutFormat,
-    /// The agent's `| head …`/`| tail …`, honored as an answer budget instead of a byte cut.
+    /// The agent's `| head …`, honored as an answer budget instead of a byte cut (`tail` runs raw).
     #[serde(default)]
     pub budget: Option<crate::answer::Budget>,
     /// The agent filtered test lines out (`| grep -v test`): drop test matches, disclose counts.
@@ -90,12 +92,8 @@ pub struct SearchOutcome {
     pub hits: Vec<Hit>,
     /// Absolute paths of every file searched.
     pub searched: HashSet<PathBuf>,
-    /// Excluded directories encountered under the search roots.
-    pub excluded_dirs: Vec<PathBuf>,
-    /// Matches found inside `excluded_dirs` within the scan budget.
-    pub excluded_matches: u64,
-    /// False if the budget ran out before every excluded dir was scanned.
-    pub excluded_scan_complete: bool,
+    /// Secret-looking files/dirs in scope that were skipped without being opened.
+    pub secrets_skipped: usize,
     pub truncated: bool,
 }
 
@@ -132,20 +130,19 @@ pub fn display_path(abs: &Path, cwd: &Path) -> String {
     }
 }
 
-/// True if any component of `p` is a default-excluded or hidden directory name.
-pub fn under_excluded(p: &Path) -> bool {
-    p.components().any(|c| match c {
-        std::path::Component::Normal(n) => {
-            let n = n.to_string_lossy();
-            DEFAULT_EXCLUDES.contains(&n.as_ref()) || n.starts_with('.')
-        }
-        _ => false,
-    })
-}
-
-/// Directory skipped by a filtered walk: default excludes, and hidden dirs unless `hidden`.
-fn excluded_dir_name(name: &str, hidden: bool) -> bool {
-    DEFAULT_EXCLUDES.contains(&name) || (!hidden && name.starts_with('.'))
+/// True if `rel` (repo-relative) lies inside a noise location — the command named it on purpose.
+pub fn under_noise(rel: &Path) -> bool {
+    let comps: Vec<String> = rel
+        .components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect();
+    comps.iter().any(|c| NOISE_DIRS.contains(&c.as_str()))
+        || comps
+            .windows(2)
+            .any(|w| w[0] == ".claude" && w[1] == "worktrees")
 }
 
 /// Matching lines of one file, in line order.
@@ -176,14 +173,17 @@ fn search_file(matcher: &RegexMatcher, abs: &Path, cwd: &Path) -> Vec<Hit> {
     hits
 }
 
+/// Walk `root`. `gitignore` applies .gitignore/.ignore; `skip_noise` skips noise dirs.
+/// Secret-looking entries are always skipped unopened and counted.
 fn walker(
     root: &Path,
     spec: &SearchSpec,
-    filtered: bool,
-    skipped: Arc<Mutex<Vec<PathBuf>>>,
+    gitignore: bool,
+    skip_noise: bool,
+    secrets: Arc<AtomicUsize>,
 ) -> ignore::Walk {
     let mut b = WalkBuilder::new(root);
-    b.standard_filters(filtered)
+    b.standard_filters(gitignore)
         .hidden(false)
         .require_git(false)
         .sort_by_file_name(|a, b| a.cmp(b));
@@ -196,30 +196,30 @@ fn walker(
             b.overrides(ov);
         }
     }
-    if filtered {
-        let hidden = spec.hidden;
-        b.filter_entry(move |e| {
-            let is_dir = e.file_type().is_some_and(|t| t.is_dir());
-            let name = e.file_name().to_string_lossy();
-            if is_dir && e.depth() > 0 && excluded_dir_name(&name, hidden) {
-                // VCS and Graphite state never hold matches worth disclosing.
-                if name != ".git" && name != crate::paths::STATE_DIR {
-                    skipped.lock().unwrap().push(e.path().to_path_buf());
-                }
-                return false;
-            }
-            true
-        });
-    }
+    b.filter_entry(move |e| {
+        if e.depth() == 0 {
+            return true;
+        }
+        let name = e.file_name().to_string_lossy();
+        if name == ".git" {
+            return false; // VCS dir, or a worktree's `.git` pointer file
+        }
+        if is_secret_name(&name) {
+            secrets.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        let is_dir = e.file_type().is_some_and(|t| t.is_dir());
+        !(skip_noise && is_dir && is_noise_dir(e.path(), &name, e.depth()))
+    });
     b.build()
 }
 
-/// Run the search under `repo_root`. Explicit paths into excluded locations are searched unfiltered.
+/// Run the search under `repo_root`. Paths the command names inside noise dirs are searched.
 pub fn run(spec: &SearchSpec, repo_root: &Path) -> Result<SearchOutcome, String> {
     let matcher = build_matcher(spec)?;
     let cwd = PathBuf::from(&spec.cwd);
     let mut out = SearchOutcome::default();
-    let skipped = Arc::new(Mutex::new(Vec::new()));
+    let secrets = Arc::new(AtomicUsize::new(0));
     let mut files: Vec<PathBuf> = Vec::new();
     for p in &spec.paths {
         let root = PathBuf::from(p);
@@ -231,9 +231,10 @@ pub fn run(spec: &SearchSpec, repo_root: &Path) -> Result<SearchOutcome, String>
             continue;
         }
         let rel = root.strip_prefix(repo_root).unwrap_or(&root);
-        let filtered = !spec.no_ignore && !under_excluded(rel);
+        // A path the command names inside a noise location is searched on purpose.
+        let skip_noise = !spec.no_ignore && !under_noise(rel);
         files.extend(
-            walker(&root, spec, filtered, skipped.clone())
+            walker(&root, spec, !spec.no_ignore, skip_noise, secrets.clone())
                 .flatten()
                 .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
                 .map(|e| e.into_path()),
@@ -254,41 +255,8 @@ pub fn run(spec: &SearchSpec, repo_root: &Path) -> Result<SearchOutcome, String>
         }
         out.hits.extend(hits);
     }
-    out.excluded_dirs = std::mem::take(&mut *skipped.lock().unwrap());
-    count_excluded(spec, &matcher, &mut out);
+    out.secrets_skipped = secrets.load(Ordering::Relaxed);
     Ok(out)
-}
-
-/// Count matches the default excludes hid, within a small time budget.
-fn count_excluded(spec: &SearchSpec, matcher: &RegexMatcher, out: &mut SearchOutcome) {
-    out.excluded_scan_complete = true;
-    if out.excluded_dirs.is_empty() {
-        return;
-    }
-    let deadline = Instant::now() + EXCLUDED_SCAN_BUDGET;
-    let mut s = searcher();
-    let none = Arc::new(Mutex::new(Vec::new()));
-    'dirs: for d in &out.excluded_dirs {
-        for e in walker(d, spec, false, none.clone()).flatten() {
-            if Instant::now() > deadline {
-                out.excluded_scan_complete = false;
-                break 'dirs;
-            }
-            if !e.file_type().is_some_and(|t| t.is_file()) {
-                continue;
-            }
-            let mut n = 0u64;
-            let _ = s.search_path(
-                matcher,
-                e.path(),
-                Lossy(|_, _| {
-                    n += 1;
-                    Ok(true)
-                }),
-            );
-            out.excluded_matches += n;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -305,63 +273,120 @@ mod tests {
     }
 
     #[test]
-    fn skips_default_excludes_but_counts_them() {
+    fn skips_noise_dirs_unless_targeted() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().canonicalize().unwrap();
         std::fs::create_dir_all(root.join(".venv/lib")).unwrap();
-        std::fs::create_dir_all(root.join("pkg")).unwrap();
+        std::fs::create_dir_all(root.join("pkg/__pycache__")).unwrap();
         std::fs::write(root.join(".venv/lib/x.py"), "needle\n").unwrap();
+        std::fs::write(root.join("pkg/__pycache__/a.py"), "needle\n").unwrap();
         std::fs::write(root.join("pkg/a.py"), "x = 1\nneedle()\n").unwrap();
         let out = run(&spec(&root, "needle"), &root).unwrap();
-        assert_eq!(out.hits.len(), 1);
-        assert_eq!(out.hits[0].display, "pkg/a.py");
+        let shown: Vec<&str> = out.hits.iter().map(|h| h.display.as_str()).collect();
+        assert_eq!(shown, vec!["pkg/a.py"]);
         assert_eq!(out.hits[0].line, 2);
-        assert_eq!(out.excluded_matches, 1);
 
-        // An explicit path into an excluded dir is searched.
+        // A path the command names inside a noise dir is searched.
         let mut s = spec(&root, "needle");
         s.paths = vec![root.join(".venv").to_string_lossy().into()];
         assert_eq!(run(&s, &root).unwrap().hits.len(), 1);
     }
 
     #[test]
-    fn skips_hidden_dirs_unless_targeted_or_hidden_flag() {
+    fn duplicate_checkouts_are_noise_other_hidden_paths_are_searched() {
         let d = tempfile::tempdir().unwrap();
         let root = d.path().canonicalize().unwrap();
+        // .claude/worktrees copies and any git worktree (a dir with a `.git` FILE).
         std::fs::create_dir_all(root.join(".claude/worktrees/a/pkg")).unwrap();
+        std::fs::write(root.join(".claude/worktrees/a/pkg/a.py"), "needle()\n").unwrap();
+        std::fs::create_dir_all(root.join("wt/pkg")).unwrap();
+        std::fs::write(root.join("wt/.git"), "gitdir: /elsewhere\n").unwrap();
+        std::fs::write(root.join("wt/pkg/a.py"), "needle()\n").unwrap();
+        // Relevant hidden paths: CI, tool config, hidden agent dirs.
+        std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
+        std::fs::write(root.join(".github/workflows/ci.yml"), "run: needle\n").unwrap();
+        std::fs::write(root.join(".pre-commit-config.yaml"), "id: needle\n").unwrap();
         std::fs::create_dir_all(root.join("pkg")).unwrap();
-        std::fs::write(
-            root.join(".claude/worktrees/a/pkg/a.py"),
-            "needle()\nneedle()\n",
-        )
-        .unwrap();
         std::fs::write(root.join("pkg/a.py"), "needle()\n").unwrap();
-        std::fs::write(root.join(".env.py"), "needle\n").unwrap();
 
         let out = run(&spec(&root, "needle"), &root).unwrap();
         let shown: Vec<&str> = out.hits.iter().map(|h| h.display.as_str()).collect();
         assert_eq!(
             shown,
-            vec![".env.py", "pkg/a.py"],
-            "hidden files stay; hidden dirs go"
+            vec![
+                ".github/workflows/ci.yml",
+                ".pre-commit-config.yaml",
+                "pkg/a.py"
+            ],
+            "checkout copies skipped; CI/config searched"
         );
-        assert_eq!(out.excluded_matches, 2);
-        assert!(out.excluded_scan_complete);
-        assert_eq!(out.excluded_dirs, vec![root.join(".claude")]);
 
         let mut s = spec(&root, "needle");
         s.paths = vec![root.join(".claude/worktrees").to_string_lossy().into()];
         assert_eq!(
             run(&s, &root).unwrap().hits.len(),
-            2,
-            "explicit hidden path"
+            1,
+            "named copy is searched"
         );
+    }
 
+    /// A FIFO blocks forever when opened for reading: the search finishing proves it was not opened.
+    fn fifo(p: &Path) {
+        let ok = std::process::Command::new("mkfifo")
+            .arg(p)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+    }
+
+    #[test]
+    fn secrets_are_never_opened_even_with_no_ignore() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("cfg/.envs")).unwrap();
+        std::fs::create_dir_all(root.join("pkg")).unwrap();
+        fifo(&root.join(".env"));
+        fifo(&root.join("cfg/.envs/prod"));
+        fifo(&root.join("pkg/server.pem"));
+        fifo(&root.join("pkg/credentials.json"));
+        std::fs::write(root.join("pkg/a.py"), "needle()\n").unwrap();
+        for no_ignore in [false, true] {
+            let mut s = spec(&root, "needle");
+            s.no_ignore = no_ignore;
+            let r2 = root.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || tx.send(run(&s, &r2).unwrap()).unwrap());
+            let out = rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("search opened a secret file (blocked on a FIFO)");
+            assert_eq!(out.hits.len(), 1);
+            assert_eq!(out.secrets_skipped, 4, "no_ignore={no_ignore}");
+        }
+        // Named exactly by the command: read.
+        std::fs::remove_file(root.join(".env")).unwrap();
+        std::fs::write(root.join(".env"), "needle=1\n").unwrap();
         let mut s = spec(&root, "needle");
-        s.hidden = true;
-        let out = run(&s, &root).unwrap();
-        assert_eq!(out.hits.len(), 4, "--hidden searches hidden dirs");
-        assert_eq!(out.excluded_matches, 0);
+        s.paths = vec![root.join(".env").to_string_lossy().into()];
+        assert_eq!(run(&s, &root).unwrap().hits.len(), 1);
+    }
+
+    #[test]
+    fn same_query_twice_is_identical() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().canonicalize().unwrap();
+        for i in 0..40 {
+            std::fs::create_dir_all(root.join(format!("m{i}"))).unwrap();
+            std::fs::write(root.join(format!("m{i}/a.py")), "needle()\nneedle\n").unwrap();
+        }
+        let a = run(&spec(&root, "needle"), &root).unwrap();
+        let b = run(&spec(&root, "needle"), &root).unwrap();
+        let key = |o: &SearchOutcome| {
+            o.hits
+                .iter()
+                .map(|h| format!("{}:{}:{}", h.display, h.line, h.text))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(key(&a), key(&b));
     }
 
     #[test]

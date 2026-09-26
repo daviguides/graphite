@@ -26,7 +26,7 @@ pub enum OutFormat {
     Explain,
 }
 
-/// Answer-size budget taken from the agent's own `| head …` / `| tail …`.
+/// Answer-size budget taken from the agent's own `| head …` (`| tail` runs the raw command).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Budget {
     pub bytes: Option<usize>,
@@ -71,8 +71,9 @@ pub struct Item {
     pub path: String,
     pub line: u32,
     pub text: String,
-    /// definition | call | graph_only | import | mock_in_test | string_comment | docs |
-    /// unresolved_call | untracked_code | other_language | not_indexed | other_identifier | match
+    /// definition | call | graph_only | import | mock_in_test | string_comment | ci | config |
+    /// docs | unresolved_call | untracked_code | other_language | not_indexed |
+    /// other_identifier | match
     pub class: String,
     /// Enclosing function of a reference (or of a match, for non-identifier searches).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,12 +102,22 @@ pub struct Item {
     pub after: Vec<(u32, String)>,
 }
 
+/// Indirect dependents of one module.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct IndirectGroup {
+    pub module: String,
+    pub count: u32,
+    pub top: Vec<String>,
+}
+
+/// Covering tests listed by name (closest first); the total is always given.
+pub const MAX_TESTS_LISTED: usize = 5;
+
 /// Facts that are not one matching line.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Footer {
     pub indirect_total: u32,
-    /// `module N (top, top)` groups.
-    pub indirect: Vec<String>,
+    pub indirect: Vec<IndirectGroup>,
     pub tests_total: u32,
     pub tests: Vec<String>,
     pub overrides: Vec<String>,
@@ -137,8 +148,9 @@ pub struct Answer {
     pub notices: Vec<String>,
     /// List everything (no caps).
     pub all: bool,
-    /// `graphite-hook run --all -- '<cmd>'`, empty when unknown.
-    pub more_hint: String,
+    /// The agent's search as a plain grep (`grep -rn 'pat'`), for "see more" hints on a narrower path.
+    #[serde(default)]
+    pub hint_base: String,
     pub budget: Option<Budget>,
 }
 
@@ -157,11 +169,13 @@ pub fn rank(class: &str, test: bool) -> u8 {
         ("untracked_code", _) => 6,
         ("match", _) => 6,
         ("string_comment", _) => 7,
-        ("docs", _) => 8,
-        ("other_language", _) => 9,
-        ("not_indexed", _) => 10,
-        ("other_identifier", _) => 11,
-        _ => 12,
+        ("ci", _) => 8,
+        ("config", _) => 9,
+        ("docs", _) => 10,
+        ("other_language", _) => 11,
+        ("not_indexed", _) => 12,
+        ("other_identifier", _) => 13,
+        _ => 14,
     }
 }
 
@@ -178,6 +192,8 @@ fn label(class: &str) -> &'static str {
         "import" => "import",
         "mock_in_test" => "mock in test",
         "string_comment" => "string/comment",
+        "ci" => "ci",
+        "config" => "config",
         "docs" => "docs",
         "unresolved_call" => "unresolved call",
         "untracked_code" => "untracked code use",
@@ -318,72 +334,263 @@ pub fn header_line(a: &Answer) -> String {
     h
 }
 
-/// The footer, from facts plus what this rendering did not show.
-fn footer_line(a: &Answer, not_shown: &BTreeMap<String, usize>, summarized: usize) -> String {
+/// Longest common directory prefix of `paths` (ends with `/`), or empty.
+fn common_dir(paths: &[&str]) -> String {
+    let Some(first) = paths.first() else {
+        return String::new();
+    };
+    let mut prefix: Vec<&str> = first.split('/').collect();
+    prefix.pop(); // last component may be a file or the leaf module itself
+    for p in &paths[1..] {
+        let comps: Vec<&str> = p.split('/').collect();
+        let n = prefix
+            .iter()
+            .zip(&comps)
+            .take_while(|(a, b)| a == b)
+            .count()
+            .min(comps.len().saturating_sub(1));
+        prefix.truncate(n);
+    }
+    if prefix.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", prefix.join("/"))
+    }
+}
+
+/// `pytest a/b/{x.py::T::t,y.py::U::u}` — runnable (shell brace expansion) and short.
+fn tests_run_line(ids: &[String]) -> String {
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let files: Vec<&str> = refs
+        .iter()
+        .map(|i| i.split("::").next().unwrap_or(i))
+        .collect();
+    let pre = common_dir(&files);
+    if ids.len() < 2 || pre.is_empty() {
+        return format!("pytest {}", ids.join(" "));
+    }
+    let rest: Vec<&str> = refs.iter().map(|i| &i[pre.len()..]).collect();
+    format!("pytest {pre}{{{}}}", rest.join(","))
+}
+
+/// Narrowest path covering the cut items (a file, or the directory holding most of them), for a
+/// re-run of the agent's own grep that fits.
+fn hint_dir(cut: &[String]) -> Option<String> {
+    let first = cut.first()?;
+    if cut.iter().all(|p| p == first) {
+        return Some(first.clone());
+    }
+    let refs: Vec<&str> = cut.iter().map(String::as_str).collect();
+    let common = common_dir(&refs);
+    if !common.is_empty() {
+        return Some(common);
+    }
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for p in cut {
+        let comps: Vec<&str> = p.split('/').collect();
+        let dirs = comps.len().saturating_sub(1).min(3);
+        let d = if dirs == 0 {
+            ".".to_string()
+        } else {
+            comps[..dirs].join("/") + "/"
+        };
+        *counts.entry(d).or_default() += 1;
+    }
+    counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|(d, _)| d)
+}
+
+/// One footer item with degraded forms, richest first. Priority: lower is kept longer.
+struct Part {
+    priority: u8,
+    /// Disclosures that must survive any budget (tests warning, cuts, stale graph).
+    mandatory: bool,
+    forms: Vec<String>,
+}
+
+/// The footer: each fact judged on its own (sent only when it carries information), rendered as
+/// rich as the allowance permits. Degrade order under a tight allowance: examples go first, then
+/// low-priority parts (imports < indirect < tests to run); mandatory disclosures always stay.
+fn footer_line(
+    a: &Answer,
+    not_shown: &BTreeMap<String, usize>,
+    cut_paths: &[String],
+    summarized: usize,
+    allowance: Option<usize>,
+) -> String {
     let f = &a.footer;
-    let compact = a.budget.is_some();
-    let mut parts: Vec<String> = Vec::new();
+    let mut parts: Vec<Part> = Vec::new();
     if a.mode == "identifier" && !a.targets.is_empty() {
-        if f.indirect_total > 0 && compact {
-            parts.push(format!("indirect (depth 2-3): {}", f.indirect_total));
-        } else if f.indirect_total > 0 {
-            parts.push(format!(
-                "indirect (depth 2-3): {} — {}",
-                f.indirect_total,
-                f.indirect.join("; ")
-            ));
+        if f.tests_total == 0 {
+            let name = a.name.as_deref().unwrap_or("target");
+            parts.push(Part {
+                priority: 0,
+                mandatory: true,
+                forms: vec![format!("no test covers `{name}` ⚠")],
+            });
         } else {
-            parts.push("indirect: none".into());
+            let mut forms = Vec::new();
+            if !f.tests.is_empty() {
+                forms.push(format!(
+                    "tests: {} — closest: {}",
+                    f.tests_total,
+                    tests_run_line(&f.tests)
+                ));
+            }
+            if f.tests.len() > 2 {
+                forms.push(format!(
+                    "tests: {} — closest: {}",
+                    f.tests_total,
+                    tests_run_line(&f.tests[..2])
+                ));
+            }
+            forms.push(format!("tests: {}", f.tests_total));
+            parts.push(Part {
+                priority: 1,
+                mandatory: false,
+                forms,
+            });
         }
-        if f.tests_total > 0 && (compact || f.tests.is_empty()) {
-            parts.push(format!("covering tests: {}", f.tests_total));
-        } else if f.tests_total > 0 {
-            parts.push(format!(
-                "covering tests: {} (e.g. {})",
-                f.tests_total,
-                f.tests.join(", ")
-            ));
-        } else {
-            parts.push("covering tests: none ⚠".into());
+        if f.indirect_total > 0 {
+            let mods: Vec<&str> = f.indirect.iter().map(|g| g.module.as_str()).collect();
+            let pre = common_dir(&mods);
+            let short = |m: &str| m.strip_prefix(pre.as_str()).unwrap_or(m).to_string();
+            let where_ = if pre.is_empty() {
+                String::new()
+            } else {
+                format!(" in {pre}")
+            };
+            let with_top: Vec<String> = f
+                .indirect
+                .iter()
+                .map(|g| format!("{} {} ({})", short(&g.module), g.count, g.top.join(", ")))
+                .collect();
+            let counts: Vec<String> = f
+                .indirect
+                .iter()
+                .map(|g| format!("{} {}", short(&g.module), g.count))
+                .collect();
+            let n = f.indirect_total;
+            parts.push(Part {
+                priority: 2,
+                mandatory: false,
+                forms: vec![
+                    format!(
+                        "indirect (depth 2-3): {n}{where_} — {}",
+                        with_top.join("; ")
+                    ),
+                    format!("indirect (depth 2-3): {n}{where_} — {}", counts.join(", ")),
+                    format!(
+                        "indirect (depth 2-3): {n}{where_} — {}",
+                        counts
+                            .iter()
+                            .take(2)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    format!("indirect (depth 2-3): {n}"),
+                ],
+            });
         }
         if !f.overrides.is_empty() {
-            parts.push(format!("overrides: {}", f.overrides.join(", ")));
+            let shown: Vec<String> = f.overrides.iter().take(3).cloned().collect();
+            let more = f.overrides.len().saturating_sub(shown.len());
+            let tail = if more > 0 {
+                format!(" (+{more})")
+            } else {
+                String::new()
+            };
+            parts.push(Part {
+                priority: 1,
+                mandatory: false,
+                forms: vec![
+                    format!("overrides: {}{tail}", shown.join(", ")),
+                    format!("overrides: {}", f.overrides.len()),
+                ],
+            });
         }
     }
     if f.import_lines > 0 && !a.all {
-        parts.push(format!(
-            "imports: {} lines in {} files (not listed)",
-            f.import_lines, f.import_files
-        ));
+        parts.push(Part {
+            priority: 3,
+            mandatory: false,
+            forms: vec![format!(
+                "imports: {} lines in {} files (not listed)",
+                f.import_lines, f.import_files
+            )],
+        });
     }
     for o in &a.omitted {
-        let o = if compact {
-            o.split(" — ").next().unwrap_or(o)
-        } else {
-            o
-        };
-        parts.push(o.to_string());
+        let secret = o.starts_with("secret-looking");
+        parts.push(Part {
+            priority: if secret { 4 } else { 0 },
+            mandatory: !secret,
+            forms: vec![o.clone()],
+        });
     }
+    let mut cut_note = Vec::new();
     if summarized > 0 {
-        parts.push(format!(
-            "{summarized} call sites collapsed per file to fit the budget"
-        ));
+        cut_note.push(format!("{summarized} call sites collapsed per file"));
     }
     if !not_shown.is_empty() {
         let list: Vec<String> = not_shown
             .iter()
             .map(|(c, n)| format!("{} {n}", label(c)))
             .collect();
-        parts.push(format!("not shown: {}", list.join(", ")));
+        cut_note.push(format!("not shown: {}", list.join(", ")));
+    }
+    if !cut_note.is_empty() {
+        let mut t = cut_note.join(" · ");
+        if let Some(dir) = hint_dir(cut_paths).filter(|_| !a.hint_base.is_empty()) {
+            let _ = write!(t, " — to see them: {} {dir}", a.hint_base);
+        }
+        parts.push(Part {
+            priority: 0,
+            mandatory: true,
+            forms: vec![t],
+        });
     }
     if parts.is_empty() {
         return String::new();
     }
-    let mut s = format!("# {}", parts.join(" · "));
-    if (!not_shown.is_empty() || (f.import_lines > 0 && !a.all)) && !a.more_hint.is_empty() {
-        let _ = write!(s, " — all: {}", a.more_hint);
+    parts.sort_by_key(|p| p.priority);
+    let mut level = vec![0usize; parts.len()];
+    let mut keep = vec![true; parts.len()];
+    let text = |level: &[usize], keep: &[bool]| -> String {
+        let items: Vec<&str> = parts
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| keep[*i])
+            .map(|(i, p)| p.forms[level[i].min(p.forms.len() - 1)].as_str())
+            .collect();
+        format!("# {}", items.join(" · "))
+    };
+    let Some(max) = allowance else {
+        return text(&level, &keep);
+    };
+    // Degrade lowest priority first, one step at a time; then drop optional parts from the bottom.
+    loop {
+        if text(&level, &keep).len() <= max {
+            return text(&level, &keep);
+        }
+        let step = (0..parts.len())
+            .rev()
+            .find(|&i| keep[i] && level[i] + 1 < parts[i].forms.len());
+        if let Some(i) = step {
+            level[i] += 1;
+            continue;
+        }
+        match (0..parts.len())
+            .rev()
+            .find(|&i| keep[i] && !parts[i].mandatory)
+        {
+            Some(i) => keep[i] = false,
+            None => return text(&level, &keep),
+        }
     }
-    s
 }
 
 fn with_nl(s: String) -> String {
@@ -422,6 +629,7 @@ pub fn render_model(a: &Answer) -> String {
     let byte_cap = a.budget.as_ref().and_then(|b| b.bytes);
     let line_cap = a.budget.as_ref().and_then(|b| b.lines);
     let mut not_shown: BTreeMap<String, usize> = BTreeMap::new();
+    let mut cut_paths: Vec<String> = Vec::new();
 
     // Unbudgeted: section caps only.
     if byte_cap.is_none() && line_cap.is_none() {
@@ -441,9 +649,13 @@ pub fn render_model(a: &Answer) -> String {
                 body.push_str(&item_block(it));
             } else {
                 *not_shown.entry(it.class.clone()).or_default() += 1;
+                cut_paths.push(it.path.clone());
             }
         }
-        return format!("{head}{body}{}", with_nl(footer_line(a, &not_shown, 0)));
+        return format!(
+            "{head}{body}{}",
+            with_nl(footer_line(a, &not_shown, &cut_paths, 0, None))
+        );
     }
 
     // Budgeted: header first; then definitions and direct call sites (full lines if they all
@@ -451,6 +663,8 @@ pub fn render_model(a: &Answer) -> String {
     // recomputed and chunks are dropped from the tail until the whole answer fits exactly.
     let bytes = byte_cap.unwrap_or(usize::MAX);
     let lines_max = line_cap.unwrap_or(usize::MAX);
+    // The footer gets a share of a byte budget; facts degrade inside it (see `footer_line`).
+    let allowance = byte_cap.map(|b| (b / 4).max(160));
     let prio: Vec<&Item> = listable
         .iter()
         .copied()
@@ -461,21 +675,27 @@ pub fn render_model(a: &Answer) -> String {
         .copied()
         .filter(|i| !is_priority(i))
         .collect();
-    // (text, classes of the items it carries, collapsed call sites)
-    let mut chunks: Vec<(String, Vec<String>, usize)> = Vec::new();
+    // (text, classes of the items it carries, collapsed call sites, their paths)
+    type Chunk = (String, Vec<String>, usize, Vec<String>);
+    let mut chunks: Vec<Chunk> = Vec::new();
     let head_lines = head.lines().count();
     let prio_blocks: Vec<String> = prio.iter().map(|i| item_block(i)).collect();
     let prio_bytes: usize = prio_blocks.iter().map(String::len).sum();
     let prio_lines: usize = prio_blocks.iter().map(|b| b.lines().count()).sum();
     if head.len() + prio_bytes < bytes && head_lines + prio_lines < lines_max {
         for (blk, it) in prio_blocks.into_iter().zip(&prio) {
-            chunks.push((blk, vec![it.class.clone()], 0));
+            chunks.push((blk, vec![it.class.clone()], 0, vec![it.path.clone()]));
         }
     } else {
         let (defs, calls): (Vec<&Item>, Vec<&Item>) =
             prio.iter().partition(|i| i.class == "definition");
         for it in defs {
-            chunks.push((item_block(it), vec![it.class.clone()], 0));
+            chunks.push((
+                item_block(it),
+                vec![it.class.clone()],
+                0,
+                vec![it.path.clone()],
+            ));
         }
         let mut by_file: Vec<(String, Vec<&Item>)> = Vec::new();
         for it in calls {
@@ -486,14 +706,20 @@ pub fn render_model(a: &Answer) -> String {
         }
         for (path, its) in by_file {
             let classes = its.iter().map(|i| i.class.clone()).collect();
-            chunks.push((collapsed(&path, &its) + "\n", classes, its.len()));
+            let paths = vec![path.clone(); its.len()];
+            chunks.push((collapsed(&path, &its) + "\n", classes, its.len(), paths));
         }
     }
     for it in &rest {
-        chunks.push((item_block(it), vec![it.class.clone()], 0));
+        chunks.push((
+            item_block(it),
+            vec![it.class.clone()],
+            0,
+            vec![it.path.clone()],
+        ));
     }
     // Greedy fill in order, then trim from the tail until header + body + footer fit.
-    let mut kept: Vec<(String, Vec<String>, usize)> = Vec::new();
+    let mut kept: Vec<Chunk> = Vec::new();
     let mut used = head.len();
     let mut nl = head_lines + 1;
     for ch in chunks {
@@ -505,14 +731,28 @@ pub fn render_model(a: &Answer) -> String {
             for c in ch.1 {
                 *not_shown.entry(c).or_default() += 1;
             }
+            cut_paths.extend(ch.3);
         }
     }
     loop {
         let summarized: usize = kept.iter().map(|c| c.2).sum();
         let body: String = kept.iter().map(|c| c.0.as_str()).collect();
+        // Collapsed call sites lost their text too: point the narrower re-run at them as well.
+        let mut hint_paths = cut_paths.clone();
+        hint_paths.extend(
+            kept.iter()
+                .filter(|c| c.2 > 0)
+                .flat_map(|c| c.3.iter().cloned()),
+        );
         let out = format!(
             "{head}{body}{}",
-            with_nl(footer_line(a, &not_shown, summarized))
+            with_nl(footer_line(
+                a,
+                &not_shown,
+                &hint_paths,
+                summarized,
+                allowance
+            ))
         );
         if (out.len() <= bytes && out.lines().count() <= lines_max) || kept.is_empty() {
             return out;
@@ -521,6 +761,7 @@ pub fn render_model(a: &Answer) -> String {
             for c in ch.1 {
                 *not_shown.entry(c).or_default() += 1;
             }
+            cut_paths.extend(ch.3);
         }
     }
 }
@@ -533,6 +774,7 @@ fn color(class: &str) -> &'static str {
         "call" | "graph_only" => "\x1b[36m",
         "mock_in_test" => "\x1b[35m",
         "unresolved_call" => "\x1b[33m",
+        "ci" | "config" => "\x1b[34m",
         "docs" | "string_comment" => "\x1b[90m",
         _ => "\x1b[2m",
     }
@@ -578,7 +820,7 @@ pub fn render_human(a: &Answer, colored: bool) -> String {
         }
         out.push('\n');
     }
-    let foot = footer_line(a, &BTreeMap::new(), 0);
+    let foot = footer_line(a, &BTreeMap::new(), &[], 0, None);
     for part in foot
         .trim_start_matches("# ")
         .split(" · ")
@@ -588,7 +830,7 @@ pub fn render_human(a: &Answer, colored: bool) -> String {
     }
     let _ = writeln!(
         out,
-        "\nlegend: ← enclosing fn ← its callers · [graph-only] reference text search can't see · [test] caller in test code · → definition it resolves to · [unresolved call] graph gap · [mock in test]/[docs]/[string/comment] non-call mentions"
+        "\nlegend: ← enclosing fn ← its production callers · [graph-only] reference text search can't see · [test] caller in test code · → definition it resolves to · [unresolved call] graph gap · [mock in test]/[ci]/[config]/[docs]/[string/comment] non-call mentions"
     );
     out
 }
@@ -608,7 +850,7 @@ pub fn render_explain(a: &Answer) -> String {
             it.why
         );
     }
-    out.push_str(&with_nl(footer_line(a, &BTreeMap::new(), 0)));
+    out.push_str(&with_nl(footer_line(a, &BTreeMap::new(), &[], 0, None)));
     out
 }
 
@@ -658,7 +900,7 @@ mod tests {
                 ..Default::default()
             }],
             items,
-            more_hint: "graphite-hook run --all -- 'grep -rn f .'".into(),
+            hint_base: "grep -rn f".into(),
             ..Default::default()
         }
     }
@@ -724,6 +966,114 @@ mod tests {
             assert!(human.contains(&it.path) && human.contains(&format!("{:>5}:", it.line)));
             assert!(explain.contains(&format!("{}:{}  class={}", it.path, it.line, it.class)));
         }
-        assert!(human.contains("covering tests: none") && model.contains("covering tests: none"));
+        assert!(human.contains("no test covers `f` ⚠") && model.contains("no test covers `f` ⚠"));
+    }
+
+    fn footer_of(t: &str) -> &str {
+        t.lines().last().unwrap()
+    }
+
+    #[test]
+    fn footer_judges_each_fact() {
+        // Zero tests: the warning is always there; no indirect → no indirect part at all.
+        let a = answer(3);
+        let f = footer_of(&render_model(&a)).to_string();
+        assert!(f.contains("no test covers `f` ⚠"), "{f}");
+        assert!(
+            !f.contains("indirect"),
+            "no indirect part when there is none: {f}"
+        );
+        assert!(
+            !f.contains("to see them"),
+            "no hint when nothing was cut: {f}"
+        );
+
+        // Many tests: total + only the closest few, runnable, prefix factored out.
+        let mut a = answer(3);
+        a.footer.tests_total = 42;
+        a.footer.tests = (0..MAX_TESTS_LISTED)
+            .map(|i| format!("pkg/tests/test_m{i}.py::T::t{i}"))
+            .collect();
+        a.footer.indirect_total = 9;
+        a.footer.indirect = vec![
+            IndirectGroup {
+                module: "tools/orch/runner/core".into(),
+                count: 6,
+                top: vec!["run".into()],
+            },
+            IndirectGroup {
+                module: "tools/orch/dao/cli".into(),
+                count: 3,
+                top: vec!["init".into()],
+            },
+        ];
+        let f = footer_of(&render_model(&a)).to_string();
+        assert!(!f.contains("no test covers"), "{f}");
+        assert!(
+            f.contains("tests: 42 — closest: pytest pkg/tests/{test_m0.py::T::t0,"),
+            "{f}"
+        );
+        assert_eq!(f.matches("::T::").count(), MAX_TESTS_LISTED, "{f}");
+        assert!(
+            f.contains(
+                "indirect (depth 2-3): 9 in tools/orch/ — runner/core 6 (run); dao/cli 3 (init)"
+            ),
+            "{f}"
+        );
+    }
+
+    #[test]
+    fn tight_budget_degrades_footer_by_priority() {
+        let mut a = answer(40);
+        a.footer.tests_total = 42;
+        a.footer.tests = (0..5)
+            .map(|i| format!("pkg/tests/test_m{i}.py::T::t{i}"))
+            .collect();
+        a.footer.indirect_total = 9;
+        a.footer.indirect = (0..5)
+            .map(|i| IndirectGroup {
+                module: format!("mod{i}/deep/path"),
+                count: 2,
+                top: vec!["a".into(), "b".into()],
+            })
+            .collect();
+        a.footer.import_lines = 7;
+        a.footer.import_files = 7;
+        a.budget = Some(Budget {
+            bytes: Some(900),
+            lines: None,
+            source: "head -c 900".into(),
+        });
+        let t = render_model(&a);
+        assert!(t.len() <= 900, "{t}");
+        let f = footer_of(&t);
+        // tests to run outrank indirect, which outranks imports; cuts are always disclosed.
+        assert!(f.contains("tests: 42"), "{f}");
+        assert!(f.contains("not shown") || f.contains("collapsed"), "{f}");
+        assert!(
+            f.contains("to see them: grep -rn f "),
+            "grep-form hint: {f}"
+        );
+        if f.contains("imports") {
+            assert!(
+                f.contains("indirect"),
+                "imports kept only if indirect kept: {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn answers_never_mention_graphite_commands_to_the_agent() {
+        let mut a = answer(200);
+        a.budget = Some(Budget {
+            bytes: Some(1200),
+            lines: None,
+            source: "head -c 1200".into(),
+        });
+        let t = render_model(&a);
+        assert!(
+            !t.contains("graphite-hook") && !t.contains("--all") && !t.contains("--hidden"),
+            "{t}"
+        );
     }
 }
