@@ -214,6 +214,61 @@ both runs. Two early signals, not conclusions (n=2):
   and still ran 2 greps to confirm it. The full run reports this per run
   (`search_after_complete_graphite`) to see whether it is systematic.
 
+## Pilot — arm A vs arm B (Graphite, `--json` CLI)
+
+Same 5 tasks × 2 repeats, same model, build includes 064cdd7.
+`results/pilot-B.jsonl`, report `results/pilot-AB.md`. 0 harness errors.
+
+| task | arm | turns | wall s | agent $ | files read | searches | graphite calls | searches after complete answer | success | attribution |
+|---|---|---|---|---|---|---|---|---|---|---|
+| core-consolidate-pin-model | A | 10 | 77 | 0.29 | 5.5 | 3 | – | – | 2/2 | – |
+| | B | 8 | 51 | 0.27 | 6.5 | 2 | 1 | 2 | 2/2 | used_success |
+| q-resolve-owner | A | 3 | 12 | 0.17 | 0 | 2 | – | – | 2/2 | – |
+| | B | 3.5 | 10 | 0.19 | 0 | 1.5 | 1 | 1.5 | 2/2 | used_success |
+| regent-is-ancestor-tristate | A | 11 | 66 | 0.38 | 2 | 2 | – | – | 2/2 | – |
+| | B | 13 | 63 | 0.39 | 2 | 3 | 0 | – | 2/2 | **not_used** |
+| runner-pr-base-guard | A | 17 | 95 | 0.47 | 4.5 | 4.5 | – | – | 2/2 | – |
+| | B | 11 | 64 | 0.38 | 1 | 2.5 | 1.5 | 2.5 | 2/2 | used_success |
+| sourcerer-monorepo-root | A | 10.5 | 32 | 0.30 | 3 | 2 | – | – | 2/2 | – |
+| | B | 11 | 41 | 0.35 | 2 | 1 | 1 | 1 | 2/2 | used_success |
+
+(medians over 2 repeats; searches = grep/rg/find/ls via Bash + Grep/Glob)
+
+Paired, 5 tasks, 5000 bootstrap resamples:
+- turns ratio B/A **1.05** [95% CI 0.65–1.18]
+- wall-clock ratio B/A **0.88** [0.66–1.27]
+- success 10/10 both arms (difference 0 pts)
+- verdict by the rule: **NO-GO** — but with 5 tasks the CIs are far too wide
+  to support any conclusion either way; this is a pipeline check, not a
+  result.
+
+Reading:
+- **Used 8/10 runs**, never on regent-is-ancestor-tristate (both repeats):
+  the prompt line alone doesn't route a bug-fix task through the graph.
+- **Every run that got a complete Graphite answer still searched afterwards**
+  (1–2.5 greps): the agent verifies the graph instead of trusting it — that
+  pattern cancels most of the gain.
+- Where it was used on multi-file work the numbers moved the right way
+  (runner-pr-base-guard −35% turns, −33% wall; core-consolidate −20% turns,
+  −34% wall); on small tasks (sourcerer, q-resolve-owner) a Graphite call is
+  an extra step, not a replacement.
+- Correctness unchanged.
+
+Next arms (below): B2 tests whether the compact text format is trusted
+without re-grepping; C adds interception hooks to fix routing and trust.
+
+## Next arms (prepared, not run)
+
+- **B2 — Graphite CLI, text format.** Same as B, prompt points at `graphite
+  lookup X`, `graphite blast X`, `graphite diff-impact` with no `--json`
+  (compact text with call-site lines, landed 3d4fdc1..478fbda). Text output
+  captured in `graphite.jsonl` with its byte size.
+- **C — B2 + interception hooks.** Setup runs `graphite hooks install --repo
+  {tree}` (project `.claude/settings.json`, PreToolUse on Bash / Grep / Read);
+  teardown uninstalls; `.graphite/hooks.jsonl` copied per run. Hook-served
+  answers count as Graphite answers in attribution and in
+  `search_after_complete_graphite`. Waits on the `hooks-search` work.
+
 ## Full-run estimate
 
 From the clean pilot. The pilot's 5 tasks are easier than the full set (6 of
