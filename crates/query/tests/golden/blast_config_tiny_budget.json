@@ -116,7 +116,11 @@
           "handler",
           "test_build"
         ],
-        "called_by_total": 2
+        "called_by_total": 2,
+        "called_by_prod": [
+          "handler"
+        ],
+        "called_by_prod_total": 1
       }
     ],
     "indirect": {

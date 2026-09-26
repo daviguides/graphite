@@ -22,6 +22,9 @@ pub struct CallerSites {
     /// Local names of the caller's own top callers, production first, then most-called.
     pub called_by: Vec<String>,
     pub called_by_total: u32,
+    /// Production-only view of `called_by` (tests belong in the covering-tests list).
+    pub called_by_prod: Vec<String>,
+    pub called_by_prod_total: u32,
 }
 
 /// Counts over every direct reference, independent of how many are listed.
@@ -215,6 +218,12 @@ pub(crate) fn direct_sites(
                 .then_with(|| b.1.cmp(&a.1))
                 .then_with(|| a.2.cmp(&b.2))
         });
+        let prod: Vec<String> = ranked
+            .iter()
+            .filter(|r| r.0 == Role::Prod)
+            .map(|r| r.2.clone())
+            .collect();
+        let called_by_prod_total = prod.len() as u32;
         out.push(CallerSites {
             caller: SymbolView::from(&sym),
             lines,
@@ -226,6 +235,8 @@ pub(crate) fn direct_sites(
                 .map(|(_, _, n)| n)
                 .collect(),
             called_by_total: up.len() as u32,
+            called_by_prod: prod.into_iter().take(MAX_CALLED_BY).collect(),
+            called_by_prod_total,
         });
     }
     summary.files = files.len() as u32;
