@@ -13,6 +13,8 @@ agent diff and check details under results/runs/<run-id>/.
 
 import argparse
 import json
+import os
+import signal
 import shlex
 import shutil
 import subprocess
@@ -23,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from checks import check_code, check_question
-from common import (HERE, RESULTS, RUNS, TRUTH, add_worktree, ensure_mirror, load_json,
+from common import (HERE, RESULTS, RUNS, TRUTH, add_worktree, ensure_mirror, git, load_json,
                     load_tasks, remove_worktree, uv_sync)
 from stream import parse_stream
 
@@ -80,6 +82,31 @@ def claude_cmd(prompt: str, model: str, budget: float) -> list[str]:
             "--disallowed-tools", *DISALLOWED]
 
 
+AGENT_STOP_SUBTYPES = {"success", "error_max_turns", "error_max_budget_usd"}
+
+
+def run_problem(record: dict) -> str | None:
+    """Why this run can't be scored, or None. Only the agent's own finish,
+    turn limit or budget limit count as the agent's result; anything else —
+    a signal, a crash, an API failure, a missing result event — is the harness."""
+    code = record.get("exit_code")
+    if code is not None and (code < 0 or code >= 128):
+        return f"agent process killed by signal (exit {code})"
+    if not record.get("has_result_event"):
+        return f"no result event in stream (exit {code})"
+    if record.get("is_error") and record.get("terminal_reason") in {"api_error", "auth_error", "network_error"}:
+        return f"API failure: {record.get('terminal_reason')}"
+    if record.get("stop_reason") not in AGENT_STOP_SUBTYPES:
+        return f"agent run ended with {record.get('stop_reason')} (exit {code})"
+    return None
+
+
+def _harness_error(record: dict, reason: str) -> dict:
+    record.update({"outcome": "harness_error", "success": None})
+    record.setdefault("harness_errors", []).append(reason)
+    return record
+
+
 def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
     truth = load_json(TRUTH / f"{task.id}.json")
     if truth is None:
@@ -97,18 +124,35 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
         uv_sync(tree)
         record["prep_s"] = round(time.monotonic() - t0, 1)
         record["setup"] = run_hooks(arm.get("setup", []), tree)
+        failed_setup = [h for h in record["setup"] if h["code"] != 0]
+        if failed_setup:
+            return _harness_error(record, f"arm setup failed: {failed_setup[0]['cmd']} → {failed_setup[0]['tail'][-200:]}")
+        known = set(git("ls-files", cwd=tree).split())
         prompt = task.prompt + ("\n\n" + arm["prompt_suffix"].strip() if arm.get("prompt_suffix", "").strip() else "")
         stream_path = out_dir / "stream.jsonl"
         t0 = time.monotonic()
-        with stream_path.open("w") as fh:
-            proc = subprocess.run(claude_cmd(prompt, args.model, args.max_budget),
-                                  cwd=tree, stdout=fh, stderr=subprocess.PIPE, text=True,
-                                  timeout=args.timeout)
+        timed_out = False
+        with stream_path.open("w") as fh, (out_dir / "stderr.txt").open("w") as err:
+            # Own session: signals aimed at the launching shell, a waiter or a
+            # monitor's process group must never reach the agent.
+            proc = subprocess.Popen(claude_cmd(prompt, args.model, args.max_budget),
+                                    cwd=tree, stdout=fh, stderr=err, text=True,
+                                    stdin=subprocess.DEVNULL, start_new_session=True)
+            try:
+                proc.wait(timeout=args.timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                os.killpg(proc.pid, signal.SIGTERM)
+                proc.wait()
         record["wall_s"] = round(time.monotonic() - t0, 1)
         record["exit_code"] = proc.returncode
-        if proc.stderr:
-            (out_dir / "stderr.txt").write_text(proc.stderr)
-        record.update(parse_stream(stream_path))
+        record.update(parse_stream(stream_path, known))
+        if timed_out:
+            record.update({"outcome": "fail", "success": False, "error": "agent_timeout"})
+            return record
+        problem = run_problem(record)
+        if problem:
+            return _harness_error(record, problem)
         record["teardown"] = run_hooks(arm.get("teardown", []), tree)
         diff, edited = agent_changes(tree)
         (out_dir / "agent.diff").write_text(diff)
@@ -118,9 +162,8 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
         else:
             record.update(check_code(task, truth, tree, diff, edited, out_dir,
                                      use_judge=not args.no_judge, judge_model=args.judge_model))
-    except subprocess.TimeoutExpired:
-        record["error"] = "timeout"
-        record["success"] = False
+    except Exception as exc:  # any harness crash is a harness error, never an agent verdict
+        _harness_error(record, f"harness exception: {type(exc).__name__}: {exc}")
     finally:
         record["finished_at"] = datetime.now(UTC).isoformat()
         (out_dir / "record.json").write_text(json.dumps(record, indent=1))

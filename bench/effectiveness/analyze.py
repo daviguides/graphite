@@ -30,6 +30,18 @@ def load(paths: list[str]) -> list[dict]:
     return rows
 
 
+def outcome(r: dict) -> str:
+    if r.get("outcome"):
+        return r["outcome"]
+    return "success" if r.get("success") else ("fail" if r.get("success") is False else "unjudged")
+
+
+def split_harness(rows):
+    """Harness errors say nothing about the agent: drop them from every metric."""
+    return ([r for r in rows if outcome(r) != "harness_error"],
+            [r for r in rows if outcome(r) == "harness_error"])
+
+
 def med(xs):
     xs = [x for x in xs if x is not None]
     return st.median(xs) if xs else None
@@ -63,8 +75,7 @@ def per_task(rows):
             "tool_calls": med([r.get("tool_calls") for r in rs]),
             "search_calls": med([(r.get("bash") or {}).get("search", 0) + (r.get("tools") or {}).get("Grep", 0)
                                  for r in rs]),
-            "reads": med([(r.get("tools") or {}).get("Read", 0) + (r.get("bash") or {}).get("read", 0)
-                          for r in rs]),
+            "reads": med([r.get("n_files_read", len(r.get("files_read") or [])) for r in rs]),
             "before_edit": med([r.get("calls_before_first_edit") for r in rs]),
             "success_rate": (sum(1 for s in succ if s) / len(succ)) if succ else None,
             "stale": sum(r.get("graphite_stale_results", 0) or 0 for r in rs),
@@ -103,12 +114,16 @@ def verdict(stats) -> tuple[str, list[str]]:
     return ("GO" if go else "NO-GO"), lines + [f"- {r}" for r in rethink]
 
 
-def render(rows) -> str:
+def render(all_rows) -> str:
+    rows, harness = split_harness(all_rows)
     stats = per_task(rows)
     out = ["# Effectiveness bench report", ""]
     arms = sorted({r["arm"] for r in rows})
     out.append(f"Runs: {len(rows)} · arms: {', '.join(arms)} · tasks: {len({r['task'] for r in rows})} · "
                f"models: {', '.join(sorted({r.get('model', '?') for r in rows}))}")
+    out.append(f"Harness errors (excluded from every metric): {len(harness)}"
+               + (" — " + "; ".join(f"{r['run_id']}: {(r.get('harness_errors') or ['?'])[0][:120]}" for r in harness)
+                  if harness else ""))
     out.append("")
     v, lines = verdict(stats)
     out += [f"## Verdict: {v}", ""] + lines + [""]
@@ -122,11 +137,14 @@ def render(rows) -> str:
                 f"median cost ${fmt(med([r.get('cost_usd') for r in rs]), 2)}, "
                 f"total cost ${sum(r.get('cost_usd') or 0 for r in rs):.2f} "
                 f"(+ judge ${sum(((r.get('judge') or {}).get('judge_cost_usd') or 0) for r in rs):.2f})",
+                f"- median files read {fmt(med([r.get('n_files_read') for r in rs]))} "
+                f"(Read tool {fmt(med([r.get('n_files_read_tool') for r in rs]))}, "
+                f"via Bash {fmt(med([r.get('n_files_read_bash') for r in rs]))})",
                 f"- median tool calls {fmt(med([r.get('tool_calls') for r in rs]))}, "
                 f"median calls before first edit {fmt(med([r.get('calls_before_first_edit') for r in rs]))}",
                 ""]
     out += ["## Per task (medians over repeats)", "",
-            "| task | kind | diff | arm | n | turns (min–max) | wall s (min–max) | cost $ | tools | search | reads | calls before edit | success |",
+            "| task | kind | diff | arm | n | turns (min–max) | wall s (min–max) | cost $ | tools | search | files read | calls before edit | success |",
             "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for (task, arm), s in sorted(stats.items()):
         out.append(
@@ -143,13 +161,14 @@ def render(rows) -> str:
             dt = (b["turns"] / a["turns"] - 1) * 100 if a["turns"] else None
             dw = (b["wall"] / a["wall"] - 1) * 100 if a["wall"] else None
             out.append(f"| {t} | {fmt(dt, 0)} | {fmt(dw, 0)} | {fmt(a['success_rate'], 2)}→{fmt(b['success_rate'], 2)} |")
-    out += ["", "## Run details", "", "| run | success | judge | regression | hidden | coverage | recall/precision |",
-            "|---|---|---|---|---|---|---|"]
-    for r in rows:
+    out += ["", "## Run details", "", "| run | outcome | judge | regression | hidden | coverage | files read (tool/bash) | recall/precision |",
+            "|---|---|---|---|---|---|---|---|"]
+    for r in all_rows:
         j = (r.get("judge") or {}).get("verdict", "–")
         rp = f"{r['recall']}/{r['precision']}" if "recall" in r else "–"
-        out.append(f"| {r['run_id']} | {r.get('success')} | {j} | {r.get('regression_ok', '–')} | "
-                   f"{fmt(r.get('hidden_pass_rate'), 2)} | {fmt(r.get('coverage'), 2)} | {rp} |")
+        out.append(f"| {r['run_id']} | {outcome(r)} | {j} | {r.get('regression_ok', '–')} | "
+                   f"{fmt(r.get('hidden_pass_rate'), 2)} | {fmt(r.get('coverage'), 2)} | "
+                   f"{fmt(r.get('n_files_read'))} ({fmt(r.get('n_files_read_tool'))}/{fmt(r.get('n_files_read_bash'))}) | {rp} |")
     return "\n".join(out) + "\n"
 
 

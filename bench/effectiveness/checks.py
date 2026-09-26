@@ -18,6 +18,7 @@ import json
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from common import TRUTH, WORK, add_worktree, remove_worktree, run_suite
@@ -54,32 +55,61 @@ def _truncate(text: str, limit: int = 40000) -> str:
     return text if len(text) <= limit else text[:limit] + f"\n... [{len(text) - limit} chars truncated]"
 
 
-def judge(task, truth: dict, agent_diff: str, signals: dict, model: str) -> dict:
+VERDICTS = {"solved", "partial", "failed"}
+JUDGE_ATTEMPTS = 3
+JUDGE_BACKOFF_S = (5, 20, 60)
+
+
+def _judge_once(prompt: str, model: str) -> dict:
+    scratch = WORK / "judge"
+    scratch.mkdir(parents=True, exist_ok=True)
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", prompt, "--model", model, "--output-format", "json",
+             "--setting-sources", "project", "--strict-mcp-config", "--tools", "",
+             "--no-session-persistence"],
+            cwd=scratch, capture_output=True, text=True, timeout=600,
+            start_new_session=True)
+    except subprocess.TimeoutExpired:
+        return {"verdict": "error", "reason": "judge timeout"}
+    try:
+        payload = json.loads(proc.stdout)
+        result = [x for x in payload if x.get("type") == "result"][0] if isinstance(payload, list) else payload
+    except (json.JSONDecodeError, IndexError):
+        return {"verdict": "error", "reason": f"exit {proc.returncode}: {(proc.stdout + proc.stderr)[-400:]}"}
+    text = result.get("result", "") or ""
+    cost = result.get("total_cost_usd")
+    match = re.search(r"\{.*\}", text, re.S)
+    try:
+        verdict = json.loads(match.group(0)) if match else None
+    except json.JSONDecodeError:
+        verdict = None
+    if not verdict or verdict.get("verdict") not in VERDICTS:
+        return {"verdict": "error", "judge_cost_usd": cost,
+                "reason": f"unparseable judge reply (is_error={result.get('is_error')}, "
+                          f"subtype={result.get('subtype')}): {text[:300]}"}
+    verdict["judge_cost_usd"] = cost
+    return verdict
+
+
+def judge(task, truth: dict, agent_diff: str, signals: dict, model: str,
+          sleep=time.sleep) -> dict:
+    """Bounded retries; a judge that never answers is a harness error, not a
+    verdict on the agent."""
     ref = (TRUTH / f"{task.id}.diff").read_text()
     prompt = JUDGE_PROMPT.format(task=task.prompt, ref=_truncate(ref),
                                  agent=_truncate(agent_diff or "(no changes)"),
                                  signals=json.dumps(signals, indent=1))
-    scratch = WORK / "judge"
-    scratch.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.run(
-        ["claude", "-p", prompt, "--model", model, "--output-format", "json",
-         "--setting-sources", "project", "--strict-mcp-config", "--tools", "",
-         "--no-session-persistence"],
-        cwd=scratch, capture_output=True, text=True, timeout=600)
-    try:
-        payload = json.loads(proc.stdout)
-        result = [x for x in payload if x.get("type") == "result"][0] if isinstance(payload, list) else payload
-        text = result.get("result", "")
-        cost = result.get("total_cost_usd")
-    except (json.JSONDecodeError, IndexError):
-        return {"verdict": "error", "reason": (proc.stdout + proc.stderr)[-400:]}
-    match = re.search(r"\{.*\}", text, re.S)
-    try:
-        verdict = json.loads(match.group(0)) if match else {"verdict": "error", "reason": text[:400]}
-    except json.JSONDecodeError:
-        verdict = {"verdict": "error", "reason": text[:400]}
-    verdict["judge_cost_usd"] = cost
-    return verdict
+    errors = []
+    for attempt in range(JUDGE_ATTEMPTS):
+        v = _judge_once(prompt, model)
+        if v["verdict"] != "error":
+            v["judge_attempts"] = attempt + 1
+            return v
+        errors.append(v["reason"])
+        if attempt + 1 < JUDGE_ATTEMPTS:
+            sleep(JUDGE_BACKOFF_S[attempt])
+    return {"verdict": "error", "judge_attempts": JUDGE_ATTEMPTS, "reason": " | ".join(errors)[-800:]}
 
 
 def _hidden_tests(truth: dict, tree: Path) -> dict:
@@ -120,14 +150,23 @@ def check_code(task, truth: dict, tree: Path, diff: str, edited: list[str],
     res: dict = {}
     regression = {}
     ok = True
+    harness_errors = []
     for suite in truth.get("suites", []):
         r = run_suite(tree, suite)
+        if r.get("error"):
+            harness_errors.append(f"suite {suite}: {r['error']}: {r.get('tail', '')[:300]}")
+            regression[suite] = {"error": r["error"], "tail": r.get("tail", "")[:600]}
+            continue
         baseline = set(truth.get("start_failures", {}).get(suite, []))
         new = sorted(set(r["failed"]) - baseline)
-        regression[suite] = {"failed": len(r["failed"]), "new_failures": new[:20],
-                             "error": r.get("error")}
-        if new or r.get("error"):
+        regression[suite] = {"failed": len(r["failed"]), "new_failures": new[:20]}
+        if new:
             ok = False
+    if harness_errors:
+        res.update({"outcome": "harness_error", "success": None,
+                    "harness_errors": harness_errors, "regression": regression})
+        (out_dir / "checks.json").write_text(json.dumps(res, indent=1))
+        return res
     res["regression_ok"] = ok
     res["regression"] = regression
     hidden = _hidden_tests(truth, tree) if truth.get("suites") else {}
@@ -141,9 +180,15 @@ def check_code(task, truth: dict, tree: Path, diff: str, edited: list[str],
     if use_judge:
         v = judge(task, truth, diff, signals, judge_model)
         res["judge"] = v
-        res["success"] = ok and v.get("verdict") == "solved"
+        if v.get("verdict") == "error":
+            res.update({"outcome": "harness_error", "success": None,
+                        "harness_errors": [f"judge: {v.get('reason', '')[:300]}"]})
+        else:
+            res["success"] = ok and v.get("verdict") == "solved"
+            res["outcome"] = "success" if res["success"] else "fail"
     else:
         res["success"] = None
+        res["outcome"] = "unjudged"
     (out_dir / "checks.json").write_text(json.dumps(res, indent=1))
     return res
 
@@ -163,7 +208,8 @@ def check_question(task, truth: dict, final_text: str) -> dict:
     hit = truth_set & set(listed)
     recall = len(hit) / len(truth_set) if truth_set else 1.0
     precision = len([f for f in listed if f in acceptable]) / len(listed) if listed else 0.0
+    success = recall >= 0.9 and precision >= 0.8
     return {"answer_files": listed, "missed": sorted(truth_set - set(listed)),
             "spurious": sorted(set(listed) - acceptable),
             "recall": round(recall, 3), "precision": round(precision, 3),
-            "success": recall >= 0.9 and precision >= 0.8}
+            "success": success, "outcome": "success" if success else "fail"}

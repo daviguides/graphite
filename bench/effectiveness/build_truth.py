@@ -16,6 +16,15 @@ from common import (MIRROR, TRUTH, WORK, add_worktree, changed_files, dump_json,
                     run_suite, split_src_tests, uv_sync)
 
 
+def _suite_or_die(tree, suite: str, label: str) -> dict:
+    """A baseline built from a suite that failed to run is silently wrong
+    (every later failure looks new, or none do) — refuse to freeze it."""
+    r = run_suite(tree, suite)
+    if r.get("error"):
+        raise SystemExit(f"suite {suite} at {label} did not run ({r['error']}): {r.get('tail', '')[:400]}")
+    return r
+
+
 def question_truth(task, sha: str) -> dict:
     pattern = f"{task.symbol}("
     out = git("grep", "-n", "-F", pattern, sha, "--", "*.py", check=False)
@@ -48,8 +57,8 @@ def code_truth(task, start: str, ref: str, with_suites: bool) -> dict:
     try:
         uv_sync(start_tree)
         uv_sync(ref_tree)
-        truth["start_failures"] = {s: run_suite(start_tree, s)["failed"] for s in task.suites}
-        truth["ref_failures"] = {s: run_suite(ref_tree, s)["failed"] for s in task.suites}
+        truth["start_failures"] = {s: _suite_or_die(start_tree, s, "start")["failed"] for s in task.suites}
+        truth["ref_failures"] = {s: _suite_or_die(ref_tree, s, "ref")["failed"] for s in task.suites}
         hidden_ref = {s: run_suite(ref_tree, s, only=tests) for s in task.suites}
         for s in task.suites:
             for t in tests:

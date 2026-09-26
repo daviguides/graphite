@@ -1,0 +1,53 @@
+{
+ "run_id": "pilot-A-q-resolve-owner-A-1-962ecf",
+ "label": "pilot-A",
+ "task": "q-resolve-owner",
+ "kind": "question",
+ "difficulty": "easy",
+ "arm": "A",
+ "rep": 1,
+ "model": "sonnet",
+ "started_at": "2026-09-24T02:59:51.987698+00:00",
+ "prep_s": 1.3,
+ "setup": [],
+ "wall_s": 8.0,
+ "exit_code": 143,
+ "num_turns": null,
+ "duration_ms": null,
+ "cost_usd": null,
+ "is_error": null,
+ "stop_reason": null,
+ "final_text": "",
+ "input_tokens": null,
+ "output_tokens": null,
+ "cache_read_tokens": null,
+ "cache_creation_tokens": null,
+ "tool_calls": 2,
+ "tools": {
+  "Bash": 2
+ },
+ "bash": {
+  "search": 2
+ },
+ "subagent_tool_calls": 0,
+ "files_read": [],
+ "calls_before_first_edit": null,
+ "graphite_stale_results": 0,
+ "teardown": [],
+ "files_edited": [],
+ "answer_files": [],
+ "missed": [
+  "tools/orch/dao-cli/dao_cli/board.py",
+  "tools/orch/dao-cli/dao_cli/project.py",
+  "tools/orch/dao-cli/dao_cli/task.py",
+  "tools/orch/instrument/instrument/core/milestone.py",
+  "tools/orch/runner/runner/core/engine.py",
+  "tools/orch/runner/runner/core/hooks.py",
+  "tools/orch/runner/runner/core/state.py"
+ ],
+ "spurious": [],
+ "recall": 0.0,
+ "precision": 0.0,
+ "success": false,
+ "finished_at": "2026-09-24T03:00:01.368798+00:00"
+}

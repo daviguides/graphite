@@ -1,0 +1,64 @@
+{
+ "run_id": "pilot-A-sourcerer-monorepo-root-A-1-30c987",
+ "label": "pilot-A",
+ "task": "sourcerer-monorepo-root",
+ "kind": "signature",
+ "difficulty": "easy",
+ "arm": "A",
+ "rep": 1,
+ "model": "sonnet",
+ "started_at": "2026-09-24T02:55:22.689774+00:00",
+ "prep_s": 0.9,
+ "setup": [],
+ "wall_s": 33.3,
+ "exit_code": 0,
+ "num_turns": 10,
+ "duration_ms": 32455,
+ "cost_usd": 0.2807344,
+ "is_error": false,
+ "stop_reason": "success",
+ "final_text": "`_resolve_externalized_worktrees_root` in sourcerer now takes the cwd and picks the most specific registry entry, so running from the continuum repo root should resolve to the `continuum` entry (`path=\"\"`) instead of `app`. I didn't add a test for the monorepo case, so that behaviour is unexercised.\n\nTest run: 21 of 22 tests in `tests/wt` pass. The one failure is `test_returns_real_dirs_sorted`, a sort-order assertion on `list_real_dirs`. I didn't confirm it fails without my change, but that function is untouched.\n\n- **`sourcerer/wt/integrations/filesystem.py`**:\n  - `_resolve_externalized_worktrees_root` and `find_worktrees_root` both take an optional `cwd`.\n  - With a `cwd`, the resolver walks up its path relative to the source repo and takes the first registry entry whose `path` matches. It falls back to `path=\"\"`. This is the same walk-up the worktree tool does.\n  - With no `cwd`, it keeps the old first-match behaviour, so the other callers that don't pass one are unchanged.\n- **`completer.py` and `navigator.py`**: both `find_worktrees_root` calls now pass `cwd=cwd`.\n\nOne thing to check: `find_project_from_cwd` returns whichever ancestor directory has a `.worktrees` folder or a registry match. The walk-up therefore measures the `cwd` relative to that directory, not necessarily the git root, which is what the worktree tool uses.",
+ "input_tokens": 20,
+ "output_tokens": 3024,
+ "cache_read_tokens": 409912,
+ "cache_creation_tokens": 42118,
+ "tool_calls": 9,
+ "tools": {
+  "Bash": 9
+ },
+ "bash": {
+  "search": 2,
+  "read": 2,
+  "edit": 1,
+  "run": 3,
+  "git": 1
+ },
+ "subagent_tool_calls": 0,
+ "files_read": [],
+ "calls_before_first_edit": 4,
+ "graphite_stale_results": 0,
+ "teardown": [],
+ "files_edited": [
+  "tools/flow/sourcerer/sourcerer/wt/integrations/filesystem.py",
+  "tools/flow/sourcerer/sourcerer/wt/services/completer.py",
+  "tools/flow/sourcerer/sourcerer/wt/services/navigator.py"
+ ],
+ "regression_ok": false,
+ "regression": {
+  "tools/flow/sourcerer": {
+   "failed": 0,
+   "new_failures": [],
+   "error": "no-junit"
+  }
+ },
+ "hidden_pass_rate": null,
+ "coverage": 1.0,
+ "judge": {
+  "verdict": "solved",
+  "missing": [],
+  "reason": "The agent threads cwd through find_worktrees_root into _resolve_externalized_worktrees_root, walks up the cwd-relative path to pick the most specific entry (repo root now matches path=\"\", subdirs of app match \"app\"), and updates the completer and navigator callers exactly as the reference does. One minor divergence: with no cwd or no walk-up match, the agent falls back to the first entry, while the reference only matches path=\"\" or returns None; all updated callers pass cwd, so the task's specified behaviour is met.",
+  "judge_cost_usd": 0.0635018
+ },
+ "success": false,
+ "finished_at": "2026-09-24T02:56:05.357881+00:00"
+}

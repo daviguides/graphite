@@ -102,8 +102,8 @@ def split_src_tests(files: list[str]) -> tuple[list[str], list[str]]:
 def uv_sync(tree: Path) -> None:
     """Pre-warm the tools/ uv workspace so neither arm pays install time."""
     if (tree / "tools/pyproject.toml").exists():
-        run(["uv", "sync", "--quiet", "--all-packages", "--directory", str(tree / "tools")],
-            check=False, timeout=900)
+        run(["uv", "sync", "--quiet", "--all-packages", "--all-extras", "--all-groups",
+             "--directory", str(tree / "tools")], check=False, timeout=900)
 
 
 def run_suite(tree: Path, suite: str, only: list[str] | None = None,
@@ -114,7 +114,10 @@ def run_suite(tree: Path, suite: str, only: list[str] | None = None,
     if not tool.exists():
         return {"suite": suite, "error": "missing", "failed": [], "passed": []}
     xml = tool / ".bench-junit.xml"
-    args = ["uv", "run", "--quiet", "pytest", "-q", "-p", "no:cacheprovider",
+    # Test deps live in `dev` extras for some tools and dependency groups for
+    # others; without both the suite silently fails to spawn pytest.
+    args = ["uv", "run", "--quiet", "--all-extras", "--all-groups",
+            "pytest", "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors",
             f"--junitxml={xml}", "-o", "addopts="]
     if only:
         rel = [str((tree / f).relative_to(tool)) for f in only if (tree / f).exists()
@@ -138,8 +141,11 @@ def run_suite(tree: Path, suite: str, only: list[str] | None = None,
                 passed.append(tid)
         xml.unlink()
     else:
-        return {"suite": suite, "error": "no-junit", "tail": proc.stdout[-1500:] + proc.stderr[-1500:],
+        return {"suite": suite, "error": "no-junit", "tail": (proc.stdout[-1500:] + proc.stderr[-1500:]).strip(),
                 "failed": [], "passed": []}
+    if not passed and not failed and not only:
+        return {"suite": suite, "error": "no-tests-collected",
+                "tail": (proc.stdout[-1500:] + proc.stderr[-1500:]).strip(), "failed": [], "passed": []}
     return {"suite": suite, "passed": passed, "failed": failed}
 
 

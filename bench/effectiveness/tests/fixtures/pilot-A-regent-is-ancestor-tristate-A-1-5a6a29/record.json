@@ -1,0 +1,61 @@
+{
+ "run_id": "pilot-A-regent-is-ancestor-tristate-A-1-5a6a29",
+ "label": "pilot-A",
+ "task": "regent-is-ancestor-tristate",
+ "kind": "bugfix",
+ "difficulty": "medium",
+ "arm": "A",
+ "rep": 1,
+ "model": "sonnet",
+ "started_at": "2026-09-24T02:53:35.673510+00:00",
+ "prep_s": 1.2,
+ "setup": [],
+ "wall_s": 90.0,
+ "exit_code": 0,
+ "num_turns": 13,
+ "duration_ms": 89136,
+ "cost_usd": 0.4293655999999999,
+ "is_error": false,
+ "stop_reason": "success",
+ "final_text": "I fixed the scoreboard in `tools/orch/regent/regent/core/delivery.py`. All of `tests/test_delivery.py` passes. The full suite has 6 failures in `tests/test_cli.py`. They were already failing before my edit, since the count was the same 6 on the first run, which was done before any of my edits had been applied. I didn't look into why they fail.\n\n- **Fetch once:** `score_signal` now fetches the pinned tip once, before scoring any task. If that fetch fails, each task's ancestry check comes back as \"could not read\".\n- **Three-valued ancestry:** `_is_ancestor` returns True for exit 0, False for exit 1, and None for anything else, including exit 128. `_score_task` turns None into a \"could not read\" skip, and only a real False becomes \"delivered nothing\".\n- **Timeouts:** `_git` no longer returns exit 1 on a timeout or failure to launch. It returns -1 instead, so a timeout can't read as \"not an ancestor\".\n- **Merge diff:** `_read_landed` finds the merge's first parent with `rev-list --parents`. It then reads `git diff <parent> <sha>` for the file list, the counts and the patch. It no longer uses `git show`.\n- **Unreadable diff:** any failed read makes `_read_landed` return None, and the task is skipped as \"could not read\". Before, an unreadable diff could show up as \"changed no files\".\n- **Squash and root commits:** a squash commit works the same way, since its only parent is its first parent. A root commit with no parent can't be measured, so it is skipped rather than scored.\n\nIn `tests/test_delivery.py` I changed the fake git to match the new calls and added tests for exit codes 0, 1 and 128, a timeout, and an unreadable diff. There are also tests that the tip is fetched once and that the diff is taken against the first parent.",
+ "input_tokens": 26,
+ "output_tokens": 8492,
+ "cache_read_tokens": 629808,
+ "cache_creation_tokens": 54608,
+ "tool_calls": 12,
+ "tools": {
+  "Bash": 12
+ },
+ "bash": {
+  "other": 2,
+  "search": 2,
+  "edit": 4,
+  "git": 2,
+  "read": 2
+ },
+ "subagent_tool_calls": 0,
+ "files_read": [],
+ "calls_before_first_edit": 3,
+ "graphite_stale_results": 0,
+ "teardown": [],
+ "files_edited": [
+  "tools/orch/regent/regent/core/delivery.py",
+  "tools/orch/regent/tests/test_delivery.py"
+ ],
+ "regression_ok": true,
+ "regression": {
+  "tools/orch/regent": {
+   "failed": 6,
+   "new_failures": [],
+   "error": null
+  }
+ },
+ "hidden_pass_rate": 0.894,
+ "coverage": 1.0,
+ "judge": {
+  "verdict": "error",
+  "reason": ""
+ },
+ "success": false,
+ "finished_at": "2026-09-24T02:55:22.225897+00:00"
+}
