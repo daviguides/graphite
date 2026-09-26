@@ -16,6 +16,7 @@ use crate::Result;
 
 /// Directory names never indexed, on top of `.gitignore` and hidden entries.
 const SKIP_DIRS: &[&str] = &[
+    crate::paths::STATE_DIR,
     "target",
     "node_modules",
     "dist",
@@ -80,7 +81,7 @@ pub struct Engine {
 impl Engine {
     /// Open the repo's store; call `index_all` before serving. A DB built with another layout is wiped first.
     pub fn open(paths: RepoPaths) -> Result<Self> {
-        std::fs::create_dir_all(&paths.dir)?;
+        paths.ensure_dir()?;
         let wiped = ensure_db_version(&paths)?;
         if wiped {
             eprintln!("graphite: index layout changed, rebuilding from scratch");

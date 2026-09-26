@@ -30,7 +30,7 @@ struct State {
 
 /// Run the daemon for `paths` until a `shutdown` request; blocks the calling thread.
 pub fn run(paths: RepoPaths, handler: Box<dyn QueryHandler>) -> Result<()> {
-    std::fs::create_dir_all(&paths.dir)?;
+    paths.ensure_dir()?;
     let lock = File::create(&paths.lock)?;
     if !lock.try_lock_exclusive().unwrap_or(false) {
         return Err(DaemonError::AlreadyRunning(

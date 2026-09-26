@@ -282,3 +282,43 @@ fn db_layout_mismatch_forces_full_reindex() {
         );
     }
 }
+
+fn git(root: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?} failed");
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn state_dir_stays_out_of_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git(root, &["init", "-q"]);
+    seed(root);
+
+    for _ in 0..2 {
+        let (paths, h) = start(root);
+        stop(&paths, h);
+        let status = git(root, &["status", "--porcelain", "--untracked-files=all"]);
+        assert!(
+            !status.contains(".graphite"),
+            "status shows state dir:\n{status}"
+        );
+    }
+
+    git(root, &["add", "-A"]);
+    let staged = git(root, &["diff", "--cached", "--name-only"]);
+    assert!(
+        !staged.contains(".graphite"),
+        "add -A staged state dir:\n{staged}"
+    );
+    assert!(staged.contains("a.py"), "sanity: real files are staged");
+    assert!(
+        !root.join(".gitignore").exists(),
+        "user .gitignore must not be created"
+    );
+}

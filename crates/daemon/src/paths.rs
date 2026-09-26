@@ -15,6 +15,11 @@ pub struct RepoPaths {
     pub log: PathBuf,
 }
 
+/// Name of the per-repo state directory.
+pub const STATE_DIR: &str = ".graphite";
+
+const STATE_GITIGNORE: &str = "*\n";
+
 /// Unix socket paths must fit `sockaddr_un.sun_path` (104 bytes on macOS, 108 on Linux).
 const MAX_SOCKET_PATH: usize = 100;
 
@@ -32,7 +37,7 @@ fn socket_path(root: &Path, dir: &Path) -> PathBuf {
 impl RepoPaths {
     pub fn new(root: &Path) -> Self {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        let dir = root.join(".graphite");
+        let dir = root.join(STATE_DIR);
         RepoPaths {
             db: dir.join("db"),
             socket: socket_path(&root, &dir),
@@ -42,6 +47,16 @@ impl RepoPaths {
             dir,
             root,
         }
+    }
+
+    /// Create the state dir with a self-ignoring `.gitignore` so git never sees the index.
+    pub fn ensure_dir(&self) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.dir)?;
+        let ignore = self.dir.join(".gitignore");
+        if std::fs::read_to_string(&ignore).ok().as_deref() != Some(STATE_GITIGNORE) {
+            std::fs::write(ignore, STATE_GITIGNORE)?;
+        }
+        Ok(())
     }
 
     /// Repo root for `start`: nearest ancestor with `.git`, else `start` itself.

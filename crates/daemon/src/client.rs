@@ -35,7 +35,7 @@ pub fn request(paths: &RepoPaths, op: Op) -> Result<Response> {
 
 /// Spawn `<exe> daemon run --repo <root>` detached from the caller's session.
 pub fn spawn_daemon(paths: &RepoPaths, exe: &Path) -> Result<()> {
-    std::fs::create_dir_all(&paths.dir)?;
+    paths.ensure_dir()?;
     let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
