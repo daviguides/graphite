@@ -48,10 +48,13 @@ requires = ["graphite"]
 
 [arms.C]
 name = "graphite-text+hooks"
-# B2 plus interception hooks: PreToolUse on Bash / Grep / Read answers with
-# the graph (project .claude/settings.json). Needs `graphite hooks` (feat/hooks).
-setup = ["{graphite} init --repo {tree}", "{graphite} hooks install --repo {tree}"]
-teardown = ["{graphite} hooks uninstall --repo {tree}", "{graphite} daemon stop --repo {tree}"]
+# B2 plus interception hooks (feat/interception): PreToolUse on Bash routes
+# grep/cat/find the graph can answer through `graphite-hook run`; post hooks
+# enrich native Grep/Read and nudge edits. Installed into the task worktree's
+# project .claude/settings.json and restored on teardown. Binaries from
+# `./build_interception.sh` (GRAPHITE_BIN / GRAPHITE_HOOK_BIN), never main's target/.
+setup = ["{graphite} init --repo {tree}", "{graphite_hook} install --repo {tree}"]
+teardown = ["{graphite_hook} uninstall --repo {tree}", "{graphite} daemon stop --repo {tree}"]
 prompt_suffix = """
 A code-graph CLI for this repository is on PATH: `graphite`. Use it instead of
 grep/find/reading many files to locate symbols, their callers and the impact
@@ -61,6 +64,8 @@ call-site lines:
   graphite blast <symbol> [--depth N]  everything that depends on it
   graphite diff-impact                 what your uncommitted changes affect
 """
-requires = ["graphite"]
+requires = ["graphite", "graphite-hook"]
 collect = [".graphite/hooks.jsonl"]
-requires_subcommand = "hooks"
+# Restored byte-for-byte (or deleted if absent) after teardown: uninstall
+# leaves a `{}` settings.json in repos that had none.
+restore = [".claude/settings.json", ".claude/settings.json.graphite-bak"]

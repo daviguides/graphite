@@ -171,6 +171,70 @@ def paths_in(obj) -> set[str]:
     return out
 
 
+GRAPH_ANSWER_ACTIONS = {"answer", "enrich"}   # exec: Graphite produced the output; post: context added
+UNANSWERED_EXEC = {"fallback", "plain"}        # exec: the original command ran
+
+
+def hooks_summary(path: Path) -> dict:
+    """Summarize `.graphite/hooks.jsonl` (schema: crates/hooks/src/log.rs on
+    feat/interception). Events: pre (rewrite | passthrough), exec per segment
+    (answer | fallback | plain | cd), post (enrich | nudge | passthrough)."""
+    events = []
+    if path.exists():
+        for line in path.read_text(errors="replace").splitlines():
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    events.sort(key=lambda e: e.get("ts", 0))
+    actions = Counter(f"{e.get('event')}:{e.get('action')}" for e in events)
+    verdicts = Counter(e.get("graph_verdict") for e in events
+                       if e.get("action") in GRAPH_ANSWER_ACTIONS and e.get("graph_verdict"))
+    reasons = Counter(e.get("reason") for e in events if e.get("reason"))
+    paths: set[str] = set()
+    first_complete = None
+    searches_after = reasks_after = 0
+    for e in events:
+        act, ev = e.get("action"), e.get("event")
+        if act in GRAPH_ANSWER_ACTIONS:
+            paths |= text_paths(e.get("answer") or "")
+            if first_complete is None and e.get("graph_verdict") == "complete":
+                first_complete = e.get("ts", 0)
+                continue
+        if first_complete is None:
+            continue
+        if ev == "exec" and e.get("kind") == "search":
+            if act == "answer":
+                reasks_after += 1
+            elif act in UNANSWERED_EXEC:
+                searches_after += 1
+        elif ev == "pre" and e.get("tool") in ("Grep", "Glob"):
+            searches_after += 1
+        elif (ev == "pre" and act == "passthrough" and e.get("tool") == "Bash"
+              and bash_category(e.get("original_command", "")) in ("search", "list")):
+            searches_after += 1
+    answers = sum(1 for e in events if e.get("event") == "exec" and e.get("action") == "answer")
+    return {
+        "events": len(events),
+        "actions": dict(actions),
+        "rewrites": actions.get("pre:rewrite", 0),
+        "answers": answers,
+        "enrich": actions.get("post:enrich", 0),
+        "fallbacks": actions.get("exec:fallback", 0),
+        "errors": sum(1 for e in events if e.get("error")),
+        "verdicts": dict(verdicts),
+        "complete": first_complete is not None,
+        "answer_bytes": sum(e.get("answer_bytes") or 0 for e in events if e.get("action") in GRAPH_ANSWER_ACTIONS),
+        "raw_bytes": sum(e.get("raw_bytes") or 0 for e in events if e.get("action") == "answer"),
+        "latency_ms": sum(e.get("latency_ms") or 0 for e in events),
+        "graph_ms": sum(e.get("total_ms") or 0 for e in events),
+        "passthrough_reasons": dict(reasons),
+        "paths": sorted(paths),
+        "searches_after_complete": searches_after if first_complete is not None else None,
+        "reasks_after_complete": reasks_after if first_complete is not None else None,
+    }
+
+
 def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
     """known_files: repo-relative paths that exist in the worktree; enables
     counting reads done through Bash."""

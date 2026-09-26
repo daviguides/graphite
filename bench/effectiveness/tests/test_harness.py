@@ -310,16 +310,55 @@ def test_lower_bound_is_not_complete():
     assert not answer_is_complete("INCOMPLETE")
 
 
-def test_hook_served_answer_counts_as_graphite(tmp_path):
-    (tmp_path / "hooks.jsonl").write_text("\n".join([
-        json.dumps({"tool": "Grep", "action": "deny", "answer": "COMPLETE · 2 callers\n  a/b.py:3  x()"}),
-        json.dumps({"tool": "Read", "action": "allow"}),
-    ]))
-    hooks = run.hook_answers(tmp_path / "hooks.jsonl")
-    assert len(hooks) == 1 and hooks[0]["complete"] and hooks[0]["paths"] == {"a/b.py"}
+HOOK_EVENTS = [  # real schema: crates/hooks/src/log.rs (feat/interception)
+    {"ts": 1, "event": "pre", "tool": "Bash", "original_command": "grep -rn resolve_owner tools",
+     "action": "rewrite", "rewritten_command": "/x/graphite-hook run --cwd /w -- 'grep -rn resolve_owner tools'",
+     "latency_ms": 3},
+    {"ts": 2, "event": "exec", "tool": "Bash", "segment": "grep -rn resolve_owner tools", "kind": "search",
+     "action": "answer", "answer": "resolve_owner  a/core.py:9  [function]\nCOMPLETE · 2 callers\n  a/b.py:3  x()",
+     "answer_bytes": 80, "raw_bytes": 900, "matches": 3, "graph_verdict": "complete",
+     "residue": {"definition": 1, "reference": 2}, "search_ms": 4, "total_ms": 6},
+    {"ts": 3, "event": "pre", "tool": "Bash", "original_command": "rg -n resolve_owner --type-add x",
+     "action": "passthrough", "reason": "contains a command graphite does not handle", "latency_ms": 1},
+    {"ts": 4, "event": "exec", "tool": "Bash", "segment": "grep -rn owner tools", "kind": "search",
+     "action": "answer", "answer": "LOWER-BOUND (1 ambiguous)", "answer_bytes": 25, "raw_bytes": 400,
+     "graph_verdict": "lower_bound", "total_ms": 5},
+    {"ts": 5, "event": "exec", "tool": "Bash", "segment": "grep -rn foo .", "kind": "search",
+     "action": "fallback", "reason": "daemon timeout"},
+    {"ts": 6, "event": "pre", "tool": "Grep", "original_command": "resolve_owner", "action": "passthrough"},
+    {"ts": 7, "event": "post", "tool": "Read", "original_command": "a/core.py", "action": "enrich",
+     "answer": "callers: a/b.py:3", "answer_bytes": 17, "graph_verdict": "complete"},
+    {"ts": 8, "event": "post", "tool": "Edit", "action": "nudge"},
+]
+
+
+def test_hooks_summary_real_schema(tmp_path):
+    from stream import hooks_summary
+    p = tmp_path / "hooks.jsonl"
+    p.write_text("\n".join(json.dumps(e) for e in HOOK_EVENTS))
+    h = hooks_summary(p)
+    assert h["rewrites"] == 1 and h["answers"] == 2 and h["enrich"] == 1 and h["fallbacks"] == 1
+    assert h["complete"] and h["verdicts"] == {"complete": 2, "lower_bound": 1}
+    assert h["answer_bytes"] == 80 + 25 + 17 and h["raw_bytes"] == 900 + 400
+    assert set(h["paths"]) == {"a/core.py", "a/b.py"}
+    # after the first complete answer: rg passthrough, grep fallback, native Grep = 3 unanswered
+    # searches; the second grep the graph answered is a re-ask, not a residual search
+    assert h["searches_after_complete"] == 3 and h["reasks_after_complete"] == 1
+    assert h["passthrough_reasons"]["daemon timeout"] == 1
+
+
+def test_hooks_summary_no_log(tmp_path):
+    from stream import hooks_summary
+    h = hooks_summary(tmp_path / "missing.jsonl")
+    assert h["events"] == 0 and not h["complete"] and h["searches_after_complete"] is None
+
+
+def test_hook_served_answer_counts_as_graphite():
     rec = {"arm": "C", "outcome": "fail", "success": False, "graphite_calls": 0,
-           "graphite_hook_answers": 1, "files_edited": [], "graphite_paths": ["a/b.py"]}
+           "graphite_hook_answers": 2, "files_edited": [], "graphite_paths": ["a/b.py"]}
     assert run.attribute(rec, {"expected_src": ["a/b.py"]}, False)["class"] == "failure_despite_graphite"
+    rec["graphite_hook_answers"] = 0
+    assert run.attribute(rec, {"expected_src": ["a/b.py"]}, False)["class"] == "graphite_not_used"
 
 
 def test_denied_search_with_graph_answer_sets_complete(tmp_path):
@@ -336,9 +375,70 @@ def test_arms_b2_and_c_defined():
     import tomllib
     arms = tomllib.loads((HERE.parent / "arms.toml").read_text())["arms"]
     assert "--json" not in " ".join(arms["B2"]["setup"]) + arms["B2"]["prompt_suffix"]
-    assert any("hooks install" in c for c in arms["C"]["setup"])
-    assert any("hooks uninstall" in c for c in arms["C"]["teardown"])
+    assert any("{graphite_hook} install" in c for c in arms["C"]["setup"])
+    assert any("{graphite_hook} uninstall" in c for c in arms["C"]["teardown"])
     assert arms["C"]["collect"] == [".graphite/hooks.jsonl"]
+    assert "graphite-hook" in arms["C"]["requires"]
+
+
+INTERCEPTION = HERE.parent / "work/target-feat-interception/release"
+
+
+@pytest.mark.skipif(not (INTERCEPTION / "graphite-hook").exists(),
+                    reason="run ./build_interception.sh first")
+def test_arm_c_dry_smoke(monkeypatch, tmp_path):
+    """Arm C without the model: setup installs hooks in the task worktree,
+    a routed grep and a pre-hook decision go through graphite-hook and land in
+    hooks.jsonl, collection + summary work, teardown restores settings.json
+    and leaves no agent diff."""
+    import tomllib
+    from stream import hooks_summary
+    monkeypatch.setenv("GRAPHITE_BIN", str(INTERCEPTION / "graphite"))
+    monkeypatch.setenv("GRAPHITE_HOOK_BIN", str(INTERCEPTION / "graphite-hook"))
+    hook = str(INTERCEPTION / "graphite-hook")
+    arm = tomllib.loads((HERE.parent / "arms.toml").read_text())["arms"]["C"]
+    common.ensure_mirror()
+    truth = json.loads((HERE.parent / "truth/q-resolve-owner.json").read_text())
+    tree = common.WORK / "smoke-armC"
+    common.add_worktree(truth["sha"], tree)
+    try:
+        settings = tree / ".claude/settings.json"
+        before = settings.read_text() if settings.exists() else None
+        snap = run.snapshot(tree, arm["restore"])
+        setup = run.run_hooks(arm["setup"], tree)
+        assert all(h["code"] == 0 for h in setup), setup
+        assert hook in settings.read_text()
+
+        # what Claude Code would do: pre decision, then the rewritten command
+        cmd = "grep -rn resolve_owner tools/orch/dao-cli"
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(tree)})
+        pre = __import__("subprocess").run([hook, "pre"], input=payload, cwd=tree,
+                                           capture_output=True, text=True)
+        assert pre.returncode == 0, pre.stderr
+        decision = json.loads(pre.stdout)["hookSpecificOutput"]["updatedInput"]["command"]
+        assert "graphite-hook" in decision and " run " in decision
+        out = __import__("subprocess").run(decision, shell=True, cwd=tree, capture_output=True, text=True)
+        assert out.returncode == 0 and out.stdout
+
+        out_dir = tmp_path / "run"
+        out_dir.mkdir()
+        for rel in arm["collect"]:
+            import shutil as _sh
+            _sh.copyfile(tree / rel, out_dir / Path(rel).name)
+        h = hooks_summary(out_dir / "hooks.jsonl")
+        assert h["rewrites"] >= 1 and (h["answers"] + h["fallbacks"]) >= 1, h
+        assert h["errors"] == 0, h
+
+        teardown = run.run_hooks(arm["teardown"], tree)
+        assert all(t["code"] == 0 for t in teardown), teardown
+        run.restore(tree, snap)
+        after = settings.read_text() if settings.exists() else None
+        assert after == before
+        diff, names = run.agent_changes(tree)
+        assert names == [] and diff == ""
+    finally:
+        common.run([str(INTERCEPTION / "graphite"), "daemon", "stop", "--repo", str(tree)], check=False)
+        common.remove_worktree(tree)
 
 
 @pytest.mark.skipif(not GRAPHITE.exists(), reason="graphite CLI not built")

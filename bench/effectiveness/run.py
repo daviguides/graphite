@@ -27,7 +27,7 @@ from pathlib import Path
 from checks import check_code, check_question
 from common import (HERE, RESULTS, RUNS, TRUTH, add_worktree, ensure_mirror, git, load_json,
                     load_tasks, remove_worktree, uv_sync)
-from stream import answer_is_complete, graphite_calls, parse_stream, paths_in, text_paths
+from stream import graphite_calls, hooks_summary, parse_stream, paths_in
 
 BENCH_RULES = """\
 You are running inside an automated benchmark sandbox: a throwaway git
@@ -55,17 +55,49 @@ def graphite_bin() -> str | None:
     return os.environ.get("GRAPHITE_BIN") or shutil.which("graphite")
 
 
+def graphite_hook_bin() -> str | None:
+    """GRAPHITE_HOOK_BIN, else the graphite-hook next to the graphite binary
+    (`hooks install` writes that sibling's absolute path into settings.json)."""
+    if os.environ.get("GRAPHITE_HOOK_BIN"):
+        return os.environ["GRAPHITE_HOOK_BIN"]
+    g = graphite_bin()
+    sib = Path(g).with_name("graphite-hook") if g else None
+    return str(sib) if sib and sib.exists() else shutil.which("graphite-hook")
+
+
+def resolve_bin(name: str) -> str | None:
+    return {"graphite": graphite_bin, "graphite-hook": graphite_hook_bin}.get(name, lambda: shutil.which(name))()
+
+
+def snapshot(tree: Path, rels: list[str]) -> dict[str, bytes | None]:
+    return {r: (tree / r).read_bytes() if (tree / r).exists() else None for r in rels}
+
+
+def restore(tree: Path, snap: dict[str, bytes | None]) -> None:
+    for rel, data in snap.items():
+        p = tree / rel
+        if data is None:
+            p.unlink(missing_ok=True)
+        else:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+
+
 def run_hooks(cmds: list[str], tree: Path) -> list[dict]:
     out = []
     for cmd in cmds:
-        c = cmd.format(tree=shlex.quote(str(tree)), graphite=shlex.quote(graphite_bin() or "graphite"))
+        c = cmd.format(tree=shlex.quote(str(tree)), graphite=shlex.quote(graphite_bin() or "graphite"),
+                       graphite_hook=shlex.quote(graphite_hook_bin() or "graphite-hook"))
         p = subprocess.run(c, shell=True, cwd=tree, capture_output=True, text=True, errors="replace")
         out.append({"cmd": c, "code": p.returncode, "tail": (p.stdout + p.stderr)[-500:]})
     return out
 
 
-# Tool state, not agent work: Graphite's per-repo index, venvs, caches, locks.
+# Tool state, not agent work: Graphite's per-repo index, the hook installer's
+# settings backup, venvs, caches, locks. (settings.json itself is restored by
+# `graphite-hook uninstall` in teardown, before the diff is taken.)
 EXCLUDE = [":(exclude).graphite", ":(exclude)**/.graphite/**", ":(exclude)*.lock",
+           ":(exclude).claude/settings.json.graphite-bak",
            ":(exclude)**/.venv/**", ":(exclude)**/__pycache__/**"]
 
 
@@ -91,26 +123,6 @@ def claude_cmd(prompt: str, model: str, budget: float) -> list[str]:
 AGENT_STOP_SUBTYPES = {"success", "error_max_turns", "error_max_budget_usd"}
 
 
-def hook_answers(path: Path) -> list[dict]:
-    """Answers a graphite hook served in place of a search/read, from the
-    daemon's .graphite/hooks.jsonl (one JSON event per line; schema owned by
-    the hooks feature — read defensively)."""
-    if not path.exists():
-        return []
-    out = []
-    for line in path.read_text(errors="replace").splitlines():
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        text = json.dumps(ev)
-        served = ev.get("action") in ("deny", "answer", "block", "context") or bool(ev.get("answer"))
-        if not served:
-            continue
-        body = ev.get("answer") if isinstance(ev.get("answer"), str) else text
-        out.append({"paths": paths_in(ev) | text_paths(body),
-                    "complete": answer_is_complete(body) or ev.get("complete") is True})
-    return out
 
 
 def attribute(record: dict, truth: dict, is_question: bool) -> dict | None:
@@ -174,6 +186,7 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
         t0 = time.monotonic()
         uv_sync(tree)
         record["prep_s"] = round(time.monotonic() - t0, 1)
+        snap = snapshot(tree, arm.get("restore", []))
         record["setup"] = run_hooks(arm.get("setup", []), tree)
         failed_setup = [h for h in record["setup"] if h["code"] != 0]
         if failed_setup:
@@ -212,6 +225,7 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
             if src.exists():
                 shutil.copyfile(src, out_dir / Path(rel).name)
         record["teardown"] = run_hooks(arm.get("teardown", []), tree)
+        restore(tree, snap)
         diff, edited = agent_changes(tree)
         (out_dir / "agent.diff").write_text(diff)
         record["files_edited"] = edited
@@ -220,18 +234,24 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
             with (out_dir / "graphite.jsonl").open("w") as g:
                 for c in calls:
                     g.write(json.dumps(c) + "\n")
-        hooks = hook_answers(out_dir / "hooks.jsonl")
         record["graphite_calls"] = len(calls)
-        record["graphite_hook_answers"] = len(hooks)
         record["graphite_output_bytes"] = sum(c.get("bytes", 0) for c in calls)
         paths = set()
         for c in calls:
             paths |= set(c.get("paths") or paths_in(c.get("json")))
-        for h in hooks:
-            paths |= h["paths"]
+        if "hooks.jsonl" in [Path(r).name for r in arm.get("collect", [])]:
+            hooks = hooks_summary(out_dir / "hooks.jsonl")
+            record["hooks"] = hooks
+            record["graphite_hook_answers"] = hooks["answers"] + hooks["enrich"]
+            record["graphite_output_bytes"] += hooks["answer_bytes"]
+            paths |= set(hooks["paths"])
+            if hooks["complete"]:
+                record["graphite_complete_answer"] = True
+            # With interception a grep the hook answers IS a graphite answer: only searches the
+            # graph did not answer, after its first complete answer, count as "still searched".
+            record["search_after_complete_stream"] = record.get("search_after_complete_graphite")
+            record["search_after_complete_graphite"] = hooks["searches_after_complete"]
         record["graphite_paths"] = sorted(paths)
-        if any(h["complete"] for h in hooks):
-            record["graphite_complete_answer"] = True
         if task.is_question:
             record.update(check_question(task, truth, record.get("final_text", "")))
         else:
@@ -264,14 +284,9 @@ def main() -> None:
 
     arm = load_arms()[args.arm]
     missing = [r for r in arm.get("requires", [])
-               if not (graphite_bin() if r == "graphite" else shutil.which(r))]
-    sub = arm.get("requires_subcommand")
-    if sub and not missing:
-        probe = subprocess.run([graphite_bin(), sub, "--help"], capture_output=True, text=True)
-        if probe.returncode != 0:
-            missing.append(f"graphite {sub} (not in this build)")
+               if not (resolve_bin(r) and Path(resolve_bin(r)).exists() or shutil.which(resolve_bin(r) or r))]
     if missing:
-        raise SystemExit(f"arm {args.arm} needs {missing} on PATH")
+        raise SystemExit(f"arm {args.arm} needs {missing} (GRAPHITE_BIN / GRAPHITE_HOOK_BIN or PATH)")
     ensure_mirror()
     tasks = load_tasks()
     ids = list(tasks) if args.tasks == "all" else args.tasks.split(",")
