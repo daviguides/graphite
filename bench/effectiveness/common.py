@@ -49,7 +49,7 @@ def load_tasks() -> dict[str, Task]:
 
 def run(cmd: list[str], cwd: Path | None = None, check: bool = True,
         env: dict | None = None, timeout: float | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, errors="replace",
                           check=check, env=env, timeout=timeout)
 
 

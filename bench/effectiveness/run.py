@@ -59,20 +59,22 @@ def run_hooks(cmds: list[str], tree: Path) -> list[dict]:
     out = []
     for cmd in cmds:
         c = cmd.format(tree=shlex.quote(str(tree)), graphite=shlex.quote(graphite_bin() or "graphite"))
-        p = subprocess.run(c, shell=True, cwd=tree, capture_output=True, text=True)
+        p = subprocess.run(c, shell=True, cwd=tree, capture_output=True, text=True, errors="replace")
         out.append({"cmd": c, "code": p.returncode, "tail": (p.stdout + p.stderr)[-500:]})
     return out
 
 
+# Tool state, not agent work: Graphite's per-repo index, venvs, caches, locks.
+EXCLUDE = [":(exclude).graphite", ":(exclude)**/.graphite/**", ":(exclude)*.lock",
+           ":(exclude)**/.venv/**", ":(exclude)**/__pycache__/**"]
+
+
 def agent_changes(tree: Path) -> tuple[str, list[str]]:
-    subprocess.run(["git", "add", "-A", "-N"], cwd=tree, capture_output=True)
-    diff = subprocess.run(["git", "diff", "--", ".", ":(exclude)*.lock",
-                           ":(exclude)**/.venv/**", ":(exclude)**/__pycache__/**"],
-                          cwd=tree, capture_output=True, text=True).stdout
-    names = subprocess.run(["git", "diff", "--name-only"], cwd=tree,
-                           capture_output=True, text=True).stdout.split()
-    names = [n for n in names if "/.venv/" not in n and "__pycache__" not in n
-             and not n.endswith(".lock")]
+    subprocess.run(["git", "add", "-A", "-N", "--", ".", *EXCLUDE], cwd=tree, capture_output=True)
+    diff = subprocess.run(["git", "diff", "--", ".", *EXCLUDE], cwd=tree, capture_output=True,
+                          text=True, errors="replace").stdout
+    names = subprocess.run(["git", "diff", "--name-only", "--", ".", *EXCLUDE], cwd=tree,
+                           capture_output=True, text=True, errors="replace").stdout.split()
     return diff, names
 
 

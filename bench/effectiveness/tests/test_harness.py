@@ -247,3 +247,15 @@ def test_go_requires_ci_upper_below_one():
         stats[(f"t{i}", "B")] = {"turns": 10 * r, "wall": 100 * r, "success_rate": 1.0, "stale": 0}
     v, lines = analyze.verdict(stats)
     assert v == "NO-GO"
+
+
+def test_graphite_index_is_not_agent_work(tmp_path):
+    common.run(["git", "init", "-q"], cwd=tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    common.run(["git", "add", "."], cwd=tmp_path)
+    common.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i"], cwd=tmp_path)
+    (tmp_path / ".graphite").mkdir()
+    (tmp_path / ".graphite" / "db").write_bytes(b"\x81\xff\x00binary")
+    (tmp_path / "a.py").write_text("x = 2\n")
+    diff, names = run.agent_changes(tmp_path)
+    assert names == ["a.py"] and ".graphite" not in diff

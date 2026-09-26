@@ -108,7 +108,7 @@ def graphite_calls(path: Path) -> list[dict]:
     """Every `graphite` command the agent ran, with its output (JSON when parseable)."""
     pending: dict[str, dict] = {}
     calls: list[dict] = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(errors="replace").splitlines():
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
@@ -167,7 +167,7 @@ def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
     first_edit_index = None
     call_index = 0
     graphite_stale = 0
-    for line in path.read_text().splitlines():
+    for line in path.read_text(errors="replace").splitlines():
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
