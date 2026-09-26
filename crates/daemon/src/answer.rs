@@ -335,7 +335,7 @@ fn footer_line(a: &Answer, not_shown: &BTreeMap<String, usize>, summarized: usiz
         } else {
             parts.push("indirect: none".into());
         }
-        if f.tests_total > 0 && compact {
+        if f.tests_total > 0 && (compact || f.tests.is_empty()) {
             parts.push(format!("covering tests: {}", f.tests_total));
         } else if f.tests_total > 0 {
             parts.push(format!(
