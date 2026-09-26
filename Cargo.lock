@@ -723,6 +723,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "graphite-daemon",
+ "graphite-query",
  "serde_json",
  "tempfile",
 ]

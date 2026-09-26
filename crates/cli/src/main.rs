@@ -1,4 +1,5 @@
-//! `graphite`: thin client of the per-repo daemon. `--json` is the agent surface.
+//! `graphite`: thin client of the per-repo daemon. Default output is compact text for agents; `--json` is
+//! the full machine envelope.
 
 mod render;
 
@@ -18,9 +19,12 @@ struct Cli {
     /// Repository root (default: nearest ancestor with .git).
     #[arg(long, global = true)]
     repo: Option<PathBuf>,
-    /// Machine-readable output: the daemon's JSON response, one line.
+    /// Full machine envelope: the daemon's JSON response, one line.
     #[arg(long, global = true)]
     json: bool,
+    /// Text output: list every call site instead of the top few.
+    #[arg(long, global = true)]
+    all: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -135,14 +139,14 @@ fn run(cli: &Cli, paths: &RepoPaths) -> Result<ExitCode, String> {
         Cmd::Blast { symbol, knobs } => Op::Blast {
             symbol: symbol.clone(),
             depth: knobs.depth,
-            budget: knobs.budget,
-            compact: knobs.compact.then_some(true),
+            budget: cli.budget(knobs),
+            compact: cli.compact(knobs),
         },
         Cmd::DiffImpact { base, knobs } => Op::DiffImpact {
             base: base.clone(),
             depth: knobs.depth,
-            budget: knobs.budget,
-            compact: knobs.compact.then_some(true),
+            budget: cli.budget(knobs),
+            compact: cli.compact(knobs),
         },
         Cmd::Nudge { paths: p } => Op::Nudge { paths: p.clone() },
     };
@@ -160,7 +164,7 @@ fn emit(cli: &Cli, resp: Option<&Response>, note: &str) -> Result<ExitCode, Stri
         ),
         None => println!("{note}"),
         Some(r) if cli.json => println!("{}", serde_json::to_string(r).map_err(|e| e.to_string())?),
-        Some(r) => render::human(&cli.cmd_name(), r),
+        Some(r) => render::human(&cli.cmd_name(), r, cli.all),
     }
     Ok(match resp {
         Some(r) if !r.ok => ExitCode::FAILURE,
@@ -168,7 +172,23 @@ fn emit(cli: &Cli, resp: Option<&Response>, note: &str) -> Result<ExitCode, Stri
     })
 }
 
+/// Budget large enough that no call site is cut from the envelope.
+const ALL_BUDGET: usize = 1 << 30;
+
 impl Cli {
+    /// Text never shows dependent source, so skip reading it; JSON keeps the caller's choice.
+    fn compact(&self, k: &KnobArgs) -> Option<bool> {
+        (k.compact || !self.json).then_some(true)
+    }
+
+    fn budget(&self, k: &KnobArgs) -> Option<usize> {
+        if self.all && !self.json {
+            Some(ALL_BUDGET)
+        } else {
+            k.budget
+        }
+    }
+
     fn cmd_name(&self) -> String {
         match &self.cmd {
             Cmd::Daemon {
