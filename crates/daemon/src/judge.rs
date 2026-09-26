@@ -543,11 +543,16 @@ fn context(files: &mut Files, spec: &SearchSpec, abs: &Path, line: u32) -> (Cont
     (before, after)
 }
 
-fn looks_like_mock(text: &str) -> bool {
+/// A test-code line that patches/mocks `name`: a mock API on the line, or a dotted-path string
+/// literal ending in the name (the target of a multi-line `patch(` / `patch.dict`).
+fn looks_like_mock(text: &str, name: &str) -> bool {
     let t = text.to_ascii_lowercase();
     ["patch", "mock", "monkeypatch", "setattr"]
         .iter()
         .any(|k| t.contains(k))
+        || [format!(".{name}\""), format!(".{name}'")]
+            .iter()
+            .any(|p| text.contains(p.as_str()))
 }
 
 fn conf_word(c: Confidence) -> Option<String> {
@@ -809,7 +814,7 @@ fn identifier_items(
                 );
             }
             Class::StringOrComment => {
-                if is_test && looks_like_mock(&h.text) {
+                if is_test && looks_like_mock(&h.text, &f.name) {
                     it.class = "mock_in_test".into();
                     it.why = "string in test code patching/mocking this name".into();
                 } else {
@@ -818,7 +823,7 @@ fn identifier_items(
                 }
             }
             Class::CodeUntracked => {
-                it.class = if is_test && looks_like_mock(&h.text) {
+                it.class = if is_test && looks_like_mock(&h.text, &f.name) {
                     "mock_in_test"
                 } else {
                     "untracked_code"
@@ -986,6 +991,23 @@ fn apply_pipeline(a: &mut Answer, spec: &SearchSpec) {
         let mocks = a.items.iter().filter(|i| i.class == "mock_in_test").count();
         a.items.retain(|i| !i.test && i.class != "mock_in_test");
         let dropped = before - a.items.len();
+        // Prod-only view: test functions out of caller chains too; test totals stay as counts.
+        let is_test_name = |n: &str| {
+            n.split('.')
+                .any(|seg| seg.starts_with("test_") || seg.starts_with("Test"))
+        };
+        for it in &mut a.items {
+            let keep: Vec<String> = it
+                .called_by
+                .iter()
+                .filter(|n| !is_test_name(n))
+                .cloned()
+                .collect();
+            let gone = (it.called_by.len() - keep.len()) as u32;
+            it.called_by = keep;
+            it.called_by_total = it.called_by_total.saturating_sub(gone);
+        }
+        a.footer.tests.clear();
         a.notices.push(format!(
             "`{src}` → {dropped} test matches ({mocks} mocks) omitted (you filtered tests)"
         ));

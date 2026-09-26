@@ -197,13 +197,24 @@ fn integrated_list_is_relevance_ordered_single_list() {
 #[test]
 fn drop_tests_is_semantic_and_disclosed() {
     let (_d, root) = fixture();
-    write(&root, "tests/test_core.py", "from unittest.mock import patch\n\ndef test_x():\n    with patch(\"pkg.core.resolve_owner\"):\n        pass\n");
+    write(&root, "tests/test_core.py", "from unittest.mock import patch\nfrom pkg.use import a\n\ndef test_x():\n    with patch(\"pkg.core.resolve_owner\"):\n        a()\n");
     let mut s = spec(&root, "resolve_owner");
     s.drop_tests = Some("grep -v test".into());
     let (_a, text) = build(&root, &s);
     assert!(!text.contains("tests/test_core.py"), "{text}");
     assert!(
         text.contains("`grep -v test` → 1 test matches (1 mocks) omitted"),
+        "{text}"
+    );
+}
+
+#[test]
+fn multiline_patch_target_is_a_mock() {
+    let (_d, root) = fixture();
+    write(&root, "tests/test_m.py", "from unittest.mock import patch\n\ndef test_m():\n    with patch(\n        \"pkg.core.resolve_owner\",\n    ):\n        pass\n");
+    let (_a, text) = build(&root, &spec(&root, "resolve_owner"));
+    assert!(
+        text.contains("tests/test_m.py:5:        \"pkg.core.resolve_owner\",    [mock in test]"),
         "{text}"
     );
 }
