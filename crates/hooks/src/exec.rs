@@ -150,8 +150,10 @@ fn answer_fields(ev: &mut Map<String, Value>, text: &str, stats: &Value, matches
         ev.insert("residue".into(), c.clone());
         ev.insert("matches".into(), matches.into());
     }
-    if let Some(b) = stats.get("raw_bytes") {
-        ev.insert("raw_bytes".into(), b.clone());
+    for k in ["raw_bytes", "search_ms", "total_ms"] {
+        if let Some(v) = stats.get(k) {
+            ev.insert(k.into(), v.clone());
+        }
     }
 }
 

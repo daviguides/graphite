@@ -23,6 +23,7 @@ const MAX_NAME_SYMBOLS: usize = 200;
 pub enum Class {
     Definition,
     Reference,
+    Import,
     GraphGap,
     CodeUntracked,
     StringOrComment,
@@ -37,6 +38,7 @@ impl Class {
         match self {
             Class::Definition => "definition",
             Class::Reference => "reference",
+            Class::Import => "import",
             Class::GraphGap => "graph_gap",
             Class::CodeUntracked => "code_untracked",
             Class::StringOrComment => "string_or_comment",
@@ -58,7 +60,7 @@ impl Class {
             Class::NotIndexed => "in Python files outside the index",
             Class::DocsConfig => "in docs / config",
             Class::OtherIdentifier => "part of a different identifier",
-            Class::Definition | Class::Reference => "",
+            Class::Definition | Class::Reference | Class::Import => "",
         }
     }
 
@@ -295,12 +297,43 @@ fn is_definition_line(text: &str, name: &str) -> bool {
     })
 }
 
+/// A name on a continuation line of a parenthesized `from x import (` whose import edge the graph resolved.
+fn in_import_block(f: &NameFacts, rel: &str, abs: &Path, line: u32, files: &mut Files) -> bool {
+    let starts: Vec<u32> = f
+        .refs
+        .iter()
+        .filter(|((p, l), r)| p == rel && *l < line && r.kind == EdgeKind::Imports)
+        .map(|((_, l), _)| *l)
+        .collect();
+    let Some(&start) = starts.iter().max() else {
+        return false;
+    };
+    let Some(lines) = files.lines(abs) else {
+        return false;
+    };
+    let block: String = lines
+        .iter()
+        .skip(start.saturating_sub(1) as usize)
+        .take((line - start) as usize)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+    block.contains('(') && !block.contains(')')
+}
+
 fn classify(engine: &Engine, facts: Option<&NameFacts>, hit: &Hit, files: &mut Files) -> Class {
     let rel = engine.paths.relative(&hit.abs);
     if let (Some(f), Some(rel)) = (facts, rel.as_deref()) {
         let key = (rel.to_string(), hit.line);
-        if f.refs.contains_key(&key) {
-            return Class::Reference;
+        if let Some(r) = f.refs.get(&key) {
+            return if r.kind == EdgeKind::Imports {
+                Class::Import
+            } else {
+                Class::Reference
+            };
+        }
+        if in_import_block(f, rel, &hit.abs, hit.line, files) {
+            return Class::Import;
         }
         if f.syms.iter().any(|s| s.path == rel) && is_definition_line(&hit.text, &f.name) {
             return Class::Definition;
@@ -465,8 +498,10 @@ pub fn render(
     } else {
         spec.label.clone()
     };
-    let explained = counts.get(&Class::Reference).copied().unwrap_or(0)
-        + counts.get(&Class::Definition).copied().unwrap_or(0);
+    let explained = [Class::Reference, Class::Definition, Class::Import]
+        .iter()
+        .map(|c| counts.get(c).copied().unwrap_or(0))
+        .sum::<usize>();
     let mut header = format!(
         "[graphite] {label} → {} matches in {} files",
         res.hits.len(),
@@ -606,7 +641,12 @@ fn render_identifier(
     let mut hidden: Vec<(&(String, u32), &RefInfo)> = f
         .refs
         .iter()
-        .filter(|(k, _)| !seen.contains(*k) && res.searched.contains(&engine.paths.root.join(&k.0)))
+        .filter(|(k, r)| {
+            // Imports are counted, not listed; only uses the text search missed are shown.
+            r.kind != EdgeKind::Imports
+                && !seen.contains(*k)
+                && res.searched.contains(&engine.paths.root.join(&k.0))
+        })
         .collect();
     hidden.sort_by(|a, b| a.0.cmp(b.0));
     *alias_refs = hidden.len();
@@ -616,9 +656,8 @@ fn render_identifier(
         let rel = engine.paths.relative(&h.abs)?;
         f.refs.get(&(rel, h.line))
     };
-    let (imports, uses): (Vec<usize>, Vec<usize>) = refs
-        .iter()
-        .partition(|&&i| ref_of(i).is_some_and(|r| r.kind == EdgeKind::Imports));
+    let imports = idx(Class::Import);
+    let uses = refs;
     if !uses.is_empty() {
         let files: HashSet<&Path> = uses.iter().map(|&i| res.hits[i].abs.as_path()).collect();
         out.line(&format!(
@@ -691,7 +730,7 @@ fn render_identifier(
                     .push(format!("{}:{}", h.display, h.line));
             }
             for (tok, locs) in by_tok {
-                let shown: Vec<&String> = locs.iter().take(cap).collect();
+                let shown: Vec<&String> = locs.iter().take(cap.min(4)).collect();
                 let more = locs.len() - shown.len();
                 out.line(&format!(
                     "    {tok} ×{}: {}{}",

@@ -12,8 +12,9 @@
 //! - `rewritten_command` (pre/rewrite), `segment` (exec), `kind` (exec: "search" | "read" | "list")
 //! - `answer` (text shown to the agent for Graphite-produced output, capped at 20 KB), `answer_bytes`
 //! - `raw_bytes` (search: size a plain grep would have printed), `matches`
+//! - `search_ms` / `total_ms` (daemon-side search and search+judgment time)
 //! - `graph_verdict`: "complete" | "lower_bound" | "none"
-//! - `residue` (search: match counts by class — definition, reference, graph_gap, code_untracked,
+//! - `residue` (search: match counts by class — definition, reference, import, graph_gap, code_untracked,
 //!   string_or_comment, other_language, not_indexed, docs_config, other_identifier)
 //! - `latency_ms`, `reason` (why passthrough/fallback), `error`
 

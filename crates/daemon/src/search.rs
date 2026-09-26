@@ -11,6 +11,7 @@ use grep_searcher::sinks::Lossy;
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder};
 use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::paths::DEFAULT_EXCLUDES;
@@ -122,22 +123,11 @@ pub fn under_excluded(p: &Path) -> bool {
         .any(|c| DEFAULT_EXCLUDES.contains(&c.as_os_str().to_string_lossy().as_ref()))
 }
 
-fn search_file(
-    searcher: &mut Searcher,
-    matcher: &RegexMatcher,
-    abs: &Path,
-    cwd: &Path,
-    out: &mut SearchOutcome,
-) {
-    if out.hits.len() >= MAX_MATCHES {
-        out.truncated = true;
-        return;
-    }
-    out.searched.insert(abs.to_path_buf());
+/// Matching lines of one file, in line order.
+fn search_file(matcher: &RegexMatcher, abs: &Path, cwd: &Path) -> Vec<Hit> {
     let display = display_path(abs, cwd);
-    let hits = &mut out.hits;
-    let mut truncated = false;
-    let _ = searcher.search_path(
+    let mut hits = Vec::new();
+    let _ = searcher().search_path(
         matcher,
         abs,
         Lossy(|lnum, line| {
@@ -155,16 +145,10 @@ fn search_file(
                 text,
                 col,
             });
-            if hits.len() >= MAX_MATCHES {
-                truncated = true;
-                return Ok(false);
-            }
-            Ok(true)
+            Ok(hits.len() < MAX_MATCHES)
         }),
     );
-    if truncated {
-        out.truncated = true;
-    }
+    hits
 }
 
 fn walker(
@@ -207,14 +191,14 @@ fn walker(
 /// Run the search under `repo_root`. Explicit paths into excluded locations are searched unfiltered.
 pub fn run(spec: &SearchSpec, repo_root: &Path) -> Result<SearchOutcome, String> {
     let matcher = build_matcher(spec)?;
-    let mut s = searcher();
     let cwd = PathBuf::from(&spec.cwd);
     let mut out = SearchOutcome::default();
     let skipped = Arc::new(Mutex::new(Vec::new()));
+    let mut files: Vec<PathBuf> = Vec::new();
     for p in &spec.paths {
         let root = PathBuf::from(p);
         if root.is_file() {
-            search_file(&mut s, &matcher, &root, &cwd, &mut out);
+            files.push(root);
             continue;
         }
         if !root.is_dir() {
@@ -222,14 +206,27 @@ pub fn run(spec: &SearchSpec, repo_root: &Path) -> Result<SearchOutcome, String>
         }
         let rel = root.strip_prefix(repo_root).unwrap_or(&root);
         let filtered = !spec.no_ignore && !under_excluded(rel);
-        for e in walker(&root, spec, filtered, skipped.clone()).flatten() {
-            if e.file_type().is_some_and(|t| t.is_file()) {
-                search_file(&mut s, &matcher, e.path(), &cwd, &mut out);
-                if out.truncated {
-                    break;
-                }
-            }
+        files.extend(
+            walker(&root, spec, filtered, skipped.clone())
+                .flatten()
+                .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+                .map(|e| e.into_path()),
+        );
+    }
+    // Search in parallel, keep walk order for output.
+    let per_file: Vec<Vec<Hit>> = files
+        .par_iter()
+        .map(|f| search_file(&matcher, f, &cwd))
+        .collect();
+    out.searched = files.into_iter().collect();
+    for hits in per_file {
+        let room = MAX_MATCHES.saturating_sub(out.hits.len());
+        if hits.len() > room {
+            out.hits.extend(hits.into_iter().take(room));
+            out.truncated = true;
+            break;
         }
+        out.hits.extend(hits);
     }
     out.excluded_dirs = std::mem::take(&mut *skipped.lock().unwrap());
     count_excluded(spec, &matcher, &mut out);

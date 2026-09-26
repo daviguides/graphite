@@ -58,8 +58,9 @@ fn identifier_search_accounts_for_every_match() {
     let (text, stats) = judge::render(&engine, &s, &res, false).unwrap();
     let c = &stats["classes"];
     assert_eq!(c["definition"], 1, "{text}");
-    // two imports, one call, and obj.resolve_owner() bound by unique-name guess
-    assert_eq!(c["reference"], 4, "{text}");
+    // one call and obj.resolve_owner() bound by unique-name guess; two import lines
+    assert_eq!(c["reference"], 2, "{text}");
+    assert_eq!(c["import"], 2, "{text}");
     assert_eq!(c["string_or_comment"], 2, "{text}");
     assert_eq!(c["code_untracked"], 1, "{text}"); // f = resolve_owner
     assert_eq!(c["other_identifier"], 1, "{text}"); // _resolve_owners

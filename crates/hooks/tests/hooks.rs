@@ -238,7 +238,8 @@ fn end_to_end_rewrite_and_answer() {
     assert_eq!(ans["action"], "answer");
     assert_eq!(ans["graph_verdict"], "complete");
     assert!(ans["answer"].as_str().unwrap().contains("resolve_owner"));
-    assert_eq!(ans["residue"]["reference"], 2);
+    assert_eq!(ans["residue"]["reference"], 1);
+    assert_eq!(ans["residue"]["import"], 1);
     stop(&paths, h);
 }
 
