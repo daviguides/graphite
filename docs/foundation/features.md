@@ -15,8 +15,8 @@ Every wave is a vertical slice: usable end-to-end by an agent and measurable on 
 | Version | Theme | Primary target |
 |---|---|---|
 | **v1** | Core graph + agent surface — shipped in four waves: | Speed |
-| ↳ **v1.0** | Thesis slice: one language, daemon, `diff_impact` + blast radius, CLI, with-vs-without bench | Speed |
-| ↳ **v1.1** | Full agent surface: all v1 languages, `context` + search + grep, hooks, MCP shim | Speed, Assertiveness |
+| ↳ **v1.0** | Thesis slice: one language, daemon, `diff_impact` + blast radius, CLI, **interception + enriched grep**, with-vs-without bench | Speed |
+| ↳ **v1.1** | Full agent surface: all v1 languages, `context` + search, pre-edit hook, MCP shim | Speed, Assertiveness |
 | ↳ **v1.2** | Runner integration | Speed |
 | ↳ **v1.3** | Response contract completion + operational fallback | Speed, Assertiveness |
 | **v2** | Query breadth + hardening | Speed, Correctness |
@@ -46,23 +46,25 @@ Every wave is a vertical slice: usable end-to-end by an agent and measurable on 
   - *Daemon:* one daemon per repo (CozoDB mnestic/RocksDB + in-memory adjacency), eager watcher, freshness barrier, `graph_rev`, mtime→BLAKE3 ladder, stale sweep, incremental == full test.
   - *Queries:* `diff_impact`, blast radius (default depth 3).
   - *Response:* source inline, rank-based budget, deterministic ranking (and ranker), disclosure fields, `epistemic` + `causes`, prod/test partition + covering tests, `stale` + `graph_rev`, bytes/3 estimator.
-  - *Surface:* CLI `--json` as the only surface, skill file (so the agent knows the CLI exists).
+  - *Surface:* CLI (model text format by default, `--json` for programs), skill file (so the agent knows the CLI exists).
+  - *Steering (moved in from v1.1 on 2026-09-27 — see [interception.md](interception.md)):* embedded ripgrep search in the daemon, residue judgment, PreToolUse rewrite hook for read-only `grep`/`rg`/`ack`/`find`/`ls`/`cat`/`sed -n`/`head`/`tail`, enriched-grep answer (integrated `path:line:` lines + header verdict + footer), head/tail as budget, filters by intent, hook fail-open in settings.json + `graphite hooks install`, post-edit nudge, `hooks.jsonl` log.
   - *Measurement:* effectiveness bench (turns + wall-clock, with vs without), storage bench kept runnable.
+  - **Why the move:** pilot B (CLI + prompt line, no hooks) hit this wave's own "did not use" rethink rule — one task never called Graphite, and every run that did still grepped after a complete answer. Without steering the thesis can't be tested.
 - **Depends on:** nothing.
 - **Exit criteria — go / no-go on the thesis:**
-  - **Bench:** a fixed set of real Python tasks in Continuum (bug fixes and changes that cross files, taken from real history), each run with and without Graphite, same model, several repeats.
+  - **Bench:** a fixed set of real Python tasks in Continuum (bug fixes and changes that cross files, taken from real history), each run with and without Graphite, same model, several repeats. The deciding arm is **C** (enriched-grep format + interception hooks); A = no Graphite, B = CLI + prompt line with the old JSON output (pilot B: turns ratio 1.05, wall-clock 0.88, 10/10 success both arms, see `references/studies/effectiveness-bench-design.md`).
   - **Go:** with Graphite, median wall-clock and median turns per task are clearly lower (target ≥20%), task success rate is equal or better, and zero silent-stale answers were observed. Plus incremental == full on Continuum and depth-10 blast radius < 10 ms.
   - **Rethink if:**
     - the agent **used** Graphite (Graphite CLI calls in the transcripts) and was **not** faster, or got less correct → the thesis or the answer shape is wrong; revisit what `diff_impact` returns before building more surface.
-    - the agent **did not use** Graphite → a surface problem, not a thesis refutation; pull the v1.1 hooks forward and rerun before judging.
+    - the agent **did not use** Graphite → a surface problem, not a thesis refutation; pull the v1.1 hooks forward and rerun before judging. *(Fired in pilot B; interception pulled into v1.0 on 2026-09-27.)*
     - correctness dropped (tasks failed or regressed that passed without Graphite) → stop and investigate before any further wave.
 
 #### v1.1 — Full agent surface
 
 - **Goal:** the agent gets graph answers everywhere it would otherwise explore — on every language of Continuum (Python, Rust, TS/Tauri), at the moment it greps or edits, and through MCP where the host prefers it.
-- **Features (17):** Rust / TS-JS grammars (in that order), callee qualifiers, parse-parallel/write-serial pipeline; `context`, lexical symbol search, AST-context grep; disambiguation in the envelope; MCP shim, ≤5 listed tools, tool schema limits; pre-grep hook (block and answer), pre-edit hook (impact + covering tests), hook fail-open in settings.json, post-edit nudge; trace relation, conversion metric, routing bench.
+- **Features:** Rust / TS-JS grammars (in that order), callee qualifiers, parse-parallel/write-serial pipeline; `context`, lexical symbol search; disambiguation in the envelope; MCP shim, ≤5 listed tools, tool schema limits; pre-edit hook (impact + covering tests); trace relation, conversion metric, routing bench. *(AST-context grep, the grep hook, hook fail-open and post-edit nudge moved to v1.0 on 2026-09-27.)*
 - **Depends on:** v1.0 (daemon, `diff_impact`, response envelope).
-- **Exit criteria:** effectiveness bench rerun on Continuum including its Rust and TS/Tauri tools shows turns and wall-clock at least as good as v1.0, with a further drop from hooks; conversion metric shows the hooks' answers are used instead of the grep/Read they replaced; routing bench above threshold; incremental == full across all three languages.
+- **Exit criteria:** effectiveness bench rerun on Continuum including its Rust and TS/Tauri tools shows turns and wall-clock at least as good as v1.0, with a further drop from the pre-edit hook; conversion metric shows the hooks' answers are used instead of the grep/Read they replaced; routing bench above threshold; incremental == full across all three languages.
 
 #### v1.2 — Runner integration
 
@@ -179,7 +181,7 @@ Every wave is a vertical slice: usable end-to-end by an agent and measurable on 
 | Freshness barrier | Wait ≤~200 ms for indexing up to arrival seqno, else `stale: true` | S C | **v1.0** | CGM | Never blocks, never silently stale. |
 | `graph_rev` watermark | Stored in DB, returned in every response | A C | **v1.0** | CT (lk) | Kills cache races; tells agent and Observatory what state answered. |
 | mtime+size stamp → BLAKE3 ladder | Skip unchanged bytes | S | **v1.0** | CGM, LS | Minimal watcher overhead. |
-| Post-edit nudge hook | Tell the daemon "file X changed now" | S C | **v1.1** | CGM | Agent's own edit indexed before its next query. |
+| Post-edit nudge hook | Tell the daemon "file X changed now" | S C | **v1.0** | CGM | Agent's own edit indexed before its next query; installed with the interception hooks. |
 | Stale-element sweep | Remove facts of files that left the tracked set | C | **v1.0** | CT (lk) | Deleted files must disappear. |
 | Incremental == full, tested | Fixture comparing incremental with rebuild | C | **v1.0** | CGM, SB | CGM bumped its index format 71 times over this bug class. |
 | CLI probe fallback | Probe + sync when no daemon runs | S | **v1.3** | architecture | CI and one-off use. |
@@ -197,7 +199,9 @@ Every wave is a vertical slice: usable end-to-end by an agent and measurable on 
 | `context` | One symbol: signature, source, callers/callees, references, tests | S A | **v1.1** | GN, CGM, CT (fg) | Replaces 3–6 Read/Grep calls before an edit. |
 | `diff_impact` | Diff hunks → changed symbols → blast radius → covering tests | S C | **v1.0** | GN (`detect_changes`), CT (ig), CGM (`affected`), RI | Merged duplicates; the graph already matches the working tree. |
 | Lexical symbol search | Exact → fuzzy with disambiguation | S | **v1.1** | CGM, CT (lk), GN | Replaces grep loops for names. |
-| AST-context grep | Regex hits grouped by enclosing symbol | S | **v1.1** | CGM, LS (Graft) | The pre-grep hook's answer. |
+| AST-context grep | Regex hits grouped by enclosing symbol | S | **v1.0** | CGM, LS (Graft) | The intercepted answer for non-identifier patterns ([interception.md](interception.md)). |
+| Embedded ripgrep search | ripgrep crates in the daemon; gitignore + hidden/default excludes, omitted counts disclosed | S C | **v1.0** | user, interception | Faster than `grep -r`, drops binary/worktree noise; always line numbers. |
+| Residue judgment | Classify each match: definition / call site / import / mock / docs / string-comment / unresolved / other language / graph-only | A C | **v1.0** | interception | Drop only what the graph provably explains; nothing silently omitted. |
 | Find all references | Every import/inherit/implement/call/reference site | C | **v2** | CGM, CT (ig) | Rename/remove safety. |
 | Search ladder with provenance | `retrieval{rung, reason}` on each answer | A | **v2** | CT (lk) | Builds on v1 search. |
 | Path between two symbols | Shortest directed path, file:line per hop | S | **v2** | GN, CGM | Answers 3–8 hops in one call. |
@@ -237,13 +241,15 @@ All **v1** — the contract is what turns a correct graph into fewer agent turns
 
 | Feature | What | Target | Version | Sources | Why this version |
 |---|---|---|---|---|---|
-| CLI as primary agent surface | `graphite <cmd> --json` via Bash | S | **v1.0** | CGM | MCP tools are deferred in Claude Code; measured conversions came via CLI. |
+| CLI as primary agent surface | `graphite <cmd>` via Bash; default = model text format, `--json` for programs | S | **v1.0** | CGM | MCP tools are deferred in Claude Code; measured conversions came via CLI. Pilot B: 14–25 KB one-line JSON got `head -c`-cut by agents. |
+| Output modes | Default (exact agent view), `--human` (grouped, colored), `--json`, `--explain` — one record, parity-tested renderers | A | **v1.0** | interception | Debug what the agent actually saw; no TTY auto-switch. |
 | MCP shim (secondary) | Same handlers, thin client | S | **v1.1** | architecture, CGM | Hosts that don't defer tools; runner SDK sessions. |
 | Few listed tools, capability via flags | ≤5 listed | S | **v1.1** | CGM, CT (lk), LS | Agents under-pick extra tools. Count disagreement (1 vs 3 vs 7): start few, the routing bench decides. |
 | Tool schema limits | No `anyOf`; descriptions ≤200 chars, positive; instructions ≤1.5 KB | S | **v1.1** | CGM | Measured client behavior. |
-| Pre-grep hook: block and answer | Deny identifier grep, return the graph's answer | S | **v1.1** | CGM, GN | Hint-only ~0% uptake; answering converts. |
+| Transparent interception → enriched grep | PreToolUse rewrites read-only grep/rg/ack/find/ls/cat/sed -n/head/tail via `updatedInput`; Graphite answers with integrated `path:line:` lines + verdict header + footer; head/tail = budget; filters by intent | S A C | **v1.0** | CGM, GN, RTK, format eval | Hint-only ~0% uptake (CGM); pilot B non-use + post-answer greps. Replaces CGM's "deny and answer": the agent sees its own command's output, not a refusal. Format chosen by experiment (lines 100%, fewest tokens). |
 | Pre-edit hook: impact + covering tests | Inject when a signature with ≥2 prod callers is touched | C | **v1.1** | CGM | Blast radius at the moment of the edit. |
-| Hook fail-open, in settings.json | Errors never break the tool call | C | **v1.1** | CGM | Plugin `hooks.json` only honors SessionStart. |
+| Hook fail-open, in settings.json | Errors never break the tool call; `graphite hooks install` preserves foreign hooks and key order | C | **v1.0** | CGM | Plugin `hooks.json` only honors SessionStart. |
+| Hook log + debug views | `.graphite/hooks.jsonl`; `graphite hooks log` / `hooks show <n>` side by side (command, model answer, `--human`, `--explain`) | A | **v1.0** | interception | Debug real sessions. |
 | Skill file | Teaches the agent the tool | S | **v1.0** | CT (fg) | Cheap onboarding. |
 | Steering variants | Compound-grep inject, read fan-out hint, per-prompt push | S | **v2** | CGM | Tune with the v2 recommendation funnel. |
 | Per-community skills, AGENTS.md rules | Area knowledge, "impact before edit" | A | **v4** | GN | Needs communities. |
@@ -319,4 +325,4 @@ Not scheduled because no measured effect on the targets justifies them now. Each
 
 ## Counts
 
-110 features after deduplication (the v1 language row is split in two) — v1: 62 (v1.0: 34 · v1.1: 17 · v1.2: 4 · v1.3: 7) · v2: 18 · v3: 7 · v4: 10 · v5: 3 · v6: 2 · v7: 4 · v8: 4 · parking lot: 15 (Go grammar moved to the parking lot on 2026-09-24; the v1.1 language row now covers Rust and TS-JS)
+114 features after deduplication (the v1 language row is split in two; 2026-09-27: +4 interception features — embedded search, residue judgment, output modes, hook log) — v1: 66 (v1.0: 42 · v1.1: 13 · v1.2: 4 · v1.3: 7; AST-context grep, grep interception, hook fail-open and post-edit nudge moved v1.1 → v1.0) · v2: 18 · v3: 7 · v4: 10 · v5: 3 · v6: 2 · v7: 4 · v8: 4 · parking lot: 15 (Go grammar moved to the parking lot on 2026-09-24; the v1.1 language row now covers Rust and TS-JS)

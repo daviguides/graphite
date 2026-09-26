@@ -197,9 +197,12 @@ path[s, t, n] := path[s, m, n1], *depends[m, t, _], n = n1 + 1, n < 10
 
 All surfaces are thin clients of the daemon and share the same handlers, so answers are identical whichever path the agent takes.
 
-- **CLI via Bash is the primary agent surface.** In Claude Code, MCP tools are deferred (a ToolSearch load is needed before first use) while Bash is always live; code-graph-mcp measured its conversions coming through the CLI. `graphite <cmd> --json`.
+- **Transparent interception is the primary steering** ([interception.md](interception.md)). A PreToolUse hook rewrites the agent's habitual read-only commands (`grep`, `rg`, `ack`, `find`, `ls`, `cat`, `sed -n`, `head`, `tail`) via `updatedInput`; the daemon runs the search with embedded ripgrep and answers with an **enriched grep**: integrated `path:line:` lines annotated by the graph, a verdict header and a short footer. Head/tail act as a budget, filters are handled by intent, fail-open, no permission bypass. Why: hint-only steering measured ~0% uptake, and pilot B showed non-use and post-answer greps.
+- **CLI via Bash for explicit graph questions.** In Claude Code, MCP tools are deferred (a ToolSearch load is needed before first use) while Bash is always live; code-graph-mcp measured its conversions coming through the CLI. `graphite blast` / `diff-impact` answer in graph-centric text; `--json` for programs.
+- **Output modes, one record:** default = exactly what the agent sees; `--human` grouped/colored; `--json`; `--explain`. Renderers share one canonical record (parity-tested). No TTY auto-switch. Interceptions are logged to `.graphite/hooks.jsonl` (`graphite hooks log|show`).
 - **MCP shim (stdio) is secondary** — for hosts that don't defer tools and for runner's SDK sessions. Few listed tools (≤5), capability via flags; no `anyOf` in schemas, descriptions ≤200 chars, instructions ≤1.5 KB (measured client limits). A routing bench guards tool descriptions.
-- **Steering hooks** (registered in `settings.json`, fail-open): pre-grep **block and answer** with the graph's result; pre-edit **impact + covering tests** injection; post-edit nudge to the daemon. Hint-only steering measured ~0% uptake.
+- **Other hooks** (registered in the repo's `.claude/settings.json`, fail-open): pre-edit **impact + covering tests** injection (v1.1); post-edit nudge to the daemon.
+- Prototype of interception lives on branch `feat/interception` pending adjustments and approval.
 
 Core queries (full list and verdicts in [features.md](features.md)):
 

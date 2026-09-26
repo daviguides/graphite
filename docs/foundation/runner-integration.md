@@ -66,13 +66,13 @@ sdk = SDKWrapper(
 
 ### Steering hooks
 
-Hint-only steering ("prefer the graph tool") measured ~0% uptake in code-graph-mcp. What converts is answering:
+Hint-only steering ("prefer the graph tool") measured ~0% uptake in code-graph-mcp, and our pilot B (CLI + prompt line) showed one task never using Graphite and every other run grepping after a complete answer. What converts is answering where the agent already acts ([interception.md](interception.md)):
 
-- **Pre-grep (PreToolUse on Bash/Grep):** block a raw grep for an identifier and return the graph's answer (hits grouped by enclosing symbol) in the deny reason.
+- **Interception (PreToolUse on Bash):** read-only `grep`/`rg`/`ack`/`find`/`ls`/`cat`/`sed -n`/`head`/`tail` are rewritten transparently (`updatedInput`); the agent receives an **enriched grep** — its own command's matches, each annotated by the graph, plus a completeness verdict. Size pipes become a budget; filters are handled by intent. Fail-open, no permission bypass.
 - **Pre-edit (PreToolUse on Edit):** when the edit touches a signature with ≥2 prod callers, inject the impact summary and runnable covering tests.
 - **Post-edit (PostToolUse on Write/Edit):** nudge the daemon with the edited path so the next query sees the edit.
 
-Hooks are registered in the worktree's `settings.json` (plugin `hooks.json` only honors SessionStart), fail open, and hit the daemon socket in milliseconds. SDK sessions launched by runner load project settings (`setting_sources=["project"]`), so the hooks apply there too.
+Hooks are registered in the worktree's `.claude/settings.json` by `graphite hooks install` (plugin `hooks.json` only honors SessionStart; foreign hooks such as RTK and key order preserved), fail open, and hit the daemon socket in milliseconds. SDK sessions launched by runner load project settings (`setting_sources=["project"]`), so the hooks apply there too.
 
 Layer 1 gives speed (zero turns to get context). Layer 2 and hooks give assertiveness and correctness (the agent gets exactly what it needs at the moment it acts).
 
