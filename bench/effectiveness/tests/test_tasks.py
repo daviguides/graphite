@@ -13,6 +13,9 @@ from leaks import find_leaks, touched  # noqa: E402
 
 TASKS = load_tasks()
 CODE = [t for t in TASKS.values() if not t.is_question]
+# Tasks that existed before the issue rewrite keep their old statement;
+# tasks mined after it were written as issues from the start.
+REWRITTEN = [t for t in CODE if t.statement_hinted]
 
 DIFF = """\
 diff --git a/tools/orch/regent/regent/core/delivery.py b/tools/orch/regent/regent/core/delivery.py
@@ -62,18 +65,23 @@ def test_issue_statement_names_no_location(task):
     assert find_leaks(task.prompt, diff, task.leak_allow) == []
 
 
-@pytest.mark.parametrize("task", CODE, ids=lambda t: t.id)
-def test_every_code_task_keeps_its_hinted_statement(task):
-    assert task.statement_hinted and task.statement_hinted != task.prompt
+@pytest.mark.parametrize("task", REWRITTEN, ids=lambda t: t.id)
+def test_rewritten_tasks_keep_their_hinted_statement(task):
+    assert task.statement_hinted != task.prompt
     assert task.statement("hinted") == task.statement_hinted
     assert task.statement("issue") == task.prompt
 
 
 def test_the_detector_sees_what_the_old_statements_gave_away():
     """Most hinted statements named a file or function; the check must catch them."""
-    leaky = [t.id for t in CODE
+    leaky = [t.id for t in REWRITTEN
              if find_leaks(t.statement_hinted, (TRUTH / f"{t.id}.diff").read_text(), t.leak_allow)]
-    assert len(leaky) >= len(CODE) * 2 // 3
+    assert len(REWRITTEN) == 18 and len(leaky) >= len(REWRITTEN) * 2 // 3
+
+
+def test_issue_native_tasks_fall_back_to_their_issue_statement():
+    native = [t for t in CODE if not t.statement_hinted]
+    assert native and all(t.statement("hinted") == t.prompt for t in native)
 
 
 def test_questions_are_not_localization_tasks():

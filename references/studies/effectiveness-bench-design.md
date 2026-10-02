@@ -61,7 +61,7 @@ have been about a different symbol).
 correct → revisit the `diff_impact` answer shape; Graphite not used → surface
 problem, pull v1.1 hooks forward and rerun; correctness dropped → stop.
 
-## Task set (22 tasks)
+## Task set (22 tasks at first, 27 since 2026-10-01)
 
 Mined from Continuum history (`mine.py`, `show_task.py`). Code tasks replay a
 real commit: the agent starts at `ref~1` and gets an issue-style statement of
@@ -322,6 +322,117 @@ Reading:
 - **Answers are larger than the greps they replace** (2.3× bytes), with no
   measurable turn saving — worth checking whether that size buys anything.
 - Correctness unchanged; no Graphite-caused failure.
+
+## Issue-form tasks (2026-10-01)
+
+**Why.** Pilot C was flat because the statements named the file or function
+to change: localization was short before Graphite could help. Every code
+statement is now written as a real issue — symptom and expected behaviour,
+user-facing names only (CLI commands and flags, error messages, config keys,
+task.yaml values). The old text stays as `statement_hinted`
+(`run.py --statement hinted`; default `issue`), and the judge grades against
+the statement the agent saw.
+
+**Leak check** (`leaks.py`, `tests/test_tasks.py`): no path the reference
+diff touches (full or basename) and no def/class it changes or edits inside
+may appear in the issue statement; plain lowercase names count only when
+written as code. All 23 code tasks pass; the check flags 14 of the 18 old
+hinted statements. `leak_allow` exempts a config file users edit
+(`model_pins.json`, `owners.yaml`). Question tasks name their symbol by
+design: not localization tasks, not checked, out of issue-form pilots.
+
+**Five new cross-module tasks** (`mine_cross.py`: non-test source in ≥2
+tools, tests in the commit, 30–600 changed lines), issue-form from the
+start, truth frozen with suites:
+
+| id | kind | ref | tools | hidden tests start → ref |
+|---|---|---|---|---|
+| regent-project-auto-enqueue | feature | fd7e623d75 | dao-cli + regent | 12 → 15 pass |
+| owner-publish-choice | feature | e3a567043f | dao-cli + regent + instrument + foreman | 28 → 40 pass |
+| refinement-stays-finished | bugfix | 76530285c6 | refiner + regent | 33 → 37 pass |
+| foreman-validating-reject | feature | f6af34e43c | dao-cli + foreman | 0 → 4 pass |
+| milestone-status-ssot | refactor | 93be3c744b | dao-cli + foreman | 38 → 39 pass |
+
+## Pilot — issue-form tasks, arm A vs arm C
+
+5 tasks × 2 repeats, `sonnet`, judge `opus`, statements `issue`: the three
+shared with earlier pilots (runner-pr-base-guard, core-consolidate-pin-model,
+regent-is-ancestor-tristate) + owner-publish-choice and
+refinement-stays-finished. Arm C binaries from `feat/interception` at
+fe2f5af (`build_interception.sh fe2f5af` → `work/target-fe2f5af/`). A and C
+ran concurrently as separate processes. `results/pilot-issue-{A,A-rerun,C}.jsonl`,
+report `results/pilot-issue-AC.md`.
+
+One harness error: an arm-A run (regent-is-ancestor-tristate rep 0) got
+SIGTERM 5 s in (exit 143) after its first grep, with nothing of the harness
+signalling it (own session; no timeout). Excluded and rerun
+(`pilot-issue-A-rerun`); the sender was not identified.
+
+| arm | runs | success | turns mean / median | wall s mean / median |
+|---|---|---|---|---|
+| A (no Graphite) | 10 | 10/10 | 14.1 / 14.0 | 86.6 / 92.3 |
+| C (lines + hooks) | 10 | 10/10 | 13.4 / 13.0 | 79.6 / 77.0 |
+
+| task | A turns | C turns | A wall s | C wall s |
+|---|---|---|---|---|
+| core-consolidate-pin-model | 10.5 | 9.5 | 49.9 | 86.4 |
+| owner-publish-choice | 18.0 | 13.0 | 94.2 | 73.4 |
+| refinement-stays-finished | 15.0 | 18.5 | 103.2 | 95.7 |
+| regent-is-ancestor-tristate | 15.0 | 14.0 | 96.2 | 70.0 |
+| runner-pr-base-guard | 12.0 | 12.0 | 89.7 | 72.6 |
+
+(medians over 2 repeats)
+
+Paired, 5 tasks, 5000 bootstrap resamples — CIs wide, pilot only:
+- turns C/A **0.93** [0.72–1.23]
+- wall-clock C/A **0.81** [0.73–1.73]
+- success 10/10 both arms; 0 silent-stale answers; attribution
+  `graphite_used_success` 10/10, no Graphite-caused failure.
+
+core-consolidate's C wall-clock (+73%) is API time, not tools: run C-0 made
+6 calls in 7 turns with 77 s of API time vs 37 s for A-1 with similar output
+tokens; hook latency in that run summed 0.2 s.
+
+**Hooks (10 C runs).** 107 Bash PreToolUse decisions: 40 rewritten, 67
+passed through — "unsupported shell construct" 35, "contains a command
+graphite does not handle" 32. 101 graph answers + 5 enrichments, 0
+fallbacks; hook latency median 187 ms per run. Answer bytes 144.2 KB vs
+116.9 KB the plain greps would have printed (1.23×; pilot C was 2.3×).
+Searches after a complete answer: median 0 (1 of 8 runs searched again).
+
+**Turns by phase** (`phases.py`: each top-level turn split evenly over its
+tool calls; localize = grep/rg/find/ls/Grep/Glob/graphite/Task, read =
+Read/cat/sed -n/git show, edit, test = pytest/uv/python/make/ruff):
+
+| set | arm | runs | turns | before 1st edit (median) | localize | read | edit | test | other | answer |
+|---|---|---|---|---|---|---|---|---|---|---|
+| issue, 5 tasks | A | 10 | 13.3 | 6.5 | 3.9 (29%) | 3.6 (27%) | 3.2 (24%) | 0.9 (7%) | 0.7 (5%) | 1.0 (8%) |
+| issue, 5 tasks | C | 10 | 12.2 | 5.0 | 3.4 (28%) | 2.9 (24%) | 2.9 (23%) | 1.0 (8%) | 1.1 (9%) | 1.0 (8%) |
+| hinted, 3 shared | A | 6 | 11.0 | 4.5 | 3.0 (27%) | 2.5 (23%) | 3.2 (29%) | 0.8 (8%) | 0.5 (5%) | 1.0 (9%) |
+| issue, 3 shared | A | 6 | 12.2 | 5.5 | 3.0 (25%) | 3.0 (25%) | 3.3 (27%) | 1.2 (10%) | 0.7 (6%) | 1.0 (8%) |
+| hinted, 3 shared | C | 6 | 9.2 | 3.5 | 1.8 (19%) | 2.1 (23%) | 2.4 (26%) | 1.1 (12%) | 0.8 (9%) | 1.0 (11%) |
+| issue, 3 shared | C | 6 | 11.0 | 5.0 | 2.8 (25%) | 3.3 (30%) | 2.4 (22%) | 0.3 (3%) | 1.2 (11%) | 1.0 (9%) |
+
+(turns here = top-level assistant messages, slightly below `num_turns`.)
+
+Reading:
+- **Rewriting the statements alone did not lengthen localization** on the
+  three shared tasks: arm A spends 3.0 localize turns hinted and 3.0 issue.
+  The symptom text still carries searchable words — config names
+  (`model_pins.json`), output strings ("delivered nothing"), git and result
+  names (`git show`, `is-ancestor`, MERGE_FAILED) — and the agent's first
+  grep lands on them. The issue form added ~1 turn of reading, not of searching.
+- **The new cross-module tasks are where localization grows:** arm A spends
+  5.0–5.5 localize turns on owner-publish-choice and
+  refinement-stays-finished, vs 2.5–3.5 on the older tasks.
+- **C cut turns on the task with the most localizing** (owner-publish-choice:
+  −28% turns, −22% wall, A read 13.5 files vs C 7.5) but not on
+  refinement-stays-finished (+23% turns, more edit and test turns in C).
+- Even here, localize is under a third of turns (29% in A): the ceiling for a
+  pure locating tool on these tasks stays near 30%; reading and editing are
+  as large. The wall-clock point estimate (0.81) is at the −20% target, the
+  turns point (0.93) is not, and neither CI excludes 1.
+- Correctness unchanged: 10/10 both arms, judge "solved" on every run.
 
 ## Full-run estimate (time)
 
