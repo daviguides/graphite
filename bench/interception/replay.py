@@ -95,10 +95,18 @@ def cwds(rows: list[dict], tree: Path) -> list[Path]:
     current dir is tried from the tree root (the agent's own belief), else ignored."""
     cur, out = tree, []
     for r in rows:
+        cmd = r["command"].replace("{tree}", str(tree))
         if r["cwd"]:
             cur = Path(r["cwd"].replace("{tree}", str(tree)))
+        else:
+            # A relative `cd` the agent wrote for the tree root says the shell was there.
+            first = split_top(cmd)[:1]
+            parts = first[0].split() if first else []
+            if len(parts) >= 2 and parts[0] == "cd" and not parts[1].startswith("/"):
+                if not (cur / parts[1]).is_dir() and (tree / parts[1]).is_dir():
+                    cur = tree
         out.append(cur if cur.is_dir() else tree)
-        for seg in split_top(r["command"].replace("{tree}", str(tree))):
+        for seg in split_top(cmd):
             parts = seg.split()
             if len(parts) < 2 or parts[0] != "cd":
                 continue
