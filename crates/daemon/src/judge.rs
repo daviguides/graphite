@@ -740,6 +740,7 @@ pub fn build(
     }
     a.items.sort_by_key(|i| rank(&i.class, i.test));
     a.no_filename = spec.no_filename;
+    a.notices.extend(spec.path_notes.iter().cloned());
     apply_pipeline(&mut a, spec);
     // What the agent's own command would have printed (after its own filters), in grep's shape.
     let raw_bytes = grep_output_bytes(&a, !spec.no_filename);

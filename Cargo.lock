@@ -800,6 +800,7 @@ dependencies = [
 name = "graphite-hooks"
 version = "0.1.0"
 dependencies = [
+ "glob",
  "graphite-daemon",
  "serde",
  "serde_json",

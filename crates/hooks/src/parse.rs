@@ -225,6 +225,50 @@ fn abs_path(cwd: &Path, p: &str) -> PathBuf {
     pb.canonicalize().unwrap_or(pb)
 }
 
+/// A path operand as the shell sees it: globs (`*`, `?`, `[`) expanded against `cwd`, sorted.
+/// None when a glob matches nothing (zsh refuses to run it; sh passes it literally to a command
+/// that then fails) — the caller then leaves the segment to the shell.
+fn operands(cwd: &Path, p: &str) -> Option<Vec<String>> {
+    if !p.contains(['*', '?', '[']) {
+        return Some(vec![p.to_string()]);
+    }
+    let pattern = if Path::new(p).is_absolute() {
+        p.to_string()
+    } else {
+        cwd.join(p).to_string_lossy().into_owned()
+    };
+    let mut out: Vec<String> = glob::glob(&pattern)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|m| m.to_string_lossy().into_owned())
+        .collect();
+    out.sort();
+    (!out.is_empty()).then_some(out)
+}
+
+/// Nearest existing directory above a missing path, strictly inside the repo (never the root
+/// itself: that would turn a narrow search into a repo-wide one).
+fn existing_parent(missing: &Path, root: &Path) -> Option<PathBuf> {
+    let mut cur = missing.parent()?;
+    loop {
+        if cur.is_dir() {
+            let c = cur.canonicalize().ok()?;
+            return (c != root && inside(root, &c)).then_some(c);
+        }
+        cur = cur.parent()?;
+    }
+}
+
+/// `p` relative to `cwd` when below it, else as is.
+fn display(p: &Path, cwd: &Path) -> String {
+    let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    match p.strip_prefix(&cwd) {
+        Ok(r) if r.as_os_str().is_empty() => ".".into(),
+        Ok(r) => r.to_string_lossy().into_owned(),
+        Err(_) => p.to_string_lossy().into_owned(),
+    }
+}
+
 fn inside(root: &Path, p: &Path) -> bool {
     p.starts_with(root)
 }
@@ -297,9 +341,72 @@ pub fn classify(seg: &Segment, cwd: &Path, root: &Path) -> Option<Action> {
 
 fn classify_command(seg: &Segment, cwd: &Path, root: &Path) -> Option<Action> {
     let first = strip_wrappers(words(&seg.stages[0])?);
-    let cmd = first.first()?.as_str();
     let rest = &seg.stages[1..];
     let filters_ok = rest.iter().all(|s| safe_filter(s));
+    answerable(seg, &first, cwd, root, filters_ok)
+        // A read-only command Graphite cannot answer (a path that does not exist, a glob with no
+        // match, a flag whose output we don't reproduce) still runs as written next to the
+        // answered segments instead of sending the whole command around Graphite.
+        .or_else(|| (filters_ok && read_only(&first)).then_some(Action::Plain))
+}
+
+/// Commands that only read, whatever their operands: no flag of theirs writes a file or runs a
+/// program.
+pub fn read_only(w: &[String]) -> bool {
+    let Some(cmd) = w.first().map(String::as_str) else {
+        return false;
+    };
+    match cmd {
+        "grep" | "egrep" | "fgrep" | "cat" | "head" | "tail" | "nl" | "wc" | "ls" | "file"
+        | "stat" => true,
+        // `--pre` runs a program per file.
+        "rg" => !w.iter().any(|a| a.starts_with("--pre")),
+        "find" => !w.iter().any(|a| FIND_MUTATING.contains(&a.as_str())),
+        "sed" => sed_prints_only(w),
+        _ => false,
+    }
+}
+
+/// `sed -n` with no in-place flag and no script command that writes (`w`/`W`) or executes (`e`).
+fn sed_prints_only(w: &[String]) -> bool {
+    let mut saw_n = false;
+    let mut script_seen = false;
+    for a in &w[1..] {
+        if a == "-n" || a == "--quiet" || a == "--silent" {
+            saw_n = true;
+        } else if a.starts_with("-i") || a.starts_with("--in-place") || a == "-e" || a == "-f" {
+            return false;
+        } else if a.starts_with('-') {
+            if a != "-E" && a != "-r" {
+                return false;
+            }
+        } else if !script_seen {
+            script_seen = true;
+            // Outside a /regex/, these letters are the commands that write or execute.
+            let mut in_re = false;
+            for c in a.chars() {
+                match c {
+                    '/' => in_re = !in_re,
+                    'w' | 'W' | 'e' | 'r' | 'R' if !in_re => return false,
+                    _ => {}
+                }
+            }
+        }
+    }
+    saw_n && script_seen
+}
+
+/// A segment Graphite answers (or a known read-only companion of one).
+fn answerable(
+    seg: &Segment,
+    first: &[String],
+    cwd: &Path,
+    root: &Path,
+    filters_ok: bool,
+) -> Option<Action> {
+    let first = first.to_vec();
+    let cmd = first.first()?.as_str();
+    let rest = &seg.stages[1..];
     match cmd {
         "grep" | "egrep" | "fgrep" | "rg" | "ag" | "ack" => {
             let mut spec = search_spec(&first, cwd, root, &seg.stages[0])?;
@@ -339,7 +446,9 @@ fn classify_command(seg: &Segment, cwd: &Path, root: &Path) -> Option<Action> {
         }
         "cd" if seg.stages.len() == 1 && first.len() == 2 => {
             let d = abs_path(cwd, &first[1]);
-            d.is_dir().then_some(Action::Cd(d))
+            // A `cd` that fails changes nothing: the shell prints its error, the directory stays
+            // and a following `&&` is skipped (the segment's exit status says so).
+            Some(if d.is_dir() { Action::Cd(d) } else { Action::Plain })
         }
         "graphite"
             if first
@@ -612,15 +721,30 @@ pub fn search_spec(w: &[String], cwd: &Path, root: &Path, raw: &str) -> Option<S
         }
         positional.push(".".into());
     }
+    let globbed = positional.iter().any(|p| p.contains(['*', '?', '[']));
     for p in &positional {
-        let a = abs_path(cwd, p);
-        if !a.exists() || !inside(root, &a) || (a.is_dir() && !recursive) {
-            return None;
+        for o in operands(cwd, p)? {
+            let a = abs_path(cwd, &o);
+            if !a.exists() && recursive {
+                // A recursive search of a directory that isn't there (`refiner/src` when the
+                // package is `refiner/refiner`): search its nearest existing parent and say so,
+                // instead of an error that costs the agent a turn to recover from.
+                let anc = existing_parent(&a, root)?;
+                spec.path_notes.push(format!(
+                    "`{o}` does not exist; searched `{}/`, its nearest existing parent",
+                    display(&anc, cwd)
+                ));
+                spec.paths.push(anc.to_string_lossy().into());
+                continue;
+            }
+            if !a.exists() || !inside(root, &a) || (a.is_dir() && !recursive) {
+                return None;
+            }
+            spec.paths.push(a.to_string_lossy().into());
         }
-        spec.paths.push(a.to_string_lossy().into());
     }
     // grep names files for several operands, a directory, or -r; rg for anything but one file.
-    let one_file = spec.paths.len() == 1 && Path::new(&spec.paths[0]).is_file();
+    let one_file = spec.paths.len() == 1 && !globbed && Path::new(&spec.paths[0]).is_file();
     let grep_recursive = is_grep && recursive;
     spec.no_filename = hide_names || (!force_names && one_file && !grep_recursive);
     Some(spec)
@@ -676,12 +800,14 @@ fn reader_files(w: &[String], cwd: &Path, root: &Path) -> Option<(Vec<String>, b
     let mut any_py = false;
     let mut out = Vec::new();
     for f in &files {
-        let a = abs_path(cwd, f);
-        if !a.is_file() || !inside(root, &a) {
-            return None;
+        for o in operands(cwd, f)? {
+            let a = abs_path(cwd, &o);
+            if !a.is_file() || !inside(root, &a) {
+                return None;
+            }
+            any_py |= a.extension().is_some_and(|e| e == "py");
+            out.push(a.to_string_lossy().into_owned());
         }
-        any_py |= a.extension().is_some_and(|e| e == "py");
-        out.push(a.to_string_lossy().into_owned());
     }
     Some((out, any_py))
 }
@@ -719,12 +845,14 @@ fn list_dirs(w: &[String], cwd: &Path, root: &Path) -> Option<Vec<String>> {
     }
     let mut out = Vec::new();
     for d in dirs {
-        let a = abs_path(cwd, &d);
-        if !inside(root, &a) {
-            return None;
-        }
-        if a.is_dir() {
-            out.push(a.to_string_lossy().into_owned());
+        for o in operands(cwd, &d)? {
+            let a = abs_path(cwd, &o);
+            if !inside(root, &a) {
+                return None;
+            }
+            if a.is_dir() {
+                out.push(a.to_string_lossy().into_owned());
+            }
         }
     }
     (!out.is_empty()).then_some(out)

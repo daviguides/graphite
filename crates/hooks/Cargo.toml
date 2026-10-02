@@ -17,6 +17,7 @@ graphite-daemon = { path = "../daemon" }
 serde.workspace = true
 serde_json.workspace = true
 shlex = "1"
+glob = "0.3"
 
 [dev-dependencies]
 tempfile = "3"

@@ -226,7 +226,7 @@ def replay(args: argparse.Namespace) -> None:
                         if idx not in plain_cache:
                             p_out, p_code = sh(cmd, cwd, env)
                             plain_cache[idx] = (len(p_out), p_code)
-                        row.update(hook_bytes=len(got), hook_code=code)
+                        row.update(hook_bytes=len(got), hook_code=code, output=got.decode(errors="replace"))
                         row.update(plain_bytes=plain_cache[idx][0], plain_code=plain_cache[idx][1])
                         searches = []
                         for e in log_lines(tree)[n1:]:

@@ -76,6 +76,10 @@ pub struct SearchSpec {
     /// Other grep-style filters from the agent's pipeline, applied to match lines only.
     #[serde(default)]
     pub line_filters: Vec<crate::answer::LineFilter>,
+    /// How the paths differ from what the agent typed (a missing directory searched through its
+    /// nearest existing parent), echoed as notices.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_notes: Vec<String>,
 }
 
 /// One matching line.

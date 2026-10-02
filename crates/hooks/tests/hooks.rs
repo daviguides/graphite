@@ -109,6 +109,24 @@ fn command_table() {
         ),
         ("grep -rn resolve_owner . >/dev/null", &["plain"]),
         ("git diff --stat | tail -1; git log --oneline -3", &["plain", "plain"]),
+        // Pilot C2 pass-throughs (2026-10-02): globs, missing paths and context flags.
+        ("grep -n resolve_owner pkg/*.py | head -30", &["search"]),
+        ("cat pkg/*.py", &["read"]),
+        ("ls */ | head -0", &["list"]),
+        (
+            "grep -rniE 'pause|complete' pkg/src | head -50; grep -rn resolve_owner pkg",
+            &["search", "search"],
+        ),
+        (
+            "graphite lookup pause; ls pkg; ls pkg/src/* 2>/dev/null | head -30",
+            &["plain", "list", "plain"],
+        ),
+        (
+            "git ls-files pkg | grep -v test | head -60; grep -rn resolve_owner missing/src | head -30; grep -n 'def a' -B3 -A30 pkg/use.py",
+            &["plain", "plain", "search"],
+        ),
+        ("grep -rniE 'resolve|owner' --include=*.py pkg", &["search"]),
+        ("cd nowhere; grep -rn resolve_owner pkg", &["plain", "search"]),
     ];
     for (cmd, want) in yes {
         assert_eq!(kind(cmd, &root).as_deref(), Some(*want), "{cmd}");
@@ -135,6 +153,17 @@ fn command_table() {
         "git diff --output=x.patch",                   // git that writes a file
         "sed -n 1p README.md; sed -i '' 1d README.md", // one segment writes
     ];
+    // Read-only by name only: these write or run programs, so nothing next to them is touched.
+    let refused = [
+        "sed -n '1w out.txt' README.md; grep -rn resolve_owner .",
+        "sed -n -i 1p README.md; grep -rn resolve_owner .",
+        "sed -n '1e date' README.md; grep -rn resolve_owner .",
+        "rg --pre ./script resolve_owner; grep -rn resolve_owner .",
+        "find . -name x -delete; grep -rn resolve_owner .",
+    ];
+    for cmd in refused {
+        assert_eq!(kind(cmd, &root), None, "{cmd}");
+    }
     for cmd in no {
         let k = kind(cmd, &root);
         assert!(
@@ -142,6 +171,27 @@ fn command_table() {
             "{cmd} → {k:?}"
         );
     }
+}
+
+// kinhin: decision(ref="docs/foundation/interception.md#1-steering-by-transparent-interception")
+#[test]
+fn missing_directory_is_searched_through_its_nearest_parent_and_said_so() {
+    let (_d, root) = repo();
+    let segs = split("grep -rn resolve_owner pkg/src").unwrap();
+    let Some(acts) = plan(&segs, &root, &root) else {
+        panic!("not planned");
+    };
+    let Action::Search { spec, .. } = &acts[0] else {
+        panic!("{acts:?}");
+    };
+    assert_eq!(spec.paths, vec![root.join("pkg").to_string_lossy().to_string()]);
+    assert_eq!(
+        spec.path_notes,
+        vec!["`pkg/src` does not exist; searched `pkg/`, its nearest existing parent"]
+    );
+    // Never widened to the whole repo, never for a non-recursive grep of a missing file.
+    assert_eq!(kind("grep -rn resolve_owner src", &root), Some(vec!["plain"]));
+    assert_eq!(kind("grep -n resolve_owner pkg/nope.py", &root), Some(vec!["plain"]));
 }
 
 #[test]
