@@ -51,7 +51,9 @@ pub fn call_id() -> String {
 }
 
 /// `path:line` keys an answer showed (grep-shaped lines and collapsed `path:1,2,3` lines).
-pub fn answer_keys(text: &str) -> Vec<String> {
+/// `path:line` keys of the match lines of an answer; `file` names the lines of a single-file
+/// answer (printed `N:text`, as grep does).
+pub fn answer_keys(text: &str, file: Option<&str>) -> Vec<String> {
     let mut keys = Vec::new();
     for l in text.lines() {
         if l.starts_with('#') || l.is_empty() {
@@ -61,6 +63,10 @@ pub fn answer_keys(text: &str) -> Vec<String> {
         let mut parts = head.splitn(3, ':');
         let (Some(path), Some(lines)) = (parts.next(), parts.next()) else {
             continue;
+        };
+        let (path, lines) = match file {
+            Some(f) => (f, path),
+            None => (path, lines),
         };
         for n in lines.split(',') {
             if !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) {

@@ -198,17 +198,14 @@ fn single_file_context_search_keeps_its_match_under_the_default_budget() {
     let mut s = spec(&root, "def recorder");
     s.paths = vec![file.to_string_lossy().into()];
     s.after = 70;
+    s.no_filename = true;
     s.label = "grep -n \"def recorder\" -A70 tests/test_delivery.py".into();
     let res = search::run(&s, &root).unwrap();
     let (text, _) = judge::render(&engine, &s, &res, false).unwrap();
-    assert!(
-        text.contains("tests/test_delivery.py:1:def recorder():"),
-        "{text}"
-    );
-    assert!(
-        text.contains("tests/test_delivery.py-71-    step_69 = 69"),
-        "{text}"
-    );
+    // grep's own shape for one file: no path on the lines (the header names the file).
+    assert!(text.contains("\n1:def recorder():"), "{text}");
+    assert!(text.contains("\n71-    step_69 = 69\n"), "{text}");
+    assert!(!text.contains("tests/test_delivery.py:1:"), "{text}");
 }
 
 // kinhin: decision(ref="docs/foundation/interception.md#2-the-answer-an-enriched-grep")

@@ -99,7 +99,7 @@ pub fn handle(input: &Value) -> Option<Value> {
                 ev.insert("action".into(), "enrich".into());
                 ev.insert("answer".into(), text.into());
                 ev.insert("answer_bytes".into(), (text.len() as u64).into());
-                ev.insert("keys".into(), log::answer_keys(text).into());
+                ev.insert("keys".into(), log::answer_keys(text, None).into());
                 Some(json!({
                     "hookSpecificOutput": {
                         "hookEventName": "PostToolUse",

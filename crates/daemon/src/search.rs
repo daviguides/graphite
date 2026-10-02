@@ -55,6 +55,9 @@ pub struct SearchSpec {
     /// rg --hidden / -. — accepted for compatibility; non-noise hidden paths are always searched.
     #[serde(default)]
     pub hidden: bool,
+    /// grep would not name files (one file operand without -r/-H, or -h): lines are `N:text`.
+    #[serde(default)]
+    pub no_filename: bool,
     /// Print everything: no per-section caps.
     #[serde(default)]
     pub all: bool,

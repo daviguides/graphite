@@ -215,6 +215,9 @@ pub struct Answer {
     pub verdict_note: String,
     pub name: Option<String>,
     pub targets: Vec<Target>,
+    /// Lines without their path (`N:text`), as grep prints a single file.
+    #[serde(default)]
+    pub no_filename: bool,
     /// Per identifier, when the search alternates several (`a\|b`); empty for one name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<NameVerdict>,
@@ -346,28 +349,39 @@ pub fn annotation(it: &Item) -> String {
     s.trim_start().to_string()
 }
 
-/// The match line exactly as a filter in the agent's pipeline would see it.
-pub fn item_line(it: &Item) -> String {
-    if it.line == 0 {
-        return format!("{}    ({})", it.path, it.text);
-    }
-    let ann = annotation(it);
-    if ann.is_empty() {
-        format!("{}:{}:{}", it.path, it.line, it.text)
+/// `path` + `sep`, or nothing when lines go without their path.
+fn path_prefix(it: &Item, names: bool, sep: char) -> String {
+    if names {
+        format!("{}{sep}", it.path)
     } else {
-        format!("{}:{}:{}    {ann}", it.path, it.line, it.text)
+        String::new()
     }
 }
 
-fn item_block(it: &Item) -> String {
-    let mut out = String::new();
-    for (n, t) in &it.before {
-        let _ = writeln!(out, "{}-{n}-{t}", it.path);
+/// The match line exactly as a filter in the agent's pipeline would see it.
+pub fn item_line(it: &Item, names: bool) -> String {
+    if it.line == 0 {
+        return format!("{}    ({})", it.path, it.text);
     }
-    out.push_str(&item_line(it));
+    let p = path_prefix(it, names, ':');
+    let ann = annotation(it);
+    if ann.is_empty() {
+        format!("{p}{}:{}", it.line, it.text)
+    } else {
+        format!("{p}{}:{}    {ann}", it.line, it.text)
+    }
+}
+
+fn item_block(it: &Item, names: bool) -> String {
+    let mut out = String::new();
+    let p = path_prefix(it, names, '-');
+    for (n, t) in &it.before {
+        let _ = writeln!(out, "{p}{n}-{t}");
+    }
+    out.push_str(&item_line(it, names));
     out.push('\n');
     for (n, t) in &it.after {
-        let _ = writeln!(out, "{}-{n}-{t}", it.path);
+        let _ = writeln!(out, "{p}{n}-{t}");
     }
     if !it.before.is_empty() || !it.after.is_empty() {
         out.push_str("--\n");
@@ -726,13 +740,18 @@ fn with_nl(s: String) -> String {
 }
 
 /// Per-file collapsed line for call sites that don't fit individually.
-fn collapsed(path: &str, items: &[&Item]) -> String {
+fn collapsed(path: &str, items: &[&Item], names: bool) -> String {
     let lines: Vec<String> = items.iter().map(|i| i.line.to_string()).collect();
     let mut fns: Vec<&str> = items.iter().filter_map(|i| i.in_fn.as_deref()).collect();
     fns.sort_unstable();
     fns.dedup();
+    let prefix = if names {
+        format!("{path}:")
+    } else {
+        String::new()
+    };
     format!(
-        "{path}:{}    ← {} ({} sites)",
+        "{prefix}{}    ← {} ({} sites)",
         lines.join(","),
         fns.join(", "),
         items.len()
@@ -742,9 +761,9 @@ fn collapsed(path: &str, items: &[&Item]) -> String {
 /// `(text, classes of the items it carries, collapsed call sites, their paths)`.
 type Chunk = (String, Vec<String>, usize, Vec<String>);
 
-fn single(it: &Item) -> Chunk {
+fn single(it: &Item, names: bool) -> Chunk {
     (
-        item_block(it),
+        item_block(it, names),
         vec![it.class.clone()],
         0,
         vec![it.path.clone()],
@@ -753,12 +772,12 @@ fn single(it: &Item) -> Chunk {
 
 /// Definitions and direct call sites: the first `full` in full, every remaining call site
 /// collapsed per file (definitions are never collapsed).
-fn priority_chunks(prio: &[&Item], full: usize) -> Vec<Chunk> {
-    let mut chunks: Vec<Chunk> = prio.iter().take(full).map(|i| single(i)).collect();
+fn priority_chunks(prio: &[&Item], full: usize, names: bool) -> Vec<Chunk> {
+    let mut chunks: Vec<Chunk> = prio.iter().take(full).map(|i| single(i, names)).collect();
     let mut by_file: Vec<(String, Vec<&Item>)> = Vec::new();
     for it in prio.iter().skip(full) {
         if it.class == "definition" {
-            chunks.push(single(it));
+            chunks.push(single(it, names));
             continue;
         }
         match by_file.iter_mut().find(|(p, _)| *p == it.path) {
@@ -769,7 +788,12 @@ fn priority_chunks(prio: &[&Item], full: usize) -> Vec<Chunk> {
     for (path, its) in by_file {
         let classes = its.iter().map(|i| i.class.clone()).collect();
         let paths = vec![path.clone(); its.len()];
-        chunks.push((collapsed(&path, &its) + "\n", classes, its.len(), paths));
+        chunks.push((
+            collapsed(&path, &its, names) + "\n",
+            classes,
+            its.len(),
+            paths,
+        ));
     }
     chunks
 }
@@ -797,7 +821,7 @@ fn render_capped(a: &Answer, head: &str, listable: &[&Item]) -> String {
             other <= CAP_OTHER
         };
         if fits {
-            body.push_str(&item_block(it));
+            body.push_str(&item_block(it, !a.no_filename));
         } else {
             *not_shown.entry(it.class.clone()).or_default() += 1;
             cut_paths.push(it.path.clone());
@@ -853,6 +877,7 @@ pub fn render_model(a: &Answer) -> String {
     // The footer gets a share of a byte budget; facts degrade inside it (see `footer_line`).
     let allowance = byte_cap.map(|b| (b / 4).max(160));
     let more = implicit.then(|| whole_answer_hint(a));
+    let names = !a.no_filename;
     let mut prio: Vec<&Item> = listable.iter().copied().filter(|i| is_direct(i)).collect();
     prio.sort_by_key(|i| i.class != "definition");
     let rest: Vec<&Item> = listable.iter().copied().filter(|i| !is_direct(i)).collect();
@@ -885,15 +910,15 @@ pub fn render_model(a: &Answer) -> String {
     let (mut lo, mut hi) = (0usize, prio.len());
     while lo < hi {
         let mid = (lo + hi).div_ceil(2);
-        if fits(&priority_chunks(&prio, mid)) {
+        if fits(&priority_chunks(&prio, mid, names)) {
             lo = mid;
         } else {
             hi = mid - 1;
         }
     }
-    let chunks: Vec<Chunk> = priority_chunks(&prio, lo)
+    let chunks: Vec<Chunk> = priority_chunks(&prio, lo, names)
         .into_iter()
-        .chain(rest.iter().map(|i| single(i)))
+        .chain(rest.iter().map(|i| single(i, names)))
         .collect();
 
     // Greedy fill in order, then trim from the tail until header + body + footer fit.

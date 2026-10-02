@@ -468,6 +468,7 @@ pub fn search_spec(w: &[String], cwd: &Path, root: &Path, raw: &str) -> Option<S
     };
     let mut extended = tool == "egrep" || !is_grep;
     let mut recursive = !is_grep;
+    let (mut force_names, mut hide_names) = (false, false);
     let mut explicit_patterns = false;
     let mut positional: Vec<String> = Vec::new();
     let mut i = 1;
@@ -498,8 +499,9 @@ pub fn search_spec(w: &[String], cwd: &Path, root: &Path, raw: &str) -> Option<S
             };
             match k {
                 "recursive" | "dereference-recursive" => recursive = true,
-                "line-number" | "with-filename" | "no-heading" | "heading" | "no-messages"
-                | "no-filename" | "color" | "colour" => {}
+                "with-filename" => force_names = true,
+                "no-filename" => hide_names = true,
+                "line-number" | "no-heading" | "heading" | "no-messages" | "color" | "colour" => {}
                 "hidden" if !is_grep => spec.hidden = true,
                 "ignore-case" => spec.ignore_case = true,
                 "smart-case" => spec.smart_case = true,
@@ -547,7 +549,9 @@ pub fn search_spec(w: &[String], cwd: &Path, root: &Path, raw: &str) -> Option<S
             };
             match f {
                 'r' | 'R' if is_grep => recursive = true,
-                'n' | 'H' | 'h' | 's' | 'I' => {}
+                'H' => force_names = true,
+                'h' => hide_names = true,
+                'n' | 's' | 'I' => {}
                 'i' => spec.ignore_case = true,
                 'S' if !is_grep => spec.smart_case = true,
                 'w' => spec.word = true,
@@ -615,6 +619,10 @@ pub fn search_spec(w: &[String], cwd: &Path, root: &Path, raw: &str) -> Option<S
         }
         spec.paths.push(a.to_string_lossy().into());
     }
+    // grep names files for several operands, a directory, or -r; rg for anything but one file.
+    let one_file = spec.paths.len() == 1 && Path::new(&spec.paths[0]).is_file();
+    let grep_recursive = is_grep && recursive;
+    spec.no_filename = hide_names || (!force_names && one_file && !grep_recursive);
     Some(spec)
 }
 

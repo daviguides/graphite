@@ -160,6 +160,26 @@ fn rg_hidden_flags_reach_the_search_spec() {
     assert!(!hidden("grep -rn resolve_owner ."));
 }
 
+// kinhin: decision(ref="docs/foundation/interception.md#3-output-format--decided-by-experiment")
+#[test]
+fn file_names_follow_grep_rules() {
+    let (_d, root) = repo();
+    let no_name = |cmd: &str| {
+        let acts = plan(&split(cmd).unwrap(), &root, &root).unwrap();
+        match &acts[0] {
+            Action::Search { spec, .. } => spec.no_filename,
+            other => panic!("{cmd} → {other:?}"),
+        }
+    };
+    assert!(no_name("grep -n resolve_owner pkg/use.py"));
+    assert!(no_name("rg -n resolve_owner pkg/use.py"));
+    assert!(no_name("grep -rhn resolve_owner pkg"));
+    assert!(!no_name("grep -rn resolve_owner pkg/use.py"));
+    assert!(!no_name("grep -Hn resolve_owner pkg/use.py"));
+    assert!(!no_name("grep -n resolve_owner pkg/use.py pkg/core.py"));
+    assert!(!no_name("rg resolve_owner pkg"));
+}
+
 fn payload(cmd: &str, cwd: &Path) -> Value {
     json!({
         "hook_event_name": "PreToolUse",

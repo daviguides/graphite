@@ -739,16 +739,12 @@ pub fn build(
         grouped_items(&mut a, engine, spec, res, &mut files);
     }
     a.items.sort_by_key(|i| rank(&i.class, i.test));
+    a.no_filename = spec.no_filename;
     apply_pipeline(&mut a, spec);
-    // What the agent's own command would have printed (after its own filters): grep names files
-    // only when it searched more than one.
-    let single_file = spec.paths.len() == 1 && Path::new(&spec.paths[0]).is_file();
-    let raw_bytes = grep_output_bytes(&a, !single_file);
+    // What the agent's own command would have printed (after its own filters), in grep's shape.
+    let raw_bytes = grep_output_bytes(&a, !spec.no_filename);
     if !spec.all && spec.format == OutFormat::Model {
-        // Answer lines always carry their path (self-contained under filters), so the budget
-        // counts grep's lines with a path even where grep itself would omit it.
-        let with_paths = grep_output_bytes(&a, true);
-        cap_to_grep_output(&mut a, with_paths);
+        cap_to_grep_output(&mut a, raw_bytes);
     }
 
     let mut class_counts = serde_json::Map::new();
@@ -779,7 +775,7 @@ fn cap_to_grep_output(a: &mut Answer, grep_bytes: usize) {
         .items
         .iter()
         .filter(|i| i.class == "graph_only")
-        .map(|i| crate::answer::item_line(i).len() + 1)
+        .map(|i| crate::answer::item_line(i, !a.no_filename).len() + 1)
         .sum();
     let share = graph_only
         + match a.budget.as_ref().and_then(|b| b.lines) {
@@ -1191,6 +1187,7 @@ fn filter_regex(f: &LineFilter) -> Option<regex::Regex> {
 
 /// Honor the agent's pipeline: test filter → semantic, grep filters → match lines only.
 fn apply_pipeline(a: &mut Answer, spec: &SearchSpec) {
+    let names = !spec.no_filename;
     if let Some(src) = &spec.drop_tests {
         let before = a.items.len();
         let mocks = a.items.iter().filter(|i| i.class == "mock_in_test").count();
@@ -1221,7 +1218,7 @@ fn apply_pipeline(a: &mut Answer, spec: &SearchSpec) {
         let Some(re) = filter_regex(f) else { continue };
         let before = a.items.len();
         a.items
-            .retain(|i| re.is_match(&crate::answer::item_line(i)) != f.invert);
+            .retain(|i| re.is_match(&crate::answer::item_line(i, names)) != f.invert);
         a.notices.push(format!(
             "`{}` applied to match lines ({} of {before} kept; header/footer kept)",
             f.source,

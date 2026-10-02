@@ -256,6 +256,15 @@ impl Run<'_> {
         let matches = r.data.get("matches").and_then(Value::as_u64).unwrap_or(0);
         answer_fields(ev, &text, &stats, matches);
         if let Some(rec) = r.data.get("record") {
+            let one_file = rec
+                .get("no_filename")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                .then(|| rec.pointer("/items/0/path").and_then(Value::as_str))
+                .flatten();
+            if one_file.is_some() {
+                ev.insert("keys".into(), log::answer_keys(&text, one_file).into());
+            }
             if let Some(n) = rec
                 .get("notices")
                 .filter(|n| n.as_array().is_some_and(|a| !a.is_empty()))
@@ -313,7 +322,7 @@ fn answer_fields(ev: &mut Map<String, Value>, text: &str, stats: &Value, matches
     ev.insert("action".into(), "answer".into());
     ev.insert("answer".into(), text.into());
     ev.insert("answer_bytes".into(), (text.len() as u64).into());
-    ev.insert("keys".into(), crate::log::answer_keys(text).into());
+    ev.insert("keys".into(), crate::log::answer_keys(text, None).into());
     let verdict = stats
         .get("graph_verdict")
         .cloned()

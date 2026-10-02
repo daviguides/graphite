@@ -149,15 +149,17 @@ def log_lines(tree: Path) -> list[dict]:
 def sites_kept(answer: str, record: dict) -> tuple[int, list[str]]:
     """Definitions and direct call sites of the record that are missing from the answer text."""
     lines = answer.splitlines()
+    one_file = record.get("no_filename", False)
     lost, total = [], 0
     for it in record.get("items", []):
         if it.get("class") not in ("definition", "call", "graph_only") or it.get("line", 0) == 0:
             continue
         total += 1
         path, line = it["path"], str(it["line"])
-        full = f"{path}:{line}:" in answer
+        prefix = "" if one_file else f"{path}:"  # grep prints one file's lines as `N:text`
+        full = any(l.startswith(f"{prefix}{line}:") for l in lines)
         folded = any(
-            l.startswith(f"{path}:") and line in l[len(path) + 1 :].split()[0].split(",") for l in lines
+            l.startswith(prefix) and line in l[len(prefix) :].split()[0].split(",") for l in lines if l
         )
         if not (full or folded):
             lost.append(f"{path}:{line}")
