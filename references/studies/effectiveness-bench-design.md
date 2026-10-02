@@ -454,3 +454,72 @@ them sequentially today. A placebo arm is not built.
 
 Recommendation: 3 repeats. Within-task variance is small; more tasks, not
 more repeats, is what narrows the CI.
+## Pilot — arm C2 (interception gaps closed) vs a fresh arm A
+
+Same 5 issue-form tasks × 2 repeats, `sonnet`, judge `opus`. Arm C2 binaries
+from `feat/interception` at cb52198 (default budget without a pipe, `$(find …)`
+and chained reads covered, per-identifier verdict for alternation greps):
+`build_interception.sh cb52198` → `work/target-cb52198/`. A fresh arm A ran
+concurrently with C2 and nothing else building, so A2 is the fair baseline
+(the first issue-form A ran while the interception fork compiled).
+`results/pilot-issue-{A2,A2-rerun,C2}.jsonl`, reports
+`results/pilot-issue-A2C2.md` (C2 vs A2) and `results/pilot-issue-Apooled-C2.md`.
+
+**Harness.** One arm-A run (owner-publish-choice rep 0) again got SIGTERM
+1.7 s in (exit 143), right after the CLI init event; second time, both in
+arm A while arm C ran concurrently; sender still unidentified. Excluded and
+rerun alone (`pilot-issue-A2-rerun`).
+**Harness bug fixed** (b176b22): runner-pr-base-guard C2 rep 0 was scored a
+regression on `test_sync::test_diverged_umbrella_is_blocked_not_overwritten`,
+which passes 4/4 full-suite runs on the same agent diff (exactly the 10
+baseline failures) — a test flaky under load. A new suite failure now counts
+only if it fails again on a rerun (`checks.confirm_new_failures`);
+`rescore.py` re-checked the two failed C2 runs: runner → success (judge
+solved), refinement-stays-finished rep 0 → still fail (real: it redefined
+`refiner_egest_done` in place and left two tests asserting the old meaning
+failing, never ran the suite, 7 turns). No other issue-form run had failed,
+so the fix changes no other verdict.
+
+| arm | runs | success | turns mean / median | wall s mean / median |
+|---|---|---|---|---|
+| A (issue pilot 1) | 10 | 10/10 | 14.1 / 14.0 | 86.6 / 92.3 |
+| A2 (fresh, concurrent with C2) | 10 | 10/10 | 13.6 / 14.5 | 85.4 / 89.8 |
+| C (fe2f5af) | 10 | 10/10 | 13.4 / 13.0 | 79.6 / 77.0 |
+| C2 (cb52198) | 10 | 9/10 | 11.7 / 11.5 | 66.7 / 68.7 |
+
+Paired, 5 tasks, 5000 bootstrap resamples (median of per-task ratios):
+- C2/A2: turns **0.83** [0.56–1.19], wall **0.86** [0.61–0.94]; success −10 pts [−30–0]
+- C2/pooled A (20 runs): turns **0.86** [0.59–1.10], wall **0.66** [0.59–1.18]
+- C2/C: turns 1.00 [0.54–1.23], wall 0.84 [0.60–1.03]
+- C/pooled A, for reference: turns 0.95 [0.86–1.09], wall 0.83 [0.78–1.15]
+
+Mean turns C2 vs A2 −14%, mean wall −22%. Wall CI vs A2 is the first upper
+bound below 1.0; turns CI still crosses 1. One task worse in C2:
+owner-publish-choice turns 16 vs 13.5 (wall still −14%).
+
+**Turns by phase** (`phases.py`):
+
+| arm | runs | turns | before 1st edit | localize | read | edit | test | other | answer |
+|---|---|---|---|---|---|---|---|---|---|
+| A2 | 9 (+1 rerun) | 13.4 | 6 | 3.8 (28%) | 3.2 (24%) | 3.5 (26%) | 0.6 (4%) | 1.3 (10%) | 1.0 (7%) |
+| C2 | 10 | 10.6 | 5 | 3.0 (28%) | 3.1 (29%) | 2.5 (23%) | 0.4 (4%) | 0.7 (7%) | 1.0 (9%) |
+
+The cut comes from localize (−0.9), edit (−1.0) and other (−0.6); read is
+flat: reading the code to change is now the largest phase in C2.
+
+**Hooks (10 C2 runs).** 93 Bash PreToolUse decisions: 39 rewritten, 54
+passed through ("contains a command graphite does not handle" 28,
+"unsupported shell construct" 26). Of the 54: 35 test/python runs, 1 write
+— legitimate — but **18 read-only compound commands still passed through**
+(e.g. `cd x; grep -rn -i "a\|b" dir | head; cat file`, `grep -n "def f" -B3
+-A30 file; sed -n a,bp f1; sed -n c,dp f2`, `grep -rniE … --include=*.py`,
+segments mixing `graphite lookup`, `git ls-files`, `pwd`, `head -20 FILE`).
+The pilot-C replay covered pilot C's commands; new runs use flags/segments
+it does not. 91 answers + 3 enrichments, 0 fallbacks, hook latency median
+226 ms per run. Answer bytes 91.3 KB vs 65.6 KB plain grep (1.39×; C:
+140.8 vs 114.2 KB, 1.23×): absolute bytes fell 35%, the ratio rose because
+small greps sit at the 384 B floor.
+
+Attribution: 9 used_success; the refinement failure is flagged as a
+candidate Graphite miss (`regent/core/pipeline.py` not in a graph answer),
+but the agent read that file via sed/grep in turn 4 — not Graphite-caused.
