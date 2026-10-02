@@ -20,6 +20,13 @@ Prototype code lives on branch `feat/interception` (not `main`) until it is adju
 - Fail-open: any daemon error or timeout runs the original command. Hooks never start a daemon and never break a tool call. grep exit codes are preserved.
 - Hooks live in the repo's `.claude/settings.json` (plugin `hooks.json` only honors SessionStart), installed by `graphite hooks install`, preserving foreign hooks (e.g. RTK) and the file's key order. PostToolUse on writes nudges the daemon.
 
+**Shell shapes covered (2026-10-02).** Pilot C passed 47 of 59 Bash commands through; 40 for shape, not intent. Read-only shapes now routed:
+- `NAME=$(cmd)` (also `NAME="$(cmd)"`) when `cmd` is one supported read-only segment: it runs for real and its output is stored. Segments using `$NAME` are accepted when their command is read-only whatever the value (`cat`, `sed -n`, `grep`, `wc`, `echo`, …) and are classified again at run time with the value expanded; if they still can't be answered they run as written with the same variables (fail-open). Substitution anywhere else (`echo $(…)`, env prefixes, nesting) stays unsupported.
+- Reads of non-Python files (`sed -n 1,25p pyproject.toml`, `cat x.toml | sed -n …`) run as written next to answered segments instead of refusing the whole command.
+- Read-only `git` (`status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`, `blame`, `grep`, `stash list`, branch listing; never `--output`) and stdout to `/dev/null` (`>/dev/null`, `&>/dev/null`; a discarded search is not answered).
+
+Why: these are how agents read (one compound command per turn); refusing a whole command for one unmodeled read wastes the graph answer on every other segment. Replay of the 59 pilot-C commands (`bench/interception/replay.py`): 12 → 18 rewritten; the 41 left are writes (heredoc edits, `sed -i`, `cat >>`), test runs, `git stash push/apply`, and commands of only `graphite` CLI calls — correctly untouched. 0 exit-code mismatches.
+
 ## 2. The answer: an enriched grep
 
 **Decision.** For an intercepted search, Graphite returns an **integrated** list — not a ripgrep block plus a graph block:
@@ -33,6 +40,8 @@ Prototype code lives on branch `feat/interception` (not `main`) until it is adju
 - The agent asked a textual question; the answer keeps its shape and adds what each line *is* — the edit/ignore/update decision happens per line, where the annotation sits.
 - One occurrence per location avoids duplicate lines and cross-referencing two lists (tokens + confusion).
 - The completeness verdict is what grep can never give; it is what removes the post-answer "confirmation grep" seen in pilot B.
+
+**Alternations (2026-10-02).** `grep -n "a\|b"`, `rg "a|b"`, `-e a -e b`: when every top-level alternative is an identifier (dotted or `\b`-wrapped allowed, at most 6), each name gets its own verdict and definition in the header (`2 identifiers: \`a\` graph COMPLETE, def …, N call sites · \`b\` graph LOWER-BOUND (…)`), every match is judged against the name it is about, graph-only references of every name join the list, and the footer warns per untested name. The overall verdict is COMPLETE only if every name's is. Why: agents batch the names they are about to change into one alternation (pilot C: 4 of 13 searches); without per-name verdicts those answers were plain text and the confirmation grep came back. Mixed alternations (`a\|def `) stay grouped by enclosing symbol.
 
 ## 3. Output format — decided by experiment
 
@@ -57,12 +66,26 @@ Prototype code lives on branch `feat/interception` (not `main`) until it is adju
 - **Phase 2 skipped:** it would test survival under `| grep -v test`; lines survive by construction and no outcome would change the decision.
 - The dominant speed factor in an agent is turns, not reading time: one avoided confirmation grep (5–10 s) outweighs every latency difference in the table. That is measured only in the agent bench (arm C).
 - Found by the experiment: for multi-definition names the answer must tag each reference with the **`path:line` of the definition it resolves to**, not just the short name.
+- **One file searched → grep's own `N:text` shape** (2026-10-02): when grep would not name files (one file operand without `-r`/`-H`, or `-h`; `rg` on one file), match, context and folded lines drop the path; the header names the file. A path on every line of a single-file `-A70` read cost 12–25 bytes a line for nothing the agent can filter on.
 
 ## 4. Size: budget, never byte-cut
 
 **Decision.** A size limiter in the agent's pipe (`| head -c N`, `| head -n N`, `| tail -n N`) is read as a **budget**, not applied as a cut. Graphite composes the answer within it: header + direct sites first, the rest summarized, every cut disclosed with how to get more.
 
 **Why.** Pilot B showed agents cutting 14–25 KB one-line JSON with `head -c 3000/6000`, destroying dependents and verdict, then grepping to recover. The intent ("don't flood my context") is honored; the mechanism (mid-item cut) is not.
+
+**Default budget (2026-10-02).** With no limiter, the answer never costs more than the agent's own command would have printed, plus a bounded overhead:
+- base = the plain output in grep's shape (`path:line:text`, context lines, `--` separators, after the agent's own filters), plus the graph-only lines (what grep misses);
+- overhead = a quarter of the base, 384–1024 bytes, for annotations and the footer; the header (the agent's command echoed, verdict, pipeline notices) comes on top;
+- `| head -N` keeps its N lines and is also capped at those N grep lines' bytes plus the overhead (annotated lines are longer than grep's);
+- under any budget every definition, call site (prod or test) and graph-only reference stays: as many full lines as fit, the overflow folded per file (`path:12,40,77 ← fns (3 sites)`); only lower-ranked classes are dropped, and counted;
+- a cut under the default budget points back in the agent's vocabulary: `— to see them: <the same command> | head -c N`, N large enough for the whole answer.
+
+It replaces the old count caps (60 priority / 24 other lines), which hid direct sites on large searches.
+
+**Why.** Pilot C: hook answers were 2.3× the greps they replaced (57 KB vs 25 KB) because without a pipe nothing bounded them. Speed is turns; context is what a turn reads. Replay of the pilot-C commands (`bench/interception/results/pilot-c-replay.md`): on the 12 commands both builds route, the bytes the agent sees over the plain commands went from +15.4 KB to +6.4 KB; search answers alone 1.47× → 1.32× the plain grep (small greps sit on the 384-byte floor); 0 of 21 definition/call sites lost; every answer still opens with its verdict line.
+
+**Reads.** A file's graph header is printed once per file per command and sized to the read: at most a quarter of what the read printed, 160–600 bytes; test names go first, then the least-used symbols (counted in `+N more`). Three `sed -n` reads of one file used to repeat a 910-byte header three times.
 
 ## 5. Filters by intent
 
