@@ -109,6 +109,18 @@ pub struct Target {
     pub risk: Option<String>,
 }
 
+/// One identifier of an alternation search (`grep 'a\|b'`): its own verdict and definitions.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct NameVerdict {
+    pub name: String,
+    /// complete | lower_bound | none
+    pub verdict: String,
+    /// Short reason for a non-complete verdict.
+    pub note: String,
+    pub targets: Vec<Target>,
+    pub tests_total: u32,
+}
+
 /// One line of the integrated list.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Item {
@@ -184,6 +196,9 @@ pub struct Answer {
     pub verdict_note: String,
     pub name: Option<String>,
     pub targets: Vec<Target>,
+    /// Per identifier, when the search alternates several (`a\|b`); empty for one name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<NameVerdict>,
     /// Integrated list in relevance order (imports included, not listed unless `all`).
     pub items: Vec<Item>,
     pub footer: Footer,
@@ -344,13 +359,38 @@ fn verdict_words(a: &Answer) -> String {
     }
 }
 
+/// One identifier of an alternation, in the header: verdict, then where it is defined.
+fn name_words(n: &NameVerdict) -> String {
+    let verdict = match n.verdict.as_str() {
+        "complete" => "graph COMPLETE".to_string(),
+        "lower_bound" => format!("graph LOWER-BOUND ({})", n.note),
+        _ => n.note.clone(),
+    };
+    match n.targets.as_slice() {
+        [] => format!("`{}` {verdict}", n.name),
+        [t] => format!(
+            "`{}` {verdict}, def {} · {} call sites in {} files",
+            n.name, t.def, t.sites, t.files
+        ),
+        many => format!(
+            "`{}` {verdict}, {} definitions — each reference → the one it resolves to",
+            n.name,
+            many.len()
+        ),
+    }
+}
+
 /// The one header line.
 pub fn header_line(a: &Answer) -> String {
     let mut h = format!(
         "# graphite: {} → {} matches in {} files",
         a.query, a.matches, a.files
     );
-    if a.mode == "identifier" {
+    if a.mode == "identifier" && !a.names.is_empty() {
+        let _ = write!(h, " · {} identifiers:", a.names.len());
+        let per: Vec<String> = a.names.iter().map(name_words).collect();
+        let _ = write!(h, " {}", per.join(" · "));
+    } else if a.mode == "identifier" {
         let _ = write!(h, " · {}", verdict_words(a));
         let name = a.name.as_deref().unwrap_or("");
         match a.targets.len() {
@@ -469,14 +509,26 @@ fn footer_line(
     let f = &a.footer;
     let mut parts: Vec<Part> = Vec::new();
     if a.mode == "identifier" && !a.targets.is_empty() {
-        if f.tests_total == 0 {
-            let name = a.name.as_deref().unwrap_or("target");
+        let untested: Vec<String> = if a.names.is_empty() {
+            (f.tests_total == 0)
+                .then(|| format!("`{}`", a.name.as_deref().unwrap_or("target")))
+                .into_iter()
+                .collect()
+        } else {
+            a.names
+                .iter()
+                .filter(|n| !n.targets.is_empty() && n.tests_total == 0)
+                .map(|n| format!("`{}`", n.name))
+                .collect()
+        };
+        if !untested.is_empty() {
             parts.push(Part {
                 priority: 0,
                 mandatory: true,
-                forms: vec![format!("no test covers `{name}` ⚠")],
+                forms: vec![format!("no test covers {} ⚠", untested.join(", "))],
             });
-        } else {
+        }
+        if f.tests_total > 0 {
             let mut forms = Vec::new();
             if !f.tests.is_empty() {
                 forms.push(format!(

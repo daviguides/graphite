@@ -8,7 +8,9 @@ use graphite_model::{EdgeKind, Symbol, SymbolId, SymbolKind};
 use graphite_store::{confidence, Confidence, GraphStore, Outcome};
 use serde_json::{json, Value};
 
-use crate::answer::{grep_output_bytes, rank, Answer, Budget, Item, LineFilter, OutFormat, Target};
+use crate::answer::{
+    grep_output_bytes, rank, Answer, Budget, Item, LineFilter, NameVerdict, OutFormat, Target,
+};
 use crate::engine::Engine;
 use crate::search::{display_path, Hit, SearchOutcome, SearchSpec};
 
@@ -88,17 +90,19 @@ pub(crate) fn non_code_class(rel: &str) -> &'static str {
     }
 }
 
-/// Name to look up when the pattern is a plain identifier (optionally dotted, optionally `\b`-wrapped).
-pub fn identifier_of(spec: &SearchSpec) -> Option<String> {
-    if spec.patterns.len() != 1 {
-        return None;
-    }
-    let mut p = spec.patterns[0].as_str();
-    if !spec.fixed {
+/// Most identifiers judged in one alternation (`a\|b\|…`); more is searched as plain text.
+pub const MAX_NAMES: usize = 6;
+/// Definitions whose callers/tests are computed per answer, shared across the names.
+const TARGET_FACTS_BUDGET: usize = 12;
+
+/// `\b`-trimmed, `\.`-unescaped identifier (optionally dotted): (last segment, dotted form).
+fn identifier_alt(p: &str, fixed: bool) -> Option<(String, String)> {
+    let mut p = p;
+    if !fixed {
         p = p.strip_prefix("\\b").unwrap_or(p);
         p = p.strip_suffix("\\b").unwrap_or(p);
     }
-    let core = if spec.fixed {
+    let core = if fixed {
         p.to_string()
     } else {
         p.replace("\\.", ".")
@@ -109,7 +113,60 @@ pub fn identifier_of(spec: &SearchSpec) -> Option<String> {
             matches!(c.next(), Some(ch) if ch == '_' || ch.is_ascii_alphabetic())
                 && c.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
         });
-    ok.then(|| core.rsplit('.').next().unwrap_or(&core).to_string())
+    ok.then(|| {
+        let name = core.rsplit('.').next().unwrap_or(&core).to_string();
+        (name, core)
+    })
+}
+
+/// Top-level alternatives of a regex (`a|b`); None when `|` sits inside a group or class.
+fn alternatives(p: &str) -> Option<Vec<&str>> {
+    let b = p.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\\' => i += 1,
+            b'(' | b')' | b'[' | b']' => return None,
+            b'|' => {
+                out.push(&p[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out.push(&p[start..]);
+    Some(out)
+}
+
+/// Identifiers a search looks for when every alternative (`a\|b`, `a|b`, `-e a -e b`) is one:
+/// `(name, dotted)` pairs, deduplicated, at most `MAX_NAMES`. None for any other pattern.
+pub fn identifiers_of(spec: &SearchSpec) -> Option<Vec<(String, String)>> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for p in &spec.patterns {
+        let alts = if spec.fixed {
+            vec![p.as_str()]
+        } else {
+            alternatives(p)?
+        };
+        for alt in alts {
+            let id = identifier_alt(alt, spec.fixed)?;
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+    }
+    (!out.is_empty() && out.len() <= MAX_NAMES).then_some(out)
+}
+
+/// Name to look up when the pattern is a plain identifier (optionally dotted, optionally `\b`-wrapped).
+pub fn identifier_of(spec: &SearchSpec) -> Option<String> {
+    match identifiers_of(spec)?.as_slice() {
+        [(name, _)] => Some(name.clone()),
+        _ => None,
+    }
 }
 
 struct RefInfo {
@@ -598,20 +655,18 @@ pub fn build(
     stale: bool,
 ) -> Result<(Answer, Value), String> {
     let cwd = PathBuf::from(&spec.cwd);
-    let name = identifier_of(spec);
-    let facts = match &name {
-        Some(n) => {
-            let dotted = spec.patterns[0].replace("\\.", ".");
-            let dotted = dotted.trim_start_matches("\\b").trim_end_matches("\\b");
-            Some(name_facts(engine, n, dotted)?)
-        }
-        None => None,
-    };
+    let facts: Vec<NameFacts> = identifiers_of(spec)
+        .unwrap_or_default()
+        .iter()
+        .map(|(name, dotted)| name_facts(engine, name, dotted))
+        .collect::<Result<_, _>>()?;
     let mut files = Files::default();
+    let pick: Vec<usize> = res.hits.iter().map(|h| fact_for(&facts, h)).collect();
     let classes: Vec<Class> = res
         .hits
         .iter()
-        .map(|h| classify(engine, facts.as_ref(), h, &mut files))
+        .zip(&pick)
+        .map(|(h, &k)| classify(engine, facts.get(k), h, &mut files))
         .collect();
     let mut counts: BTreeMap<Class, usize> = BTreeMap::new();
     for c in &classes {
@@ -627,7 +682,10 @@ pub fn build(
         },
         matches: res.hits.len(),
         files: nfiles.len(),
-        name: facts.as_ref().map(|f| f.name.clone()),
+        name: match facts.as_slice() {
+            [f] => Some(f.name.clone()),
+            _ => None,
+        },
         all: spec.all,
         hint_base: hint_base(spec),
         budget: spec.budget.clone(),
@@ -654,15 +712,19 @@ pub fn build(
         a.mode = "files".into();
         a.verdict = "none".into();
         files_items(&mut a, res, &classes);
-    } else if let Some(f) = &facts {
+    } else if !facts.is_empty() {
         a.mode = "identifier".into();
+        let judged = Judged {
+            classes: &classes,
+            facts: &facts,
+            pick: &pick,
+        };
         identifier_items(
             &mut a,
             engine,
             spec,
             res,
-            &classes,
-            f,
+            &judged,
             &cwd,
             stale,
             &mut files,
@@ -699,6 +761,7 @@ pub fn build(
         "secrets_skipped": res.secrets_skipped,
         "raw_bytes": raw_bytes,
         "budget_bytes": a.budget.as_ref().and_then(|b| b.bytes),
+        "names": a.names.iter().map(|n| json!({"name": n.name, "verdict": n.verdict})).collect::<Vec<_>>(),
     });
     Ok((a, stats))
 }
@@ -716,72 +779,139 @@ pub fn render(
     Ok((text, stats))
 }
 
+/// Which name of an alternation a hit is about: the identifier at the match, else the
+/// alternative the match starts with (a different identifier containing it), else the first.
+fn fact_for(facts: &[NameFacts], hit: &Hit) -> usize {
+    if facts.len() < 2 {
+        return 0;
+    }
+    let token = token_at(&hit.text, hit.col);
+    let at = hit.text.get(hit.col..).unwrap_or_default();
+    facts
+        .iter()
+        .position(|f| f.name == token)
+        .or_else(|| facts.iter().position(|f| at.starts_with(f.name.as_str())))
+        .unwrap_or(0)
+}
+
+/// Per-hit judgment of an identifier search: class and the name it is about.
+struct Judged<'a> {
+    classes: &'a [Class],
+    facts: &'a [NameFacts],
+    pick: &'a [usize],
+}
+
+/// Verdict of one name: (verdict, note for the single-name header, short note for alternations).
+fn name_verdict(f: &NameFacts) -> (&'static str, String, String) {
+    let gaps = f.gaps.len();
+    if f.syms.is_empty() {
+        let note = format!("no symbol named `{}` in the index", f.name);
+        ("none", note, "not in the index".into())
+    } else if gaps == 0 {
+        (
+            "complete",
+            format!(
+                "every reference the graph resolved to `{}` is listed; 0 unresolved or ambiguous calls with that name",
+                f.name
+            ),
+            String::new(),
+        )
+    } else {
+        (
+            "lower_bound",
+            format!(
+                "{gaps} calls named `{}` unresolved/ambiguous — tagged [unresolved call] where they matched",
+                f.name
+            ),
+            format!("{gaps} unresolved"),
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn identifier_items(
     a: &mut Answer,
     engine: &Engine,
     spec: &SearchSpec,
     res: &SearchOutcome,
-    classes: &[Class],
-    f: &NameFacts,
+    judged: &Judged,
     cwd: &Path,
     stale: bool,
     files: &mut Files,
     alias_refs: &mut usize,
 ) {
-    let gaps = f.gaps.len();
-    if f.syms.is_empty() {
-        a.verdict = "none".into();
-        a.verdict_note = format!("no symbol named `{}` in the index", f.name);
-    } else if gaps == 0 {
-        a.verdict = "complete".into();
-        a.verdict_note = format!(
-            "every reference the graph resolved to `{}` is listed; 0 unresolved or ambiguous calls with that name",
-            f.name
-        );
+    let facts = judged.facts;
+    if let [f] = facts {
+        let (verdict, note, _) = name_verdict(f);
+        a.verdict = verdict.into();
+        a.verdict_note = note;
     } else {
-        a.verdict = "lower_bound".into();
-        a.verdict_note = format!(
-            "{gaps} calls named `{}` unresolved/ambiguous — tagged [unresolved call] where they matched",
-            f.name
-        );
+        let verdicts: Vec<&str> = facts.iter().map(|f| name_verdict(f).0).collect();
+        a.verdict = if verdicts.iter().all(|v| *v == "complete") {
+            "complete"
+        } else if verdicts.iter().all(|v| *v == "none") {
+            "none"
+        } else {
+            "lower_bound"
+        }
+        .into();
+        a.verdict_note = facts
+            .iter()
+            .zip(&verdicts)
+            .filter(|(_, v)| **v != "complete")
+            .map(|(f, _)| format!("`{}` {}", f.name, name_verdict(f).2))
+            .collect::<Vec<_>>()
+            .join(", ");
     }
 
     // Query-layer facts per definition (bounded: common names can have many).
+    let per_name = (TARGET_FACTS_BUDGET / facts.len()).max(1);
     let mut called_by: HashMap<(String, u32), (Vec<String>, u32)> = HashMap::new();
     let mut def_display: HashMap<SymbolId, String> = HashMap::new();
-    for sym in f.syms.iter().take(8) {
-        let tf = target_facts(engine, stale, sym, cwd);
-        def_display.insert(sym.id, tf.target.def.clone());
-        called_by.extend(tf.called_by);
-        a.footer.indirect_total += tf.indirect_total;
-        a.footer.indirect.extend(tf.indirect);
-        a.footer.tests_total += tf.tests_total;
-        for t in tf.tests {
-            if a.footer.tests.len() < crate::answer::MAX_TESTS_LISTED {
-                a.footer.tests.push(t);
+    for f in facts {
+        let mut nv = NameVerdict {
+            name: f.name.clone(),
+            verdict: name_verdict(f).0.into(),
+            note: name_verdict(f).2,
+            ..Default::default()
+        };
+        for sym in f.syms.iter().take(per_name) {
+            let tf = target_facts(engine, stale, sym, cwd);
+            def_display.insert(sym.id, tf.target.def.clone());
+            called_by.extend(tf.called_by);
+            a.footer.indirect_total += tf.indirect_total;
+            a.footer.indirect.extend(tf.indirect);
+            a.footer.tests_total += tf.tests_total;
+            nv.tests_total += tf.tests_total;
+            for t in tf.tests {
+                if a.footer.tests.len() < crate::answer::MAX_TESTS_LISTED {
+                    a.footer.tests.push(t);
+                }
             }
+            a.footer.overrides.extend(tf.overrides);
+            nv.targets.push(tf.target.clone());
+            a.targets.push(tf.target);
         }
-        a.footer.overrides.extend(tf.overrides);
-        a.targets.push(tf.target);
+        for sym in f.syms.iter().skip(per_name) {
+            let abs = engine.paths.root.join(&sym.path);
+            def_display.insert(
+                sym.id,
+                format!("{}:{}", display_path(&abs, cwd), sym.start_line),
+            );
+        }
+        if facts.len() > 1 {
+            a.names.push(nv);
+        }
     }
-    for sym in f.syms.iter().skip(8) {
-        let abs = engine.paths.root.join(&sym.path);
-        def_display.insert(
-            sym.id,
-            format!("{}:{}", display_path(&abs, cwd), sym.start_line),
-        );
-    }
-    let multi = f.syms.len() > 1;
 
-    let enrich = |it: &mut Item, rel: &str, r: &RefInfo| {
+    let enrich = |it: &mut Item, f: &NameFacts, rel: &str, r: &RefInfo| {
         it.in_fn = f.labels.get(&r.src).cloned();
         if let Some((by, total)) = called_by.get(&(rel.to_string(), it.line)) {
             it.called_by = by.clone();
             it.called_by_total = *total;
         }
         it.confidence = conf_word(r.conf);
-        if multi {
+        if f.syms.len() > 1 {
             it.resolves_to = def_display.get(&r.dst).cloned();
         }
         it.why = format!(
@@ -799,6 +929,7 @@ fn identifier_items(
     let mut seen: HashSet<(String, u32)> = HashSet::new();
     let mut import_files: HashSet<String> = HashSet::new();
     for (i, h) in res.hits.iter().enumerate() {
+        let f = &facts[judged.pick[i]];
         let rel = engine.paths.relative(&h.abs).unwrap_or_default();
         let is_test = graphite_extract_python::is_test_path(&rel);
         let (before, after) = context(files, spec, &h.abs, h.line);
@@ -812,7 +943,7 @@ fn identifier_items(
             ..Default::default()
         };
         let key = (rel.clone(), h.line);
-        match classes[i] {
+        match judged.classes[i] {
             Class::Definition => {
                 it.class = "definition".into();
                 it.test = false;
@@ -823,7 +954,7 @@ fn identifier_items(
                 it.class = "call".into();
                 if let Some(r) = f.refs.get(&key) {
                     it.test = is_test || f.syms_known_test(r.src);
-                    enrich(&mut it, &rel, r);
+                    enrich(&mut it, f, &rel, r);
                 }
             }
             Class::Import => {
@@ -894,18 +1025,19 @@ fn identifier_items(
     a.footer.import_files = import_files.len();
 
     // References the text search could not see (aliased import, renamed call).
-    let mut hidden: Vec<(&(String, u32), &RefInfo)> = f
-        .refs
+    let mut hidden: Vec<(&NameFacts, &(String, u32), &RefInfo)> = facts
         .iter()
-        .filter(|(k, r)| {
+        .flat_map(|f| f.refs.iter().map(move |(k, r)| (f, k, r)))
+        .filter(|(_, k, r)| {
             r.kind != EdgeKind::Imports
                 && !seen.contains(*k)
                 && res.searched.contains(&engine.paths.root.join(&k.0))
         })
         .collect();
-    hidden.sort_by(|x, y| x.0.cmp(y.0));
+    hidden.sort_by(|x, y| x.1.cmp(y.1));
+    hidden.dedup_by(|x, y| x.1 == y.1);
     *alias_refs = hidden.len();
-    for ((path, line), r) in hidden {
+    for (f, (path, line), r) in hidden {
         let abs = engine.paths.root.join(path);
         let (before, after) = context(files, spec, &abs, *line);
         let mut it = Item {
@@ -918,7 +1050,7 @@ fn identifier_items(
             after,
             ..Default::default()
         };
-        enrich(&mut it, path, r);
+        enrich(&mut it, f, path, r);
         it.why = format!(
             "{} — the text search cannot see it (aliased import or renamed call)",
             it.why
@@ -1118,6 +1250,46 @@ mod tests {
         assert_eq!(identifier_of(&spec("TODO|FIXME", false)), None);
         assert_eq!(identifier_of(&spec("def resolve", false)), None);
         assert_eq!(identifier_of(&spec("a-b", true)), None);
+    }
+
+    // kinhin: decision(ref="docs/foundation/interception.md#2-the-answer-an-enriched-grep")
+    #[test]
+    fn alternations_of_identifiers_are_judged_per_name() {
+        let names = |p: &str, fixed: bool| -> Option<Vec<String>> {
+            identifiers_of(&spec(p, fixed)).map(|v| v.into_iter().map(|(n, _)| n).collect())
+        };
+        let two = |a: &str, b: &str| Some(vec![a.to_string(), b.to_string()]);
+        assert_eq!(
+            names("_pin_model|model_pins", false),
+            two("_pin_model", "model_pins")
+        );
+        assert_eq!(
+            names("\\bload_yaml\\b|core\\.dump", false),
+            two("load_yaml", "dump")
+        );
+        assert_eq!(names("a|a|b", false), two("a", "b"));
+        let mut multi = spec("a", false);
+        multi.patterns = vec!["find_root".into(), "resolve_owner".into()];
+        assert_eq!(
+            identifiers_of(&multi).map(|v| v.len()),
+            Some(2),
+            "-e a -e b"
+        );
+        for p in [
+            "resolve_(owner|x)",
+            "_is_ancestor|def ",
+            "a|[bc]",
+            "a|",
+            "a|b|c|d|e|f|g",
+        ] {
+            assert_eq!(names(p, false), None, "{p}");
+        }
+        assert_eq!(names("a|b", true), None, "fixed: a literal pipe");
+        assert_eq!(
+            identifier_of(&spec("TODO|FIXME", false)),
+            None,
+            "one name only"
+        );
     }
 
     #[test]

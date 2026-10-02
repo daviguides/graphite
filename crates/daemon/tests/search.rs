@@ -143,6 +143,73 @@ fn default_budget_discloses_the_rest() {
     );
 }
 
+// kinhin: decision(ref="docs/foundation/interception.md#2-the-answer-an-enriched-grep")
+#[test]
+fn alternation_of_identifiers_gets_a_verdict_per_name() {
+    let (_d, root) = fixture();
+    write(&root, "other/root.py", "def find_root():\n    return 2\n");
+    write(
+        &root,
+        "other/use3.py",
+        "from other.root import find_root\n\ndef z():\n    return find_root()\n",
+    );
+    let engine = Engine::open(RepoPaths::new(&root)).unwrap();
+    engine.index_all().unwrap();
+    // `grep -rn "resolve_owner\|find_root" .` and `rg -e resolve_owner -e find_root`
+    let mut alt = spec(&root, "resolve_owner|find_root");
+    alt.label = "grep -rn \"resolve_owner\\|find_root\" .".into();
+    let mut two = spec(&root, "resolve_owner");
+    two.patterns.push("find_root".into());
+    for s in [alt, two] {
+        let res = search::run(&s, &root).unwrap();
+        let (text, stats) = judge::render(&engine, &s, &res, false).unwrap();
+        assert_eq!(stats["mode"], "identifier", "{text}");
+        let header = text.lines().next().unwrap();
+        assert!(
+            header.contains(" · 2 identifiers: `resolve_owner` "),
+            "{header}"
+        );
+        assert!(
+            header.contains(
+                "`find_root` graph COMPLETE, def other/root.py:1 · 1 call sites in 1 files"
+            ),
+            "{header}"
+        );
+        assert_eq!(stats["names"][1]["verdict"], "complete", "{stats}");
+        // Each call site annotated by the graph of its own name.
+        assert!(
+            text.contains("other/use3.py:4:    return find_root()    ← z"),
+            "{text}"
+        );
+        assert!(
+            text.contains("pkg/use.py:4:    return resolve_owner()    ← a"),
+            "{text}"
+        );
+        assert!(
+            text.contains("other/root.py:1:def find_root():    [definition]"),
+            "{text}"
+        );
+        assert!(
+            text.contains("pkg/alias.py:4:    return ro()"),
+            "graph-only kept: {text}"
+        );
+        let total: u64 = stats["classes"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|v| v.as_u64().unwrap())
+            .sum();
+        assert_eq!(total, res.hits.len() as u64, "every match judged");
+        assert!(
+            text.lines()
+                .last()
+                .unwrap()
+                .contains("no test covers `resolve_owner`, `find_root` ⚠"),
+            "{text}"
+        );
+    }
+}
+
 #[test]
 fn imports_counted_and_multi_definitions_listed() {
     let (_d, root) = fixture();
