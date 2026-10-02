@@ -31,10 +31,25 @@ class Task:
     suites: list[str] = field(default_factory=list)
     start: str = "parent"
     symbol: str | None = None
+    # The statement before the issue rewrite: names the files/functions to change.
+    statement_hinted: str | None = None
+    # Names in `prompt` the leak check accepts (user-edited config files).
+    leak_allow: list[str] = field(default_factory=list)
 
     @property
     def is_question(self) -> bool:
         return self.kind == "question"
+
+    @property
+    def is_localization(self) -> bool:
+        """Does the agent have to find where to change? Questions name their symbol."""
+        return not self.is_question
+
+    def statement(self, mode: str) -> str:
+        """`issue` = symptom-only statement (default); `hinted` = the old one."""
+        if mode == "hinted" and self.statement_hinted:
+            return self.statement_hinted
+        return self.prompt
 
 
 def load_tasks() -> dict[str, Task]:
@@ -43,6 +58,8 @@ def load_tasks() -> dict[str, Task]:
     for raw in data["task"]:
         raw = dict(raw)
         raw["prompt"] = raw["prompt"].strip()
+        if raw.get("statement_hinted"):
+            raw["statement_hinted"] = raw["statement_hinted"].strip()
         tasks[raw["id"]] = Task(**raw)
     return tasks
 

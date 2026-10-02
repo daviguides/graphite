@@ -12,6 +12,7 @@ agent diff and check details under results/runs/<run-id>/.
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import signal
@@ -171,6 +172,8 @@ def _harness_error(record: dict, reason: str) -> dict:
 
 
 def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
+    # The agent and the judge both see the statement chosen for this run.
+    task = dataclasses.replace(task, prompt=task.statement(args.statement))
     truth = load_json(TRUTH / f"{task.id}.json")
     if truth is None:
         raise SystemExit(f"no truth for {task.id}; run build_truth.py first")
@@ -181,7 +184,7 @@ def one_run(task, arm_id: str, arm: dict, rep: int, args, label: str) -> dict:
     add_worktree(truth["start"] if not task.is_question else truth["sha"], tree)
     record = {"run_id": run_id, "label": label, "task": task.id, "kind": task.kind,
               "difficulty": task.difficulty, "arm": arm_id, "rep": rep,
-              "model": args.model, "started_at": datetime.now(UTC).isoformat()}
+              "model": args.model, "statement": args.statement, "started_at": datetime.now(UTC).isoformat()}
     try:
         t0 = time.monotonic()
         uv_sync(tree)
@@ -281,6 +284,8 @@ def main() -> None:
     ap.add_argument("--max-budget", type=float, default=6.0)
     ap.add_argument("--timeout", type=float, default=2400)
     ap.add_argument("--label", default="run")
+    ap.add_argument("--statement", choices=["issue", "hinted"], default="issue",
+                    help="issue = symptom-only statement; hinted = the old one naming files/functions")
     ap.add_argument("--keep", action="store_true")
     ap.add_argument("--no-judge", action="store_true")
     args = ap.parse_args()

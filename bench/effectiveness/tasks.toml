@@ -1,7 +1,10 @@
 # Graphite effectiveness bench — task set (Continuum, Python).
 #
 # Code tasks replay a real Continuum commit: the agent starts at `ref~1` and
-# is asked to deliver what `ref` delivered. The reference diff is the ground
+# is asked to deliver what `ref` delivered. `prompt` is written as a real
+# issue: symptom and expected behaviour, no path or function to change
+# (enforced by leaks.py / tests). `statement_hinted` keeps the earlier
+# statement that named them (`run.py --statement hinted`). The reference diff is the ground
 # truth for the judge; files the reference touched are the coverage target.
 # Question tasks ask "what breaks if I change X" at a pinned commit; the
 # ground-truth caller list is computed by build_truth.py and frozen in
@@ -21,6 +24,17 @@ difficulty = "hard"
 ref = "e8b211a1c1"
 suites = ["tools/flow/rover", "tools/orch/runner"]
 prompt = """
+Tasks that belong to an umbrella/integration branch (their task.yaml sets
+`base_branch`) never see work their sibling tasks already delivered to that
+branch: before a task runs, runner rebases its worktree onto the
+repository's default branch, ignoring the task's base branch.
+
+Expected: the worktree is rebased onto the task's `base_branch` when it has
+one, and onto the repo default when it does not (today's behaviour). The
+git mechanics belong in rover, which owns rebasing; every existing rover
+caller that rebases onto the default branch must keep working unchanged.
+"""
+statement_hinted = """
 Runner's pre-hook always rebases a task's worktree onto the repository's
 default branch (via rover). Tasks that belong to an umbrella/integration
 branch (task_data["base_branch"]) therefore never see work their sibling
@@ -42,6 +56,21 @@ difficulty = "hard"
 ref = "efca286a1b"
 suites = ["tools/orch/marshal"]
 prompt = """
+marshal's daemon runs from $HOME under launchd, and there stale-task
+recovery and death handling silently do nothing: reading a queued task's
+status, putting it back to queued and marking it failed all locate the
+task.yaml through project detection based on the current directory, which
+raises outside a repo — and the error is swallowed.
+
+Expected: those three operations find the task.yaml from the queued task's
+own identity (owner, repo, project, initiative, milestone) under the
+externalized projects base, without depending on the current directory —
+the same cwd-free way dispatch already finds source roots. Only queue
+entries without that identity fall back to current-directory detection.
+Failures are logged as warnings instead of silently ignored, and every
+place in `marshal run` that does these operations is updated.
+"""
+statement_hinted = """
 marshal's daemon runs from $HOME under launchd. `read_task_status`,
 `reset_task_to_queued` and `mark_task_failed` resolve the task.yaml through
 dao_cli's cwd-based project detection, which raises outside a repo — and the
@@ -64,6 +93,20 @@ difficulty = "hard"
 ref = "60de6dec9c"
 suites = ["tools/orch/regent"]
 prompt = """
+regent's key-files lint is disabled because it checks the key-file paths
+that briefs declare against whatever the working copy happens to be: a
+stale checkout reports files that are already merged as missing.
+
+Re-enable it and check the declared paths against the repository at a
+named ref: the initiative's umbrella branch when the briefs declare one,
+`origin/<default branch>` otherwise. A path is missing only when it is
+absent from BOTH that ref and the working copy. When no ref resolves, or
+the briefs disagree about the umbrella, skip the lint and say why instead
+of guessing. A key-files row like "Add (minimal, for these unit tests)" is
+still an Add row and must not be reported as missing. The lint must check
+every task of the run, not only one.
+"""
+statement_hinted = """
 regent's `check_key_files` lint is disabled because it checks declared
 key-file paths with `Path.exists()` against whatever the working copy is —
 a stale checkout reports merged files as missing.
@@ -87,6 +130,20 @@ difficulty = "medium"
 ref = "b3fc411912"
 suites = ["tools/orch/regent"]
 prompt = """
+regent's delivery scoreboard reported four tasks as "delivered nothing"
+although they are merged and on main. When git cannot answer whether a
+commit is an ancestor (exit 128: object not available locally) the answer
+is read as "not an ancestor", and the pinned tip is never fetched on its
+own, so ancestry is asked about objects git does not have.
+
+Expected: fetch the tip once before scoring any task; an ancestry check
+answers yes / no / could-not-tell, and could-not-tell is reported as
+"could not read", never as "delivered nothing"; a git timeout must not
+read as "no". Measure what a merge delivered against the merge's own first
+parent rather than the tip, and never use `git show` on a merge commit. A
+diff that could not be read is a skip, not a verdict.
+"""
+statement_hinted = """
 Bug in regent's delivery scoreboard (regent/core/delivery.py): four merged,
 on-main tasks were reported as "delivered nothing". `_is_ancestor` returns
 `returncode == 0`, so git exit 128 (object not available locally) reads the
@@ -108,6 +165,25 @@ difficulty = "medium"
 ref = "c3300fddf6"
 suites = ["tools/orch/regent"]
 prompt = """
+Several regent checks report "the command could not run" as "the answer
+is no":
+- deciding whether a task branch is current with main: git exit 128 (when
+  origin/main is not fetched) reads as "needs rebase";
+- deciding whether a PR exists: any gh failure (unauthenticated,
+  rate-limited, offline) reads as "no PR";
+- deciding whether a worktree exists: any OS error reads as "no".
+Make them answer yes / no / unknown, never turn a timeout into an exit
+code, and when a spawn step cannot tell, run the action anyway and say
+why.
+
+The lens review has the same problem with briefs: a brief file that exists
+but is empty or unreadable is shown to the lens as "(missing on disk)"; an
+unreadable briefs manifest comes back as an empty plan, which the review
+reads as "no findings"; an unreadable decisions.yaml reads as "(none)".
+Say what actually happened in each case, and make the review fail rather
+than return "no findings" when it could not read the plan.
+"""
+statement_hinted = """
 regent has several checks that collapse "the command could not run" into
 "the answer is no":
 - spawn's `branch_is_current` uses `git merge-base --is-ancestor` with
@@ -129,6 +205,15 @@ difficulty = "medium"
 ref = "d6555252bf"
 suites = ["tools/orch/continuum-core", "tools/orch/refiner", "tools/orch/intake"]
 prompt = """
+Resolving a model from model_pins.json is implemented three times: refiner
+and intake each carry a private copy while continuum-core already has the
+shared one, and the copies drift. Consolidate: refiner and intake use
+continuum-core's resolver and drop their own copies. refiner today
+resolves its default from the "default:refiner" key of model_pins.json —
+keep that behaviour, which means the shared resolver has to accept a
+custom default key. Add continuum-core as a dependency where needed.
+"""
+statement_hinted = """
 `_pin_model` (model resolution from model_pins.json) is duplicated in
 refiner and intake while continuum-core already has the shared version.
 Consolidate: refiner and intake must use continuum-core's `_pin_model`
@@ -146,6 +231,15 @@ ref = "0cfc753b1c"
 suites = ["tools/flow/rover"]
 prompt = """
 `rover commit all` fails to push on repos owned by a different GitHub
+account, while `rover pull` on the same repos works: pull resolves per-repo
+auth (repo owner → gh user → GITHUB_TOKEN), commit/push does not.
+
+Make committing and pushing use the same per-repo auth that pull already
+uses — for a single repo and for the batch commit, including the
+pull-rebase done before a push — so pushes go out with the right account.
+"""
+statement_hinted = """
+`rover commit all` fails to push on repos owned by a different GitHub
 account: the commit/push path does not resolve per-repo auth, while the
 pull path already does (owner → gh user → GITHUB_TOKEN via
 `resolve_auth_env`). Thread the resolved auth env through the commit/push
@@ -161,6 +255,21 @@ difficulty = "hard"
 ref = "7553e7eb6e"
 suites = ["tools/orch/runner"]
 prompt = """
+runner's retry protections never fire. The session log kept in task.yaml is
+trimmed to 2 entries per mode, but the guard that stops a repeated
+FINALIZING needs 3 entries, and the fresh-start threshold (15) is above
+anything the trimmed log can ever hold — a task can loop forever.
+
+Expected: task.yaml keeps a durable, untrimmed `attempts` record: total,
+lifetime, fresh starts, runs per mode, and the consecutive failure streak
+per gate. A mode run more than RUNNER_MAX_MODE_RETRIES times (env, default
+3), or a gate failing RUNNER_GATE_FAIL_MAX times in a row (default 3),
+holds the task as needs_human. A fresh start reads the durable total and
+restarts at the workflow's first mode (not always BRIEFING); a second
+fresh start escalates. The old session-counting guard in FINALIZING goes
+away, and a gate_failed requeue must not overwrite needs_human.
+"""
+statement_hinted = """
 runner's retry protections never fire: the session log is trimmed to 2
 entries per mode, but the FINALIZING guard needs 3 and the fresh-start
 threshold (15) is above what the trimmed log can ever hold.
@@ -183,6 +292,16 @@ difficulty = "medium"
 ref = "4b07891d28"
 suites = ["tools/orch/runner"]
 prompt = """
+runner merged a PR that targeted main while its task belongs to an
+umbrella branch. The PR-target check that runs after a mode reports
+"fine" on any gh error, and its answer is ignored anyway.
+
+Expected: that check reports ok / fixed / mismatch / unknown and runner
+emits the result as an event. In FINALIZING, re-read the PR's base branch
+right before merging: on a mismatch stop with MERGE_FAILED; when the base
+cannot be read, fail closed with a classified failure — never merge.
+"""
+statement_hinted = """
 runner can merge a PR that targets the wrong base: `post_hook_validate_pr_target`
 returns True on any gh error and the engine ignores its result, so a PR
 aimed at main can merge while the task belongs to an umbrella branch.
@@ -200,6 +319,16 @@ difficulty = "medium"
 ref = "900e76143c"
 suites = ["tools/orch/runner"]
 prompt = """
+A stuck `gh` call can hold a whole milestone: the gh calls runner makes
+while finalizing (PR queries, merge and its fallback strategies, remote
+branch delete) run with no timeout.
+
+Give every one of them a 30s timeout (60s for merge); a timeout must come
+back as a failed result whose stderr is classified as auth_or_network.
+Also, checking whether a task's PR is already merged must use the task
+repo's auth env, the way runner's hooks already do.
+"""
+statement_hinted = """
 A stuck `gh` call can hold a whole milestone: gh calls in execute_finalizing,
 remote branch delete and the merge ladder run with no timeout. Route them
 through one helper `_run_gh` with a 30s timeout (60s for merge); a timeout
@@ -215,6 +344,19 @@ difficulty = "medium"
 ref = "24c1aec482"
 suites = ["tools/orch/runner"]
 prompt = """
+`gh pr merge --auto` exits 0 when it only arms auto-merge (checks still
+pending). runner's FINALIZING treats that as merged: it verifies an
+umbrella that does not contain the work yet, deletes the remote head
+branch (which closes the PR and kills the armed merge) and marks the task
+done.
+
+Expected: after any merge strategy exits 0, check the PR state with the
+task's auth env. If it is not merged, report it as auto-queued: no
+umbrella verify, no branch delete; set status queued with finalize_state
+"auto_queued" and the reason in last_action. It is not a blocker — a
+blocker would stop the queue from re-enqueueing the task.
+"""
+statement_hinted = """
 `gh pr merge --auto` exits 0 when it only arms auto-merge (checks still
 pending). FINALIZING treats that as merged: it verifies an umbrella that
 doesn't contain the work yet, deletes the remote head (closing the PR and
@@ -234,6 +376,20 @@ difficulty = "hard"
 ref = "ce363fce75"
 suites = ["tools/orch/dao-cli", "tools/orch/instrument"]
 prompt = """
+Duplicate GitHub issues: two setups of one milestone ran at the same time
+and each created every issue; a retry loop recreated one task's issue
+thirty times.
+
+Make publishing a task's issue idempotent: two publishers of the same task
+must not both create it (hold a per-task lock across check-and-create and
+re-read the task inside it), every issue body carries a marker with the
+task slug, and an existing marked issue is adopted instead of creating a
+new one. When the new issue's number cannot be read, find it by the marker
+instead of saving 0. Also: a task with `item_ids: null` must not crash
+when it is added to the project board, and milestone setup must survive
+milestone.yaml appearing while it runs.
+"""
+statement_hinted = """
 Duplicate GitHub issues: two setups of one milestone ran at once and each
 created every issue; a retry loop recreated one task's issue thirty times.
 
@@ -253,6 +409,16 @@ difficulty = "medium"
 ref = "ea401cabed"
 suites = ["tools/orch/runner"]
 prompt = """
+We need wall-clock numbers in runner's event stream as a baseline for
+speed work:
+- the pre_hook_done and post_hooks_done events carry hook_duration_ms;
+- mode_complete carries mode_wall_ms (including the background-task wait
+  that the SDK's duration_ms leaves out) and first_edit_ms (time to the
+  first file edit in the mode);
+- tool_call events carry tool_use_id, and a new tool_result event reports
+  each tool's duration.
+"""
+statement_hinted = """
 Add wall-clock instrumentation to runner's event stream as a baseline for
 speed work:
 - pre_hook_done / post_hooks_done events carry hook_duration_ms;
@@ -270,6 +436,22 @@ difficulty = "hard"
 ref = "e73dae002b"
 suites = ["tools/context/zen-review"]
 prompt = """
+zen-review posts the same finding once per reviewer that flagged it, plus
+a lot of low-value noise.
+
+1. Cross-reviewer dedup: findings on the same file within ±2 lines merge
+   when their title tokens' Jaccard similarity is >= 0.5 — ignoring tokens
+   that come from splitting the file name's camelCase, so distinct findings
+   that name the same endpoint do not merge. The merged finding keeps the
+   highest severity, the most specific title and the highest relevance,
+   and appends "Also flagged by: <reviewer>".
+2. Relevance filter: reviewers rate each finding's relevance 1-5 (default
+   3). Order: dedup, then drop findings below `--min-relevance` (new CLI
+   option, 1-5, default 3), then the summary counts only kept findings.
+   Dropped findings stay in the stored YAML result marked as filtered and
+   are never posted or displayed.
+"""
+statement_hinted = """
 zen-review posts duplicate findings from different reviewers and a lot of
 low-value noise. Add:
 1. Cross-reviewer dedup (new pure module zen_review/orchestration/dedup.py):
@@ -292,6 +474,16 @@ difficulty = "medium"
 ref = "72f3c8febe"
 suites = ["tools/orch/dao-cli", "tools/orch/instrument"]
 prompt = """
+Umbrella branches are always named `feature/<initiative>`; some
+repositories use another prefix. Make the prefix a per-repository setting:
+`branch_prefix` on the dao-cli registry entry, next to `shared_branch`;
+the umbrella is `<prefix><initiative>`. Absent means `feature/`, so
+existing projects keep their branch names. `feat` and `feat/` mean the
+same thing — neither `feat//x` nor `featx` may come out. A prefix that
+would produce a branch name git rejects is an error, never used. The
+setting has no effect while the shared-branch strategy is off.
+"""
+statement_hinted = """
 The umbrella branch prefix `feature/` is hardcoded in instrument. Make it a
 per-repository setting: add `branch_prefix` next to `shared_branch` on the
 dao-cli registry entry, and derive the umbrella as `<prefix><initiative>`.
@@ -309,6 +501,15 @@ difficulty = "medium"
 ref = "082b68faaf"
 suites = ["tools/orch/regent"]
 prompt = """
+Every regent run close reports the slug-consistency lint as "skipped:
+missing task_dir/brief_path": that lint only ever receives one task, while
+a run close has many. Make the per-task lints check every task of the run,
+working from one shared per-task description (name, task dir, task.yaml,
+brief) rather than parallel lists. Tell "the run's tasks could not be
+resolved" apart from "the run has no tasks": each gets an explicit skip
+with its reason, so silence always means every task was checked.
+"""
+statement_hinted = """
 regent's `slug_consistency` lint always emits "skipped: missing
 task_dir/brief_path" because it takes a single task while a run close has
 many. Make the per-task lints fan out over every task of the run.
@@ -328,6 +529,15 @@ difficulty = "easy"
 ref = "41c02e3e6d"
 suites = ["tools/flow/sourcerer"]
 prompt = """
+In a monorepo, sourcerer finds the wrong externalized worktrees root. In
+continuum the registry has two entries (app with path "app", continuum
+with path ""), and sourcerer always picks "app" — even when run from the
+repo root — so worktree completion and navigation list the wrong
+worktrees. Expected: pick the most specific registry entry for the current
+directory, walking up from its repo-relative path, the same way the
+worktree tool does.
+"""
+statement_hinted = """
 Bug in sourcerer: for monorepo projects the externalized worktrees root is
 wrong. `_resolve_externalized_worktrees_root` returns the first registry
 match; for continuum (entries: app with path="app", continuum with
@@ -345,7 +555,16 @@ kind = "feature"
 difficulty = "medium"
 ref = "502651cc84"
 suites = []
+leak_allow = ["model_pins.json"]  # the config file users edit
 prompt = """
+Tools that are not given --model (refiner launched from the Tauri UI,
+zen-review, slackweave, fireweave, ...) fall back to the Claude SDK's
+default model. Every tool that uses the Claude SDK must resolve its model
+through model_pins.json, falling back to a "default" key when no model is
+explicitly requested; add that key to model_pins.json with value
+"claude-sonnet-4-6".
+"""
+statement_hinted = """
 Tools that are not given --model (refiner launched from the Tauri UI,
 zen-review, slackweave, fireweave, ...) fall back to the Claude SDK's
 default model. Make every SDK-using tool always resolve its model through
@@ -356,6 +575,8 @@ the SDK options.
 """
 
 # ---------------------------------------------------------------- questions
+# Not localization tasks: the question names its symbol by design, so they
+# are not leak-checked and stay out of issue-form pilots.
 
 [[task]]
 id = "q-resolve-task-yaml-path"
