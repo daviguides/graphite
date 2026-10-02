@@ -538,3 +538,16 @@ def test_arm_b2_setup_teardown_and_text_answer(monkeypatch):
     finally:
         common.run([str(GRAPHITE), "daemon", "stop", "--repo", str(tree)], check=False)
         common.remove_worktree(tree)
+
+
+def test_flaky_new_failure_is_not_a_regression(tmp_path):
+    rerun = lambda tree, suite: {"failed": ["base::t", "x::regressed"], "passed": ["x::flaky"]}
+    new, flaky = checks.confirm_new_failures(tmp_path, "s", {"x::flaky", "x::regressed"}, {"base::t"}, runner=rerun)
+    assert new == ["x::regressed"]
+    assert flaky == ["x::flaky"]
+
+
+def test_no_new_failures_skips_the_rerun(tmp_path):
+    def boom(tree, suite):
+        raise AssertionError("must not rerun")
+    assert checks.confirm_new_failures(tmp_path, "s", set(), set(), runner=boom) == ([], [])

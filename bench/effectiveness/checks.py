@@ -145,6 +145,21 @@ def _hidden_tests(truth: dict, tree: Path) -> dict:
         remove_worktree(ref_tree)
 
 
+def confirm_new_failures(tree: Path, suite: str, new: set[str], baseline: set[str],
+                         runner=run_suite) -> tuple[list[str], list[str]]:
+    """A new failure counts only if the suite fails it again on a rerun.
+    Pilot issue-C2 (runner-pr-base-guard C-0) scored a regression on a
+    test_sync test that passes 4/4 on the same agent diff: a flaky test under
+    load must not turn a solved run into an agent failure."""
+    if not new:
+        return [], []
+    again = runner(tree, suite)
+    if again.get("error"):
+        return sorted(new), []
+    still = new & (set(again["failed"]) - baseline)
+    return sorted(still), sorted(new - still)
+
+
 def check_code(task, truth: dict, tree: Path, diff: str, edited: list[str],
                out_dir: Path, use_judge: bool = True, judge_model: str = "opus") -> dict:
     res: dict = {}
@@ -158,8 +173,10 @@ def check_code(task, truth: dict, tree: Path, diff: str, edited: list[str],
             regression[suite] = {"error": r["error"], "tail": r.get("tail", "")[:600]}
             continue
         baseline = set(truth.get("start_failures", {}).get(suite, []))
-        new = sorted(set(r["failed"]) - baseline)
+        new, flaky = confirm_new_failures(tree, suite, set(r["failed"]) - baseline, baseline)
         regression[suite] = {"failed": len(r["failed"]), "new_failures": new[:20]}
+        if flaky:
+            regression[suite]["flaky"] = flaky[:20]
         if new:
             ok = False
     if harness_errors:
