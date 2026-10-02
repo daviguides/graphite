@@ -266,12 +266,12 @@ fn alternation_of_identifiers_gets_a_verdict_per_name() {
             .sum();
         assert_eq!(total, res.hits.len() as u64, "every match judged");
         assert!(
-            text.lines()
-                .last()
-                .unwrap()
-                .contains("no test covers `resolve_owner`, `find_root` ⚠"),
+            footer(&text).contains("no test covers `resolve_owner`, `find_root` ⚠"),
             "{text}"
         );
+        // One definition per name: both bodies come after the footer.
+        assert!(text.contains("# graphite: body of find_root (other/root.py:1-"), "{text}");
+        assert!(text.contains("# graphite: body of resolve_owner (pkg/core.py:1-"), "{text}");
     }
 }
 
@@ -306,6 +306,14 @@ fn imports_counted_and_multi_definitions_listed() {
     );
 }
 
+/// The footer: the last `#` line that is not a body's.
+fn footer(text: &str) -> &str {
+    text.lines()
+        .filter(|l| l.starts_with("# ") && !l.starts_with("# graphite: body of"))
+        .last()
+        .unwrap_or_default()
+}
+
 fn build(root: &Path, s: &SearchSpec) -> (graphite_daemon::answer::Answer, String) {
     let engine = Engine::open(RepoPaths::new(root)).unwrap();
     engine.index_all().unwrap();
@@ -325,12 +333,24 @@ fn integrated_list_is_relevance_ordered_single_list() {
         "{text}"
     );
     assert!(first.ends_with("[definition]"), "{text}");
-    // one header, one footer, everything else is a self-contained path:line: line
+    // one header, one footer, everything else is a self-contained `path:line:` match line or a
+    // `path-line-` body line (grep's context shape)
     let body: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).collect();
-    assert!(body.iter().all(|l| l.contains(':')), "{text}");
+    assert!(
+        body.iter()
+            .all(|l| l.contains(':') || l.starts_with("pkg/core.py-")),
+        "{text}"
+    );
     assert_eq!(
-        text.lines().filter(|l| l.starts_with("# ")).count(),
+        text.lines()
+            .filter(|l| l.starts_with("# ") && !l.starts_with("# graphite: body of"))
+            .count(),
         2,
+        "{text}"
+    );
+    // The single definition's body, whole, in grep's context shape after the footer.
+    assert!(
+        text.ends_with("# graphite: body of resolve_owner (pkg/core.py:1-2), whole — no need to read it\npkg/core.py-1-def resolve_owner():\npkg/core.py-2-    return 1\n"),
         "{text}"
     );
     assert!(text.lines().next().unwrap().contains("graph "), "{text}");

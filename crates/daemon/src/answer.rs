@@ -189,6 +189,26 @@ pub struct IndirectGroup {
 /// Covering tests listed by name (closest first); the total is always given.
 pub const MAX_TESTS_LISTED: usize = 5;
 
+/// The whole source of a function the answer points at (its definition, or the one function every
+/// production match falls in), so the agent does not spend a turn reading it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Body {
+    /// `Class.method` / `function`.
+    pub label: String,
+    /// Path as the agent sees it.
+    pub path: String,
+    pub start: u32,
+    pub end: u32,
+    pub lines: Vec<(u32, String)>,
+}
+
+/// At most this many bodies per answer…
+pub const MAX_BODIES: usize = 2;
+/// …each at most this long (longer functions are left to the agent's own read)…
+pub const MAX_BODY_LINES: u32 = 80;
+/// …and together at most this many bytes.
+pub const MAX_BODY_BYTES: usize = 6000;
+
 /// Facts that are not one matching line.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Footer {
@@ -234,6 +254,9 @@ pub struct Answer {
     #[serde(default)]
     pub hint_base: String,
     pub budget: Option<Budget>,
+    /// Inlined function bodies, printed after the footer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bodies: Vec<Body>,
 }
 
 pub const CAP_PRIORITY: usize = 60;
@@ -842,13 +865,56 @@ fn whole_answer_hint(a: &Answer) -> String {
         source: "head -c N".into(),
         ..Default::default()
     });
-    let need = render_model(&whole).len() + 120;
+    let need = render_model_items(&whole).len() + 120;
     let n = need.div_ceil(1000) * 1000;
     format!("{} | head -c {n}", a.query)
 }
 
-/// Model format: what the agent sees.
+/// The inlined bodies in grep's context shape (`path-N-text`), one `#` line naming each.
+pub fn bodies_block(a: &Answer) -> String {
+    let mut out = String::new();
+    for b in &a.bodies {
+        let _ = writeln!(
+            out,
+            "# graphite: body of {} ({}:{}-{}), whole — no need to read it",
+            b.label, b.path, b.start, b.end
+        );
+        for (n, t) in &b.lines {
+            if a.no_filename {
+                let _ = writeln!(out, "{n}-{t}");
+            } else {
+                let _ = writeln!(out, "{}-{n}-{t}", b.path);
+            }
+        }
+    }
+    out
+}
+
+/// Model format: what the agent sees. Bodies come after the footer. They replace the read the
+/// agent would do next, so a default budget doesn't count them (they are capped on their own);
+/// an explicit `| head` budget does: they appear only if the whole answer still fits it.
 pub fn render_model(a: &Answer) -> String {
+    let base = render_model_items(a);
+    let block = bodies_block(a);
+    if block.is_empty() {
+        return base;
+    }
+    // The agent's own `| head` (its stage is the budget's source, even once tightened to the
+    // grep-output cap) binds the bodies too; the default budget alone does not.
+    let explicit = a.budget.as_ref().filter(|b| !b.source.is_empty());
+    let fits = explicit.is_none_or(|b| {
+        b.bytes.is_none_or(|n| base.len() + block.len() <= n)
+            && b.lines
+                .is_none_or(|n| base.lines().count() + block.lines().count() <= n)
+    });
+    if fits {
+        format!("{base}{block}")
+    } else {
+        base
+    }
+}
+
+fn render_model_items(a: &Answer) -> String {
     let mut head = header_line(a) + "\n";
     for n in &a.notices {
         let _ = writeln!(head, "# graphite: {n}");
@@ -1032,6 +1098,7 @@ pub fn render_human(a: &Answer, colored: bool) -> String {
     {
         let _ = writeln!(out, "{}• {part}{reset}", c("\x1b[2m"));
     }
+    out.push_str(&bodies_block(a));
     let _ = writeln!(
         out,
         "\nlegend: ← enclosing fn ← its production callers · [graph-only] reference text search can't see · [test] caller in test code · → definition it resolves to · [unresolved call] graph gap · [mock in test]/[ci]/[config]/[docs]/[string/comment] non-call mentions"
@@ -1161,6 +1228,52 @@ mod tests {
         });
         let t = render_model(&a);
         assert!(t.lines().count() <= 12, "{t}");
+    }
+
+    fn with_body(mut a: Answer) -> Answer {
+        a.bodies = vec![Body {
+            label: "f".into(),
+            path: "a.py".into(),
+            start: 1,
+            end: 3,
+            lines: vec![
+                (1, "def f():".into()),
+                (2, "    x = 1".into()),
+                (3, "    return x".into()),
+            ],
+        }];
+        a
+    }
+
+    // kinhin: decision(ref="docs/foundation/interception.md#2-the-answer-an-enriched-grep")
+    #[test]
+    fn body_follows_the_footer_in_grep_context_shape() {
+        let a = with_body(answer(2));
+        let t = render_model(&a);
+        let foot = t.find("no test covers").unwrap();
+        let body = t.find("# graphite: body of f (a.py:1-3)").unwrap();
+        assert!(foot < body, "{t}");
+        assert!(t.ends_with("a.py-1-def f():\na.py-2-    x = 1\na.py-3-    return x\n"), "{t}");
+        assert!(render_human(&a, false).contains("a.py-2-    x = 1"));
+    }
+
+    // kinhin: decision(ref="docs/foundation/interception.md#4-size-budget-never-byte-cut")
+    #[test]
+    fn explicit_budget_drops_the_body_whole_never_part_of_it() {
+        let mut a = with_body(answer(2));
+        let full = render_model(&a);
+        a.budget = Some(Budget {
+            bytes: Some(full.len() - 1),
+            source: "head -c".into(),
+            ..Default::default()
+        });
+        let t = render_model(&a);
+        assert!(!t.contains("body of f") && !t.contains("a.py-2-"), "{t}");
+        a.budget.as_mut().unwrap().bytes = Some(full.len());
+        assert_eq!(render_model(&a), full);
+        // A default budget bounds the grep part only.
+        a.budget = Some(Budget::implicit(10_000));
+        assert!(render_model(&a).contains("a.py-3-    return x"));
     }
 
     #[test]

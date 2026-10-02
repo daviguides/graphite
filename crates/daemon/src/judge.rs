@@ -9,8 +9,8 @@ use graphite_store::{confidence, Confidence, GraphStore, Outcome};
 use serde_json::{json, Value};
 
 use crate::answer::{
-    grep_output_bytes, grep_output_lines, rank, Answer, Budget, Item, LineFilter, NameVerdict,
-    OutFormat, Target,
+    grep_output_bytes, grep_output_lines, rank, Answer, Body, Budget, Item, LineFilter,
+    NameVerdict, OutFormat, Target, MAX_BODIES, MAX_BODY_BYTES, MAX_BODY_LINES,
 };
 use crate::engine::Engine;
 use crate::search::{display_path, Hit, SearchOutcome, SearchSpec};
@@ -747,6 +747,7 @@ pub fn build(
     if !spec.all && spec.format == OutFormat::Model {
         cap_to_grep_output(&mut a, raw_bytes);
     }
+    a.bodies = bodies(engine, spec, &a, &cwd, &mut files);
 
     let mut class_counts = serde_json::Map::new();
     for (c, n) in &counts {
@@ -792,6 +793,94 @@ fn cap_to_grep_output(a: &mut Answer, grep_bytes: usize) {
         }
         Some(_) => {}
     }
+}
+
+/// Functions whose whole source the agent is about to read: the definitions an identifier search
+/// found, or the one or two functions every production match of a pattern search falls in. None
+/// when the answer points at more functions than that (the agent hasn't chosen yet), when a body
+/// is long (the agent reads the part it needs), or when the agent filtered or listed files only.
+fn bodies(
+    engine: &Engine,
+    spec: &SearchSpec,
+    a: &Answer,
+    cwd: &Path,
+    files: &mut Files,
+) -> Vec<Body> {
+    if spec.files_only || !spec.line_filters.is_empty() || spec.after >= MAX_BODY_LINES {
+        return Vec::new();
+    }
+    let wanted: &[&str] = match a.mode.as_str() {
+        "identifier" => &["definition"],
+        "grouped" => &["match"],
+        _ => return Vec::new(),
+    };
+    let mut syms: HashMap<String, Vec<Symbol>> = HashMap::new();
+    let mut picked: Vec<(String, Symbol)> = Vec::new();
+    for it in a
+        .items
+        .iter()
+        .filter(|i| !i.test && wanted.contains(&i.class.as_str()))
+    {
+        let abs = cwd.join(&it.path);
+        let Some(rel) = engine.paths.relative(&abs) else {
+            continue;
+        };
+        if !rel.ends_with(".py") {
+            continue;
+        }
+        let in_file = syms
+            .entry(rel.clone())
+            .or_insert_with(|| engine.store.symbols_in_file(&rel).unwrap_or_default());
+        let functions = in_file
+            .iter()
+            .filter(|s| matches!(s.kind, SymbolKind::Function | SymbolKind::Method));
+        let sym = if it.class == "definition" {
+            functions.filter(|s| s.start_line == it.line).min_by_key(|s| s.end_line)
+        } else {
+            functions
+                .filter(|s| s.start_line <= it.line && it.line <= s.end_line)
+                .min_by_key(|s| s.end_line - s.start_line)
+        };
+        let Some(sym) = sym else {
+            // A match outside any function (module level): no single body to give.
+            if it.class == "match" {
+                return Vec::new();
+            }
+            continue;
+        };
+        if !picked.iter().any(|(_, p)| p.id == sym.id) {
+            picked.push((it.path.clone(), sym.clone()));
+        }
+        if picked.len() > MAX_BODIES {
+            return Vec::new();
+        }
+    }
+    let mut out = Vec::new();
+    let mut bytes = 0usize;
+    for (path, sym) in picked {
+        if sym.end_line - sym.start_line + 1 > MAX_BODY_LINES {
+            continue;
+        }
+        let Some(text) = files.lines(&cwd.join(&path)) else {
+            continue;
+        };
+        let lines: Vec<(u32, String)> = (sym.start_line..=sym.end_line)
+            .filter_map(|n| text.get(n as usize - 1).map(|t| (n, t.clone())))
+            .collect();
+        let size: usize = lines.iter().map(|(_, t)| path.len() + t.len() + 8).sum();
+        if bytes + size > MAX_BODY_BYTES {
+            continue;
+        }
+        bytes += size;
+        out.push(Body {
+            label: short_label(&sym),
+            path,
+            start: sym.start_line,
+            end: sym.end_line,
+            lines,
+        });
+    }
+    out
 }
 
 /// Model-format text + stats (the record is `build`'s first value).
