@@ -104,8 +104,9 @@ fn non_identifier_patterns_group_by_enclosing_symbol() {
     assert_eq!(stats["matches"], res.hits.len());
 }
 
+// kinhin: decision(ref="docs/foundation/interception.md#4-size-budget-never-byte-cut")
 #[test]
-fn caps_disclose_the_rest() {
+fn default_budget_discloses_the_rest() {
     let d = tempfile::tempdir().unwrap();
     let root = d.path().canonicalize().unwrap();
     std::fs::create_dir(root.join(".git")).unwrap();
@@ -115,10 +116,30 @@ fn caps_disclose_the_rest() {
     engine.index_all().unwrap();
     let s = spec(&root, "needle [0-9]+");
     let res = search::run(&s, &root).unwrap();
-    let (text, _) = judge::render(&engine, &s, &res, false).unwrap();
+    let (text, stats) = judge::render(&engine, &s, &res, false).unwrap();
+    let grep_bytes = stats["raw_bytes"].as_u64().unwrap() as usize;
+    // `notes.txt:N:# needle N` for 400 lines, what `grep -rn` prints.
+    let plain: usize = (0..400)
+        .map(|i| format!("notes.txt:{}:# needle {i}\n", i + 1).len())
+        .sum();
+    assert_eq!(grep_bytes, plain);
     assert!(
-        text.contains("not shown: docs 376 — to see them: grep -rnE 'needle [0-9]+' notes.txt"),
-        "{text}"
+        text.len() <= grep_bytes + graphite_daemon::answer::DEFAULT_OVERHEAD,
+        "{}",
+        text.len()
+    );
+    let shown = text.lines().filter(|l| l.starts_with("notes.txt:")).count();
+    let footer = text.lines().last().unwrap();
+    let hidden: usize = footer
+        .split("not shown: docs ")
+        .nth(1)
+        .and_then(|r| r.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("{footer}"));
+    assert_eq!(shown + hidden, 400, "{footer}");
+    assert!(
+        footer.contains("— to see them: grep -rn needle [0-9]+ . | head -c "),
+        "{footer}"
     );
 }
 
@@ -246,6 +267,7 @@ fn budget_replaces_byte_cut() {
         bytes: Some(900),
         lines: None,
         source: "head -c 900".into(),
+        ..Default::default()
     });
     let (_a, text) = build(&root, &s);
     assert!(text.len() <= 900, "{}\n{text}", text.len());

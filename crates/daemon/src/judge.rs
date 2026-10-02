@@ -8,7 +8,7 @@ use graphite_model::{EdgeKind, Symbol, SymbolId, SymbolKind};
 use graphite_store::{confidence, Confidence, GraphStore, Outcome};
 use serde_json::{json, Value};
 
-use crate::answer::{rank, Answer, Item, LineFilter, Target};
+use crate::answer::{grep_output_bytes, rank, Answer, Budget, Item, LineFilter, OutFormat, Target};
 use crate::engine::Engine;
 use crate::search::{display_path, Hit, SearchOutcome, SearchSpec};
 
@@ -618,11 +618,6 @@ pub fn build(
         *counts.entry(*c).or_default() += 1;
     }
     let nfiles: HashSet<&Path> = res.hits.iter().map(|h| h.abs.as_path()).collect();
-    let raw_bytes: usize = res
-        .hits
-        .iter()
-        .map(|h| h.display.len() + h.text.len() + 8)
-        .sum();
 
     let mut a = Answer {
         query: if spec.label.is_empty() {
@@ -682,6 +677,13 @@ pub fn build(
     }
     a.items.sort_by_key(|i| rank(&i.class, i.test));
     apply_pipeline(&mut a, spec);
+    // What the agent's own command would have printed (after its own filters): grep names files
+    // only when it searched more than one.
+    let single_file = spec.paths.len() == 1 && Path::new(&spec.paths[0]).is_file();
+    let raw_bytes = grep_output_bytes(&a, !single_file);
+    if a.budget.is_none() && !spec.all && spec.format == OutFormat::Model {
+        a.budget = Some(Budget::implicit(raw_bytes));
+    }
 
     let mut class_counts = serde_json::Map::new();
     for (c, n) in &counts {
@@ -696,6 +698,7 @@ pub fn build(
         "alias_refs": alias_refs,
         "secrets_skipped": res.secrets_skipped,
         "raw_bytes": raw_bytes,
+        "budget_bytes": a.budget.as_ref().and_then(|b| b.bytes),
     });
     Ok((a, stats))
 }

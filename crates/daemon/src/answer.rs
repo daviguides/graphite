@@ -26,13 +26,58 @@ pub enum OutFormat {
     Explain,
 }
 
-/// Answer-size budget taken from the agent's own `| head …` (`| tail` runs the raw command).
+/// Answer-size budget taken from the agent's own `| head …` (`| tail` runs the raw command), or
+/// the default one: never more than the agent's own command would have printed, plus a bounded
+/// overhead for the header, verdict, annotations and footer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Budget {
     pub bytes: Option<usize>,
     pub lines: Option<usize>,
     /// The pipeline stage it came from, echoed in the notice.
     pub source: String,
+    /// The default budget (no `| head` in the agent's pipeline).
+    #[serde(default)]
+    pub implicit: bool,
+}
+
+/// What a default budget may add on top of the plain grep output: header line, verdict,
+/// per-line annotations and the footer.
+pub const DEFAULT_OVERHEAD: usize = 1024;
+
+impl Budget {
+    /// The default budget for a search whose plain output is `grep_bytes` long.
+    pub fn implicit(grep_bytes: usize) -> Self {
+        Self {
+            bytes: Some(grep_bytes + DEFAULT_OVERHEAD),
+            implicit: true,
+            ..Default::default()
+        }
+    }
+}
+
+/// Bytes the agent's own command would have printed for these items: `path:line:text` (no path
+/// when a single file was searched), context lines and `--` separators. Graph-only items are not
+/// in a text search's output.
+pub fn grep_output_bytes(a: &Answer, with_path: bool) -> usize {
+    let prefix = |it: &Item| if with_path { it.path.len() + 1 } else { 0 };
+    a.items
+        .iter()
+        .filter(|i| i.class != "graph_only")
+        .map(|it| {
+            if it.line == 0 {
+                return it.path.len() + 1; // `-l`
+            }
+            let digits = |n: u32| n.to_string().len();
+            let ctx: usize = it
+                .before
+                .iter()
+                .chain(&it.after)
+                .map(|(n, t)| prefix(it) + digits(*n) + 1 + t.len() + 1)
+                .sum();
+            let sep = if ctx > 0 { 3 } else { 0 };
+            prefix(it) + digits(it.line) + 1 + it.text.len() + 1 + ctx + sep
+        })
+        .sum()
 }
 
 /// A `grep`-style filter the agent piped the output through, applied to match lines only.
@@ -419,6 +464,7 @@ fn footer_line(
     cut_paths: &[String],
     summarized: usize,
     allowance: Option<usize>,
+    more: Option<&str>,
 ) -> String {
     let f = &a.footer;
     let mut parts: Vec<Part> = Vec::new();
@@ -544,7 +590,9 @@ fn footer_line(
     }
     if !cut_note.is_empty() {
         let mut t = cut_note.join(" · ");
-        if let Some(dir) = hint_dir(cut_paths).filter(|_| !a.hint_base.is_empty()) {
+        if let Some(m) = more {
+            let _ = write!(t, " — to see them: {m}");
+        } else if let Some(dir) = hint_dir(cut_paths).filter(|_| !a.hint_base.is_empty()) {
             let _ = write!(t, " — to see them: {} {dir}", a.hint_base);
         }
         parts.push(Part {
@@ -615,6 +663,90 @@ fn collapsed(path: &str, items: &[&Item]) -> String {
     )
 }
 
+/// `(text, classes of the items it carries, collapsed call sites, their paths)`.
+type Chunk = (String, Vec<String>, usize, Vec<String>);
+
+fn single(it: &Item) -> Chunk {
+    (
+        item_block(it),
+        vec![it.class.clone()],
+        0,
+        vec![it.path.clone()],
+    )
+}
+
+/// Definitions and direct call sites: the first `full` in full, every remaining call site
+/// collapsed per file (definitions are never collapsed).
+fn priority_chunks(prio: &[&Item], full: usize) -> Vec<Chunk> {
+    let mut chunks: Vec<Chunk> = prio.iter().take(full).map(|i| single(i)).collect();
+    let mut by_file: Vec<(String, Vec<&Item>)> = Vec::new();
+    for it in prio.iter().skip(full) {
+        if it.class == "definition" {
+            chunks.push(single(it));
+            continue;
+        }
+        match by_file.iter_mut().find(|(p, _)| *p == it.path) {
+            Some((_, v)) => v.push(it),
+            None => by_file.push((it.path.clone(), vec![it])),
+        }
+    }
+    for (path, its) in by_file {
+        let classes = its.iter().map(|i| i.class.clone()).collect();
+        let paths = vec![path.clone(); its.len()];
+        chunks.push((collapsed(&path, &its) + "\n", classes, its.len(), paths));
+    }
+    chunks
+}
+
+fn size(chunks: &[Chunk]) -> (usize, usize) {
+    chunks
+        .iter()
+        .fold((0, 0), |(b, l), c| (b + c.0.len(), l + c.0.lines().count()))
+}
+
+/// Unbudgeted model view: section caps only.
+fn render_capped(a: &Answer, head: &str, listable: &[&Item]) -> String {
+    let mut not_shown: BTreeMap<String, usize> = BTreeMap::new();
+    let mut cut_paths: Vec<String> = Vec::new();
+    let mut body = String::new();
+    let (mut prio, mut other) = (0usize, 0usize);
+    for it in listable {
+        let fits = if a.all {
+            true
+        } else if is_priority(it) {
+            prio += 1;
+            prio <= CAP_PRIORITY
+        } else {
+            other += 1;
+            other <= CAP_OTHER
+        };
+        if fits {
+            body.push_str(&item_block(it));
+        } else {
+            *not_shown.entry(it.class.clone()).or_default() += 1;
+            cut_paths.push(it.path.clone());
+        }
+    }
+    format!(
+        "{head}{body}{}",
+        with_nl(footer_line(a, &not_shown, &cut_paths, 0, None, None))
+    )
+}
+
+/// A default budget's escape hatch, in the agent's own vocabulary: the same command with a
+/// `| head -c N` large enough for the whole answer.
+fn whole_answer_hint(a: &Answer) -> String {
+    let mut whole = a.clone();
+    whole.budget = Some(Budget {
+        bytes: Some(usize::MAX),
+        source: "head -c N".into(),
+        ..Default::default()
+    });
+    let need = render_model(&whole).len() + 120;
+    let n = need.div_ceil(1000) * 1000;
+    format!("{} | head -c {n}", a.query)
+}
+
 /// Model format: what the agent sees.
 pub fn render_model(a: &Answer) -> String {
     let mut head = header_line(a) + "\n";
@@ -628,96 +760,72 @@ pub fn render_model(a: &Answer) -> String {
         .collect();
     let byte_cap = a.budget.as_ref().and_then(|b| b.bytes);
     let line_cap = a.budget.as_ref().and_then(|b| b.lines);
-    let mut not_shown: BTreeMap<String, usize> = BTreeMap::new();
-    let mut cut_paths: Vec<String> = Vec::new();
-
-    // Unbudgeted: section caps only.
+    let implicit = a.budget.as_ref().is_some_and(|b| b.implicit);
     if byte_cap.is_none() && line_cap.is_none() {
-        let mut body = String::new();
-        let (mut prio, mut other) = (0usize, 0usize);
-        for it in &listable {
-            let fits = if a.all {
-                true
-            } else if is_priority(it) {
-                prio += 1;
-                prio <= CAP_PRIORITY
-            } else {
-                other += 1;
-                other <= CAP_OTHER
-            };
-            if fits {
-                body.push_str(&item_block(it));
-            } else {
-                *not_shown.entry(it.class.clone()).or_default() += 1;
-                cut_paths.push(it.path.clone());
-            }
-        }
-        return format!(
-            "{head}{body}{}",
-            with_nl(footer_line(a, &not_shown, &cut_paths, 0, None))
-        );
+        return render_capped(a, &head, &listable);
     }
+    // A default budget replaces the section caps: every direct site stays (folded if needed) and
+    // the answer never costs more than the agent's own command plus a bounded overhead.
 
-    // Budgeted: header first; then definitions and direct call sites (full lines if they all
-    // fit, else every call site collapsed per file); then the rest by rank. The footer is
-    // recomputed and chunks are dropped from the tail until the whole answer fits exactly.
+    // Budgeted: header first; then definitions and direct call sites (as many full lines as fit,
+    // every other call site collapsed per file); then the rest by rank. The footer is recomputed
+    // and chunks are dropped from the tail until the whole answer fits exactly.
     let bytes = byte_cap.unwrap_or(usize::MAX);
     let lines_max = line_cap.unwrap_or(usize::MAX);
     // The footer gets a share of a byte budget; facts degrade inside it (see `footer_line`).
     let allowance = byte_cap.map(|b| (b / 4).max(160));
-    let prio: Vec<&Item> = listable
+    let more = implicit.then(|| whole_answer_hint(a));
+    let mut prio: Vec<&Item> = listable
         .iter()
         .copied()
         .filter(|i| is_priority(i))
         .collect();
+    prio.sort_by_key(|i| i.class != "definition");
     let rest: Vec<&Item> = listable
         .iter()
         .copied()
         .filter(|i| !is_priority(i))
         .collect();
-    // (text, classes of the items it carries, collapsed call sites, their paths)
-    type Chunk = (String, Vec<String>, usize, Vec<String>);
-    let mut chunks: Vec<Chunk> = Vec::new();
+    let mut not_shown: BTreeMap<String, usize> = BTreeMap::new();
+    let mut cut_paths: Vec<String> = Vec::new();
+
+    // Room for the priority section: everything but the header and a footer that discloses the
+    // whole rest as cut (an upper bound of the real one).
+    let worst_cut: BTreeMap<String, usize> = rest.iter().fold(BTreeMap::new(), |mut m, i| {
+        *m.entry(i.class.clone()).or_default() += 1;
+        m
+    });
+    let worst_paths: Vec<String> = rest.iter().map(|i| i.path.clone()).collect();
+    let foot = footer_line(
+        a,
+        &worst_cut,
+        &worst_paths,
+        prio.len(),
+        allowance,
+        more.as_deref(),
+    );
     let head_lines = head.lines().count();
-    let prio_blocks: Vec<String> = prio.iter().map(|i| item_block(i)).collect();
-    let prio_bytes: usize = prio_blocks.iter().map(String::len).sum();
-    let prio_lines: usize = prio_blocks.iter().map(|b| b.lines().count()).sum();
-    if head.len() + prio_bytes < bytes && head_lines + prio_lines < lines_max {
-        for (blk, it) in prio_blocks.into_iter().zip(&prio) {
-            chunks.push((blk, vec![it.class.clone()], 0, vec![it.path.clone()]));
-        }
-    } else {
-        let (defs, calls): (Vec<&Item>, Vec<&Item>) =
-            prio.iter().partition(|i| i.class == "definition");
-        for it in defs {
-            chunks.push((
-                item_block(it),
-                vec![it.class.clone()],
-                0,
-                vec![it.path.clone()],
-            ));
-        }
-        let mut by_file: Vec<(String, Vec<&Item>)> = Vec::new();
-        for it in calls {
-            match by_file.iter_mut().find(|(p, _)| *p == it.path) {
-                Some((_, v)) => v.push(it),
-                None => by_file.push((it.path.clone(), vec![it])),
-            }
-        }
-        for (path, its) in by_file {
-            let classes = its.iter().map(|i| i.class.clone()).collect();
-            let paths = vec![path.clone(); its.len()];
-            chunks.push((collapsed(&path, &its) + "\n", classes, its.len(), paths));
+    let room = bytes.saturating_sub(head.len() + foot.len() + 1);
+    let room_lines = lines_max.saturating_sub(head_lines + 1);
+    let fits = |c: &[Chunk]| {
+        let (b, l) = size(c);
+        b <= room && l <= room_lines
+    };
+    // Most full lines whose collapsed remainder still fits (binary search on the prefix).
+    let (mut lo, mut hi) = (0usize, prio.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(&priority_chunks(&prio, mid)) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
         }
     }
-    for it in &rest {
-        chunks.push((
-            item_block(it),
-            vec![it.class.clone()],
-            0,
-            vec![it.path.clone()],
-        ));
-    }
+    let chunks: Vec<Chunk> = priority_chunks(&prio, lo)
+        .into_iter()
+        .chain(rest.iter().map(|i| single(i)))
+        .collect();
+
     // Greedy fill in order, then trim from the tail until header + body + footer fit.
     let mut kept: Vec<Chunk> = Vec::new();
     let mut used = head.len();
@@ -751,7 +859,8 @@ pub fn render_model(a: &Answer) -> String {
                 &not_shown,
                 &hint_paths,
                 summarized,
-                allowance
+                allowance,
+                more.as_deref(),
             ))
         );
         if (out.len() <= bytes && out.lines().count() <= lines_max) || kept.is_empty() {
@@ -820,7 +929,7 @@ pub fn render_human(a: &Answer, colored: bool) -> String {
         }
         out.push('\n');
     }
-    let foot = footer_line(a, &BTreeMap::new(), &[], 0, None);
+    let foot = footer_line(a, &BTreeMap::new(), &[], 0, None, None);
     for part in foot
         .trim_start_matches("# ")
         .split(" · ")
@@ -850,7 +959,14 @@ pub fn render_explain(a: &Answer) -> String {
             it.why
         );
     }
-    out.push_str(&with_nl(footer_line(a, &BTreeMap::new(), &[], 0, None)));
+    out.push_str(&with_nl(footer_line(
+        a,
+        &BTreeMap::new(),
+        &[],
+        0,
+        None,
+        None,
+    )));
     out
 }
 
@@ -926,15 +1042,13 @@ mod tests {
             bytes: Some(1500),
             lines: None,
             source: "head -c 1500".into(),
+            ..Default::default()
         });
         let t = render_model(&a);
         assert!(t.len() <= 1500, "{} > 1500\n{t}", t.len());
         assert!(t.contains("a.py:1:"), "{t}");
         assert!(t.contains("collapsed per file"), "{t}");
-        assert!(
-            t.contains("(16 sites)"),
-            "every call site kept, collapsed: {t}"
-        );
+        assert_every_direct_site_kept(&a, &t);
         // no line is cut mid-way: every non-comment line is a full item or collapsed line
         for l in t.lines().filter(|l| !l.starts_with('#')) {
             assert!(l.contains("    "), "partial line: {l}");
@@ -948,6 +1062,7 @@ mod tests {
             bytes: None,
             lines: Some(12),
             source: "head -12".into(),
+            ..Default::default()
         });
         let t = render_model(&a);
         assert!(t.lines().count() <= 12, "{t}");
@@ -967,6 +1082,87 @@ mod tests {
             assert!(explain.contains(&format!("{}:{}  class={}", it.path, it.line, it.class)));
         }
         assert!(human.contains("no test covers `f` ⚠") && model.contains("no test covers `f` ⚠"));
+    }
+
+    /// Every definition and direct call site is in `t`, as a full line or in a collapsed one.
+    fn assert_every_direct_site_kept(a: &Answer, t: &str) {
+        for it in a
+            .items
+            .iter()
+            .filter(|i| i.class == "definition" || i.class == "call")
+        {
+            let full = t.contains(&format!("{}:{}:", it.path, it.line));
+            let folded = t.lines().any(|l| {
+                l.strip_prefix(&format!("{}:", it.path))
+                    .and_then(|r| r.split_whitespace().next())
+                    .is_some_and(|nums| nums.split(',').any(|n| n == it.line.to_string()))
+            });
+            assert!(full || folded, "{}:{} lost\n{t}", it.path, it.line);
+        }
+    }
+
+    // kinhin: decision(ref="docs/foundation/interception.md#4-size-budget-never-byte-cut")
+    #[test]
+    fn default_budget_costs_at_most_the_grep_output_plus_overhead() {
+        let mut a = answer(300);
+        let grep = grep_output_bytes(&a, true);
+        a.budget = Some(Budget::implicit(grep));
+        let t = render_model(&a);
+        assert!(
+            t.len() <= grep + DEFAULT_OVERHEAD,
+            "{} > {grep}+overhead",
+            t.len()
+        );
+        assert!(
+            t.starts_with("# graphite: grep -rn f . → 303 matches"),
+            "{t}"
+        );
+        assert!(t.contains("graph COMPLETE"), "verdict survives: {t}");
+        assert_every_direct_site_kept(&a, &t);
+        // Most sites stay full lines; only the overflow is folded.
+        assert!(t.matches("    ← g").count() > 200, "{t}");
+        // The way back to everything, in grep vocabulary, big enough for it.
+        let f = footer_of(&t);
+        let n: usize = f
+            .split("to see them: grep -rn f . | head -c ")
+            .nth(1)
+            .and_then(|r| r.split_whitespace().next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no head -c hint: {f}"));
+        let mut whole = a.clone();
+        whole.budget = Some(Budget {
+            bytes: Some(n),
+            source: format!("head -c {n}"),
+            ..Default::default()
+        });
+        let all = render_model(&whole);
+        assert!(!footer_of(&all).contains("not shown"), "{all}");
+        assert!(!all.contains("collapsed per file"), "{all}");
+    }
+
+    // kinhin: decision(ref="docs/foundation/interception.md#4-size-budget-never-byte-cut")
+    #[test]
+    fn default_budget_changes_nothing_when_the_answer_fits() {
+        let a = answer(8);
+        let mut b = a.clone();
+        b.budget = Some(Budget::implicit(grep_output_bytes(&a, true)));
+        assert_eq!(render_model(&b), render_model(&a));
+    }
+
+    #[test]
+    fn grep_output_counts_context_and_single_file_shape() {
+        let mut a = answer(0);
+        a.items = vec![Item {
+            path: "a.py".into(),
+            line: 12,
+            text: "def f():".into(),
+            class: "definition".into(),
+            after: vec![(13, "    pass".into())],
+            ..Default::default()
+        }];
+        // a.py:12:def f():\n a.py-13-    pass\n --\n
+        assert_eq!(grep_output_bytes(&a, true), 17 + 17 + 3);
+        assert_eq!(grep_output_bytes(&a, false), 12 + 12 + 3);
     }
 
     fn footer_of(t: &str) -> &str {
@@ -1043,6 +1239,7 @@ mod tests {
             bytes: Some(900),
             lines: None,
             source: "head -c 900".into(),
+            ..Default::default()
         });
         let t = render_model(&a);
         assert!(t.len() <= 900, "{t}");
@@ -1069,6 +1266,7 @@ mod tests {
             bytes: Some(1200),
             lines: None,
             source: "head -c 1200".into(),
+            ..Default::default()
         });
         let t = render_model(&a);
         assert!(
