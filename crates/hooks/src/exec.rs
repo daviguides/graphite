@@ -234,7 +234,7 @@ impl Run<'_> {
             "format".into(),
             serde_json::to_value(opts.format).unwrap_or(Value::Null),
         );
-        let r = match ask(self.paths, Op::Search { spec }, ANSWER_TIMEOUT) {
+        let r = match ask(self.paths, Op::Search { spec: Box::new(spec) }, ANSWER_TIMEOUT) {
             Ok(r) => r,
             Err(e) => return fallback(ev, &e, script, &self.dir),
         };

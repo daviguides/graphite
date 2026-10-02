@@ -38,7 +38,7 @@ pub enum Op {
     },
     /// Text search (grep/rg/ack semantics) judged against the graph; answer is agent-facing text.
     Search {
-        spec: crate::search::SearchSpec,
+        spec: Box<crate::search::SearchSpec>,
     },
     /// One-line graph header per indexed file (used when the agent reads files).
     FileInfo {
