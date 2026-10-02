@@ -36,9 +36,15 @@ pub fn handle(input: &Value) -> Option<Value> {
             if !f.ends_with(".py") {
                 return None;
             }
+            // Sized to what the Read tool returned, like a routed `cat`.
+            let printed = input
+                .pointer("/tool_response/file/content")
+                .and_then(Value::as_str)
+                .map_or(0, str::len);
             let op = Op::FileInfo {
                 paths: vec![f.into()],
                 cwd: cwd_s,
+                budget: Some(crate::exec::read_header_budget(printed)),
             };
             Some(ask(&paths, op, DECIDE_TIMEOUT))
         }

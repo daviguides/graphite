@@ -37,8 +37,65 @@ fn callers_count(engine: &Engine, id: SymbolId) -> usize {
         .len()
 }
 
+/// One symbol of a file header: richest form first.
+struct HeaderPart {
+    with_tests: String,
+    bare: String,
+}
+
+/// `[graphite] path — N symbols; most used: …` fitted to `max` bytes: test names go first, then
+/// the least-used symbols (counted in `+N more`); the busiest symbol always stays.
+fn fit_header(prefix: &str, parts: &[HeaderPart], total: usize, max: Option<usize>) -> String {
+    let render = |shown: usize, tests: usize| -> String {
+        let listed: Vec<&str> = parts
+            .iter()
+            .take(shown)
+            .enumerate()
+            .map(|(i, p)| {
+                if i < tests {
+                    p.with_tests.as_str()
+                } else {
+                    p.bare.as_str()
+                }
+            })
+            .collect();
+        let more = total - shown;
+        format!(
+            "{prefix}{}{}",
+            if listed.is_empty() {
+                "none".to_string()
+            } else {
+                listed.join(" · ")
+            },
+            if more > 0 {
+                format!(" · +{more} more")
+            } else {
+                String::new()
+            }
+        )
+    };
+    let Some(max) = max else {
+        return render(parts.len(), parts.len());
+    };
+    let mut shown = parts.len();
+    let mut tests = parts.len();
+    loop {
+        let line = render(shown, tests);
+        if line.len() <= max || shown <= 1 && tests == 0 {
+            return line;
+        }
+        if tests > 0 {
+            tests -= 1;
+        } else {
+            shown -= 1;
+        }
+    }
+}
+
 /// One line per indexed Python file: its most-used symbols, their callers and covering tests.
-pub fn file_header(engine: &Engine, cwd: &Path, paths: &[String]) -> String {
+/// `budget` caps the total bytes (split evenly across files); details degrade to fit it.
+pub fn file_header(engine: &Engine, cwd: &Path, paths: &[String], budget: Option<usize>) -> String {
+    let per_file = budget.map(|b| b / paths.len().max(1));
     let mut out = String::new();
     for p in paths {
         let Some((abs, rel)) = rel_of(engine, cwd, p) else {
@@ -76,35 +133,39 @@ pub fn file_header(engine: &Engine, cwd: &Path, paths: &[String]) -> String {
             }
             names
         };
-        let parts: Vec<String> = ranked
+        let parts: Vec<HeaderPart> = ranked
             .iter()
             .take(TOP_SYMBOLS)
             .map(|(n, s)| {
                 let tests = tests_for(s.id);
-                let t = if tests.is_empty() {
-                    String::new()
+                let bare = format!("{} L{} ({n} callers)", short_label(s), s.start_line);
+                let with_tests = if tests.is_empty() {
+                    bare.clone()
                 } else {
-                    format!("; tests: {}", tests.join(", "))
+                    format!(
+                        "{} L{} ({n} callers; tests: {})",
+                        short_label(s),
+                        s.start_line,
+                        tests.join(", ")
+                    )
                 };
-                format!("{} L{} ({n} callers{t})", short_label(s), s.start_line)
+                HeaderPart { with_tests, bare }
             })
             .collect();
-        let more = ranked.len().saturating_sub(TOP_SYMBOLS);
+        let prefix = format!(
+            "[graphite] {} — {} symbols; most used: ",
+            display_path(&abs, cwd),
+            ranked.len()
+        );
         let _ = writeln!(
             out,
-            "[graphite] {} — {} symbols; most used: {}{}",
-            display_path(&abs, cwd),
-            ranked.len(),
-            if parts.is_empty() {
-                "none".into()
-            } else {
-                parts.join(" · ")
-            },
-            if more > 0 {
-                format!(" · +{more} more")
-            } else {
-                String::new()
-            }
+            "{}",
+            fit_header(
+                &prefix,
+                &parts,
+                ranked.len(),
+                per_file.map(|b| b.saturating_sub(1))
+            )
         );
     }
     out
@@ -212,4 +273,43 @@ pub fn name_summary(engine: &Engine, cwd: &Path, name: &str) -> Result<String, S
         files.len()
     );
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parts(n: usize) -> Vec<HeaderPart> {
+        (0..n)
+            .map(|i| HeaderPart {
+                with_tests: format!("sym{i} L{i} (9 callers; tests: test_a_long_name, test_b, +7)"),
+                bare: format!("sym{i} L{i} (9 callers)"),
+            })
+            .collect()
+    }
+
+    // kinhin: decision(ref="docs/foundation/interception.md#4-size-budget-never-byte-cut")
+    #[test]
+    fn header_degrades_tests_then_symbols_and_counts_what_it_drops() {
+        let prefix = "[graphite] a.py — 12 symbols; most used: ";
+        let full = fit_header(prefix, &parts(8), 12, None);
+        assert!(
+            full.contains("tests: test_a_long_name") && full.ends_with("+4 more"),
+            "{full}"
+        );
+
+        let fitted = fit_header(prefix, &parts(8), 12, Some(160));
+        assert!(fitted.len() <= 160, "{}: {fitted}", fitted.len());
+        assert!(!fitted.contains("tests:"), "{fitted}");
+        assert!(fitted.starts_with(&format!("{prefix}sym0 L0")), "{fitted}");
+        let listed = fitted.matches(" callers)").count();
+        assert!(
+            fitted.ends_with(&format!("+{} more", 12 - listed)),
+            "{fitted}"
+        );
+
+        // Never below the busiest symbol, even when the budget is smaller than that.
+        let tiny = fit_header(prefix, &parts(8), 12, Some(10));
+        assert!(tiny.contains("sym0 L0 (9 callers) · +11 more"), "{tiny}");
+    }
 }

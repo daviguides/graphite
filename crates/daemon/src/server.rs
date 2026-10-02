@@ -146,9 +146,9 @@ fn handle(state: &State, op: Op) -> Response {
         }
         Op::Nudge { paths } => nudge(engine, paths),
         Op::Search { spec } => search(engine, spec, stale),
-        Op::FileInfo { paths, cwd } => {
-            Ok(json!({"text": crate::info::file_header(engine, std::path::Path::new(cwd), paths)}))
-        }
+        Op::FileInfo { paths, cwd, budget } => Ok(json!({
+            "text": crate::info::file_header(engine, std::path::Path::new(cwd), paths, *budget)
+        })),
         Op::DirInfo { paths, cwd } => {
             Ok(json!({"text": crate::info::dir_summary(engine, std::path::Path::new(cwd), paths)}))
         }

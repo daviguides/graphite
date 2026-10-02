@@ -57,6 +57,9 @@ fn kind(cmd: &str, root: &Path) -> Option<Vec<&'static str>> {
                 Action::List { .. } => "list",
                 Action::Cd(_) => "cd",
                 Action::Plain => "plain",
+                Action::Assign { .. } => "assign",
+                Action::Deferred { answerable: true } => "deferred",
+                Action::Deferred { answerable: false } => "deferred-plain",
             })
             .collect(),
     )
@@ -86,23 +89,51 @@ fn command_table() {
             "graphite blast resolve_owner --depth 1 --json | head -c 6000; echo; grep -rn resolve_owner --include=*.py .",
             &["plain", "plain", "search"],
         ),
+        // Pilot C pass-throughs (2026-09-26), now covered.
+        (
+            "f=$(find . -path '*pkg/core.py' -not -path '*/node_modules/*' | head -1); echo $f; wc -l $f; cat $f",
+            &["assign", "deferred-plain", "deferred-plain", "deferred"],
+        ),
+        (
+            "f=$(find . -path ./node_modules -prune -o -name core.py -print | head -1); cat -n \"$f\"",
+            &["assign", "deferred"],
+        ),
+        (
+            "sed -n 1,25p README.md; sed -n 1,4p pkg/use.py; grep -n resolve_owner pkg/use.py | head",
+            &["plain", "read", "search"],
+        ),
+        ("cat README.md | sed -n 1,40p; cat pkg/use.py", &["plain", "read"]),
+        (
+            "git stash list >/dev/null; git status --short; grep -rn resolve_owner .",
+            &["plain", "plain", "search"],
+        ),
+        ("grep -rn resolve_owner . >/dev/null", &["plain"]),
+        ("git diff --stat | tail -1; git log --oneline -3", &["plain", "plain"]),
     ];
     for (cmd, want) in yes {
         assert_eq!(kind(cmd, &root).as_deref(), Some(*want), "{cmd}");
     }
     let no = [
-        "grep resolve_owner",                 // stdin filter
-        "grep -c resolve_owner -r .",         // count output not reproduced
-        "grep -v resolve_owner -r .",         // inverted
-        "grep -rn resolve_owner . > out.txt", // file redirect
-        "grep -rn x . | xargs rm",            // unsafe downstream
-        "find . -name '*.py' -delete",        // mutating
-        "sed -i 's/a/b/' pkg/use.py",         // mutating
-        "cat README.md",                      // nothing graph-relevant to add
-        "grep -rn x /etc",                    // outside the repo
-        "grep -rn x missing_dir",             // grep's error is preserved
-        "python -c 'print(1)'; grep -rn x .", // unknown segment
-        "echo $(grep -rn x .)",               // substitution
+        "grep resolve_owner",                          // stdin filter
+        "grep -c resolve_owner -r .",                  // count output not reproduced
+        "grep -v resolve_owner -r .",                  // inverted
+        "grep -rn resolve_owner . > out.txt",          // file redirect
+        "grep -rn x . | xargs rm",                     // unsafe downstream
+        "find . -name '*.py' -delete",                 // mutating
+        "sed -i 's/a/b/' pkg/use.py",                  // mutating
+        "cat README.md",                               // nothing graph-relevant to add
+        "grep -rn x /etc",                             // outside the repo
+        "grep -rn x missing_dir",                      // grep's error is preserved
+        "python -c 'print(1)'; grep -rn x .",          // unknown segment
+        "echo $(grep -rn x .)",                        // substitution
+        "f=$(rm -rf pkg); cat $f",                     // substitution that writes
+        "f=$(find .); python $f",                      // variable fed to an unknown command
+        "f=$(find .); $f",                             // variable as the command
+        "cat $g",                                      // variable not set by this command
+        "git push origin main",                        // git that writes
+        "git branch -D old",                           // git that writes
+        "git diff --output=x.patch",                   // git that writes a file
+        "sed -n 1p README.md; sed -i '' 1d README.md", // one segment writes
     ];
     for cmd in no {
         let k = kind(cmd, &root);
@@ -371,6 +402,52 @@ fn end_to_end_rewrite_and_answer() {
         "grep -rn resolve_owner --include=*.py . | wc -l",
     ]);
     assert_eq!(c.trim(), "4", "{c}");
+    stop(&paths, h);
+}
+
+// kinhin: decision(ref="docs/foundation/interception.md#1-steering-by-transparent-interception")
+#[test]
+fn assigned_paths_and_repeated_reads_run_like_the_shell() {
+    let (_d, root) = repo();
+    let (paths, h) = start(&root);
+    let exe = hook_bin();
+    let cmd = "f=$(find pkg -name core.py | head -1); echo $f; wc -l $f; cat \"$f\"";
+    assert!(
+        pre::handle(&payload(cmd, &root), &exe).is_some(),
+        "not rewritten"
+    );
+    let cwd = root.to_string_lossy().into_owned();
+    let (out, code) = run_bin(&["run", "--cwd", &cwd, "--", cmd]);
+    assert_eq!(code, 0, "{out}");
+    let plain = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let plain = String::from_utf8_lossy(&plain.stdout);
+    // The agent's own output, untouched, plus one graph header before the file.
+    let without_header: String = out
+        .lines()
+        .filter(|l| !l.starts_with("[graphite]"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(without_header, plain, "{out}");
+    assert_eq!(out.matches("[graphite] pkg/core.py").count(), 1, "{out}");
+
+    // Two reads of one file in one command: one header.
+    let (two, _) = run_bin(&[
+        "run",
+        "--cwd",
+        &cwd,
+        "--",
+        "sed -n 1,1p pkg/core.py; sed -n 2,2p pkg/core.py",
+    ]);
+    assert_eq!(two.matches("[graphite]").count(), 1, "{two}");
+    assert!(
+        two.ends_with("def resolve_owner():\n    return 1\n"),
+        "{two}"
+    );
     stop(&paths, h);
 }
 

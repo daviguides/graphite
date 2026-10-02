@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use graphite_daemon::answer::{Budget, LineFilter};
 use graphite_daemon::SearchSpec;
 
-use crate::shell::{words, Segment};
+use crate::shell::{references, split, words, Env, Segment};
 
 /// What a segment becomes.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +25,11 @@ pub enum Action {
     Cd(PathBuf),
     /// A read-only command run as-is (echo, graphite queries, ...).
     Plain,
+    /// `NAME=$(inner)`: the read-only `inner` runs for real and its output is stored.
+    Assign { name: String, inner: String },
+    /// A read-only command that uses a variable assigned earlier in the command. Its paths are
+    /// only known at run time, so it is classified again once the variable is set.
+    Deferred { answerable: bool },
 }
 
 /// Downstream pipeline stages that only read stdin and write stdout.
@@ -178,6 +183,29 @@ pub fn stage(st: &str) -> Stage {
 /// Commands allowed to run untouched next to answered segments.
 const PLAIN_OK: &[&str] = &["echo", "printf", "pwd", "true", "wc"];
 
+/// `git` subcommands that only read the repository (no flag of theirs writes a file).
+const GIT_READ: &[&str] = &[
+    "status",
+    "diff",
+    "log",
+    "show",
+    "rev-parse",
+    "ls-files",
+    "blame",
+    "grep",
+];
+
+/// Read-only commands whose operands may come from a variable assigned earlier in the command.
+const DEFERRABLE: &[&str] = &[
+    "cat", "head", "tail", "nl", "sed", "grep", "egrep", "fgrep", "rg", "ls", "find", "wc", "echo",
+    "printf", "file", "stat",
+];
+
+/// Deferred commands that become a Graphite answer once their paths are known.
+const ANSWERABLE: &[&str] = &[
+    "cat", "head", "tail", "nl", "sed", "grep", "egrep", "fgrep", "rg", "ls", "find",
+];
+
 /// `graphite` subcommands that only read.
 const GRAPHITE_READ: &[&str] = &["lookup", "blast", "diff-impact", "status"];
 
@@ -215,8 +243,59 @@ fn safe_filter(stage: &str) -> bool {
     !w.iter().any(|a| a == "-exec" || a == "-delete")
 }
 
+/// `git` invocations that cannot change the repository or write files.
+fn git_read_only(w: &[String]) -> bool {
+    let Some(sub) = w.get(1).map(String::as_str) else {
+        return false;
+    };
+    let writes = |a: &String| a.starts_with("--output") || a == "-o" || a.starts_with("--ext-diff");
+    if w.iter().any(writes) {
+        return false;
+    }
+    match sub {
+        "stash" => w.get(2).is_some_and(|a| a == "list"),
+        "branch" => w[2..].iter().all(|a| {
+            matches!(
+                a.as_str(),
+                "-a" | "-r" | "-v" | "-vv" | "--list" | "--show-current" | "--all" | "--remotes"
+            )
+        }),
+        s => GIT_READ.contains(&s),
+    }
+}
+
+/// A segment that uses an earlier variable: acceptable now if its command is read-only whatever
+/// the variable holds; classified for real at run time.
+fn deferred(seg: &Segment) -> Option<Action> {
+    let first = strip_wrappers(words(&seg.stages[0])?);
+    let cmd = first.first()?.as_str();
+    if cmd.contains('$') || !DEFERRABLE.contains(&cmd) {
+        return None;
+    }
+    let read_only = match cmd {
+        "sed" => first.iter().any(|a| a == "-n") && !first.iter().any(|a| a.starts_with("-i")),
+        "find" => !first.iter().any(|a| FIND_MUTATING.contains(&a.as_str())),
+        _ => true,
+    };
+    let filters_ok = seg.stages[1..].iter().all(|s| safe_filter(s));
+    (read_only && filters_ok).then(|| Action::Deferred {
+        answerable: ANSWERABLE.contains(&cmd) && !seg.discard_stdout,
+    })
+}
+
 /// Classify one segment. `root` is the repo the daemon serves.
 pub fn classify(seg: &Segment, cwd: &Path, root: &Path) -> Option<Action> {
+    let action = classify_command(seg, cwd, root)?;
+    // Output thrown away: nothing reaches the agent, so there is nothing to answer.
+    Some(match action {
+        Action::Search { .. } | Action::Read { .. } | Action::List { .. } if seg.discard_stdout => {
+            Action::Plain
+        }
+        a => a,
+    })
+}
+
+fn classify_command(seg: &Segment, cwd: &Path, root: &Path) -> Option<Action> {
     let first = strip_wrappers(words(&seg.stages[0])?);
     let cmd = first.first()?.as_str();
     let rest = &seg.stages[1..];
@@ -245,8 +324,14 @@ pub fn classify(seg: &Segment, cwd: &Path, root: &Path) -> Option<Action> {
             })
         }
         "cat" | "head" | "tail" | "nl" | "sed" => {
-            let files = reader_files(&first, cwd, root)?;
-            filters_ok.then_some(Action::Read { files })
+            let (files, any_py) = reader_files(&first, cwd, root)?;
+            // A read of non-Python files (pyproject.toml, docs) has no graph header to add, but
+            // it is still read-only: run it as written next to the answered segments.
+            filters_ok.then_some(if any_py {
+                Action::Read { files }
+            } else {
+                Action::Plain
+            })
         }
         "ls" | "find" => {
             let dirs = list_dirs(&first, cwd, root)?;
@@ -263,27 +348,62 @@ pub fn classify(seg: &Segment, cwd: &Path, root: &Path) -> Option<Action> {
         {
             filters_ok.then_some(Action::Plain)
         }
+        "git" if git_read_only(&first) => filters_ok.then_some(Action::Plain),
         c if PLAIN_OK.contains(&c) => filters_ok.then_some(Action::Plain),
         _ => None,
     }
 }
 
-/// True if at least one segment is answered by Graphite (not just run as-is).
+/// True if at least one segment is (or may become, once its variable is set) a Graphite answer.
 pub fn answers(actions: &[Action]) -> bool {
     actions.iter().any(|a| {
         matches!(
             a,
-            Action::Search { .. } | Action::Read { .. } | Action::List { .. }
+            Action::Search { .. }
+                | Action::Read { .. }
+                | Action::List { .. }
+                | Action::Deferred { answerable: true }
         )
     })
 }
 
-/// Classify every segment, following `cd`s; None if any segment is unsupported.
+/// `NAME=$(inner)` is supported when `inner` is one read-only segment with no variables.
+fn assignment(seg: &Segment, cwd: &Path, root: &Path, env: &Env) -> Option<Action> {
+    let a = seg.assign.as_ref()?;
+    let inner = split(&a.inner)?;
+    let [one] = inner.as_slice() else {
+        return None;
+    };
+    if one.assign.is_some() || !references(&a.inner, env).is_empty() {
+        return None;
+    }
+    match classify(one, cwd, root)? {
+        Action::Cd(_) | Action::Assign { .. } | Action::Deferred { .. } => None,
+        _ => Some(Action::Assign {
+            name: a.name.clone(),
+            inner: a.inner.clone(),
+        }),
+    }
+}
+
+/// Classify every segment, following `cd`s and `NAME=$(…)` assignments; None if any segment is
+/// unsupported. Values of assigned variables are unknown here: segments using them are deferred.
 pub fn plan(segs: &[Segment], cwd: &Path, root: &Path) -> Option<Vec<Action>> {
     let mut dir = cwd.to_path_buf();
+    let mut env = Env::new();
     let mut out = Vec::new();
     for s in segs {
-        let a = classify(s, &dir, root)?;
+        let a = if s.assign.is_some() {
+            let a = assignment(s, &dir, root, &env)?;
+            if let Action::Assign { name, .. } = &a {
+                env.insert(name.clone(), String::new());
+            }
+            a
+        } else if !references(&s.raw, &env).is_empty() {
+            deferred(s)?
+        } else {
+            classify(s, &dir, root)?
+        };
         if let Action::Cd(d) = &a {
             dir = d.clone();
         }
@@ -498,7 +618,8 @@ pub fn search_spec(w: &[String], cwd: &Path, root: &Path, raw: &str) -> Option<S
     Some(spec)
 }
 
-fn reader_files(w: &[String], cwd: &Path, root: &Path) -> Option<Vec<String>> {
+/// Files a reader prints, and whether any of them is Python (the only files with a graph header).
+fn reader_files(w: &[String], cwd: &Path, root: &Path) -> Option<(Vec<String>, bool)> {
     let tool = w[0].as_str();
     let mut files = Vec::new();
     let mut i = 1;
@@ -554,18 +675,19 @@ fn reader_files(w: &[String], cwd: &Path, root: &Path) -> Option<Vec<String>> {
         any_py |= a.extension().is_some_and(|e| e == "py");
         out.push(a.to_string_lossy().into_owned());
     }
-    any_py.then_some(out)
+    Some((out, any_py))
 }
+
+/// `find` primaries that run commands or write files.
+const FIND_MUTATING: &[&str] = &[
+    "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprintf", "-fls", "-fprint0",
+];
 
 fn list_dirs(w: &[String], cwd: &Path, root: &Path) -> Option<Vec<String>> {
     let tool = w[0].as_str();
     let mut dirs = Vec::new();
     if tool == "find" {
-        const MUTATING: &[&str] = &[
-            "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprintf", "-fls",
-            "-fprint0",
-        ];
-        if w.iter().any(|a| MUTATING.contains(&a.as_str())) {
+        if w.iter().any(|a| FIND_MUTATING.contains(&a.as_str())) {
             return None;
         }
         for a in &w[1..] {

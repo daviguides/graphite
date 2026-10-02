@@ -44,6 +44,9 @@ pub enum Op {
     FileInfo {
         paths: Vec<String>,
         cwd: String,
+        /// Bytes the headers may take in total (sized to what the read printed); None = no cap.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        budget: Option<usize>,
     },
     /// One-line graph summary per directory (used when the agent lists directories).
     DirInfo {
