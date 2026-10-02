@@ -745,7 +745,10 @@ pub fn build(
     let single_file = spec.paths.len() == 1 && Path::new(&spec.paths[0]).is_file();
     let raw_bytes = grep_output_bytes(&a, !single_file);
     if !spec.all && spec.format == OutFormat::Model {
-        cap_to_grep_output(&mut a, raw_bytes);
+        // Answer lines always carry their path (self-contained under filters), so the budget
+        // counts grep's lines with a path even where grep itself would omit it.
+        let with_paths = grep_output_bytes(&a, true);
+        cap_to_grep_output(&mut a, with_paths);
     }
 
     let mut class_counts = serde_json::Map::new();

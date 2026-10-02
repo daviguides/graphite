@@ -182,6 +182,35 @@ fn a_line_budget_also_costs_at_most_those_grep_lines() {
     assert!(text.lines().count() <= 40, "{text}");
 }
 
+// kinhin: incident(ref="bench/interception replay of pilot C, 2026-10-02: grep -n X -A70 FILE | head -130 lost its only match")
+#[test]
+fn single_file_context_search_keeps_its_match_under_the_default_budget() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join(".git")).unwrap();
+    let body: String = std::iter::once("def recorder():\n".to_string())
+        .chain((0..80).map(|i| format!("    step_{i} = {i}\n")))
+        .collect();
+    write(&root, "tests/test_delivery.py", &body);
+    let engine = Engine::open(RepoPaths::new(&root)).unwrap();
+    engine.index_all().unwrap();
+    let file = root.join("tests/test_delivery.py");
+    let mut s = spec(&root, "def recorder");
+    s.paths = vec![file.to_string_lossy().into()];
+    s.after = 70;
+    s.label = "grep -n \"def recorder\" -A70 tests/test_delivery.py".into();
+    let res = search::run(&s, &root).unwrap();
+    let (text, _) = judge::render(&engine, &s, &res, false).unwrap();
+    assert!(
+        text.contains("tests/test_delivery.py:1:def recorder():"),
+        "{text}"
+    );
+    assert!(
+        text.contains("tests/test_delivery.py-71-    step_69 = 69"),
+        "{text}"
+    );
+}
+
 // kinhin: decision(ref="docs/foundation/interception.md#2-the-answer-an-enriched-grep")
 #[test]
 fn alternation_of_identifiers_gets_a_verdict_per_name() {
