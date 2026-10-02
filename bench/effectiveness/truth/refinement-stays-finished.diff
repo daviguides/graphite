@@ -1,0 +1,325 @@
+diff --git a/app/src/surfaces/intent-distill/components/signal-panel.tsx b/app/src/surfaces/intent-distill/components/signal-panel.tsx
+index 55f3aa7c..ecd4234c 100644
+--- a/app/src/surfaces/intent-distill/components/signal-panel.tsx
++++ b/app/src/surfaces/intent-distill/components/signal-panel.tsx
+@@ -42,6 +42,7 @@ import {
+   getRefinerFindings,
+   getRefinerSessionStatus,
+   getIntakeEvents,
++  onProjectsChanged,
+   runIntakePipeline,
+   triageDecision,
+   type InboxItem,
+@@ -271,6 +272,20 @@ export function SignalPanel({
+     ),
+   );
+ 
++  // Refiner events only arrive for a session THIS app spawned. A regent
++  // run drives its own child, so the events go to that process and the
++  // panel's one fetch went stale mid-run: 22 findings on screen beside
++  // "nothing decided yet", with eight decisions and eleven briefs on
++  // disk. The stores are files, and the projects watcher reports every
++  // write — so that is the signal a panel reading files should follow.
++  useEffect(() => {
++    let unlisten: (() => void) | undefined;
++    onProjectsChanged(() => setReload((n) => n + 1)).then(
++      (u) => (unlisten = u),
++    );
++    return () => unlisten?.();
++  }, []);
++
+   useEffect(() => {
+     if (!sessionName) {
+       setFindings([]);
+diff --git a/tools/orch/refiner/refiner/core/state.py b/tools/orch/refiner/refiner/core/state.py
+index b436cbae..feb36c7e 100644
+--- a/tools/orch/refiner/refiner/core/state.py
++++ b/tools/orch/refiner/refiner/core/state.py
+@@ -249,14 +249,29 @@ def pause_session(
+ ) -> SessionData:
+     """Pause an active session.
+ 
++    Args:
++        project_dir: Project directory.
++        session_name: Session name.
++
++    A COMPLETE session is not pausable. EGEST → COMPLETE is the only
++    transition that writes `status: complete`, and every exit path runs
++    through _handle_stop right after it — the driver closing stdin, the
++    app killing the child on the transition event, a human typing /stop.
++    Downgrading here overwrote the terminal state seconds after it was
++    reached, so a finished refinement read as paused and every consumer
++    that keys on `complete` (the stage chip, regent's terminal gate)
++    stayed stuck with the work already done.
++
+     Args:
+         project_dir: Project directory.
+         session_name: Session name.
+ 
+     Returns:
+-        Updated SessionData with paused status.
++        Updated SessionData — paused, or untouched when already complete.
+     """
+     data = load_session(project_dir, session_name)
++    if data.status == SessionStatus.COMPLETE:
++        return data
+     data.status = SessionStatus.PAUSED
+     save_session(project_dir, session_name, data)
+     return data
+diff --git a/tools/orch/refiner/tests/test_session_terminal.py b/tools/orch/refiner/tests/test_session_terminal.py
+new file mode 100644
+index 00000000..92fb3cb9
+--- /dev/null
++++ b/tools/orch/refiner/tests/test_session_terminal.py
+@@ -0,0 +1,53 @@
++"""A finished refinement stays finished.
++
++EGEST → COMPLETE is the only transition that writes `status: complete`,
++and every exit path runs _handle_stop immediately after it — a driver
++closing stdin, the app killing the child on the transition event, a human
++typing /stop. pause_session downgraded that terminal state seconds after
++it was reached, so a session with its briefs written read as `paused`,
++and every consumer keyed on `complete` (the stage chip, regent's terminal
++gate) waited forever on work that was already done.
++"""
++
++from pathlib import Path
++
++import pytest
++
++from refiner.core.models import Phase, SessionStatus
++from refiner.core.state import (
++    create_session,
++    load_session,
++    pause_session,
++    transition_phase,
++)
++
++
++@pytest.fixture
++def session(tmp_path: Path) -> tuple[Path, str]:
++    """A project dir with a session sitting in EGEST."""
++    name = "refinery-test"
++    create_session(tmp_path, name, demand_signal={"raw": "x"})
++    transition_phase(tmp_path, name, Phase.EGEST)
++    return tmp_path, name
++
++
++class TestPauseDoesNotDowngradeComplete:
++    def test_complete_survives_a_pause(self, session):
++        project_dir, name = session
++        transition_phase(project_dir, name, Phase.COMPLETE)
++        assert (
++            load_session(project_dir, name).status == SessionStatus.COMPLETE
++        )
++
++        pause_session(project_dir, name)
++
++        data = load_session(project_dir, name)
++        assert data.status == SessionStatus.COMPLETE
++        assert data.phase == Phase.COMPLETE
++
++    def test_an_unfinished_session_still_pauses(self, session):
++        project_dir, name = session
++        pause_session(project_dir, name)
++        data = load_session(project_dir, name)
++        assert data.status == SessionStatus.PAUSED
++        assert data.phase == Phase.EGEST
+diff --git a/tools/orch/regent/regent/core/pipeline.py b/tools/orch/regent/regent/core/pipeline.py
+index 04e9498f..b9c0ec87 100644
+--- a/tools/orch/regent/regent/core/pipeline.py
++++ b/tools/orch/regent/regent/core/pipeline.py
+@@ -221,7 +221,7 @@ def _prepare_steps(config: PipelineConfig) -> list[PipelineStep]:
+             step="egest_complete",
+             idempotency_key=f"refiner:{config.item_id}:egest",
+             action=lambda c: _action_refiner_attach(c, "complete"),
+-            reconciled=lambda c: reconcile.refiner_egest_done(
++            reconciled=lambda c: reconcile.refiner_session_complete(
+                 c.project_dir, c.session_name
+             ),
+         ),
+diff --git a/tools/orch/regent/regent/core/reconcile.py b/tools/orch/regent/regent/core/reconcile.py
+index 918a575a..9403c6a7 100644
+--- a/tools/orch/regent/regent/core/reconcile.py
++++ b/tools/orch/regent/regent/core/reconcile.py
+@@ -190,6 +190,42 @@ def refiner_egest_done(project_dir: Path, session_name: str) -> bool:
+     return bool(data.get("briefs"))
+ 
+ 
++def refiner_session_complete(project_dir: Path, session_name: str) -> bool:
++    """Check whether the refinement actually closed.
++
++    The terminal step's gate cannot be "briefs exist": the briefs land
++    inside the turn that the PREVIOUS segment's transition message
++    provokes, so by the time this step is reached they are already on
++    disk. Gating on them skipped the step that sends the closing
++    transition, and the session sat in EGEST/paused forever with its work
++    finished — EGEST → COMPLETE is the only thing that writes
++    `status: complete`, which is what a reader (a chip, a later run)
++    takes as "the refinery is done with this signal".
++
++    Both halves are required: a session marked complete with no briefs is
++    not done, it is empty.
++
++    Args:
++        project_dir: Project directory.
++        session_name: Refinery session name.
++
++    Returns:
++        True if session.yaml says complete AND briefs.yaml has entries.
++    """
++    if not session_exists(project_dir, session_name):
++        return False
++    session = load_session(project_dir, session_name)
++    if str(session.status or "").lower() != "complete":
++        return False
++    briefs_manifest = (
++        project_dir / "refineries" / session_name / "briefs.yaml"
++    )
++    if not briefs_manifest.exists():
++        return False
++    data = load_yaml(path=briefs_manifest)
++    return bool(data.get("briefs"))
++
++
+ def initiative_setup_done(project_dir: Path, initiative_name: str) -> bool:
+     """Check whether the initiative-level real effect already landed.
+ 
+@@ -284,6 +320,7 @@ __all__ = [
+     "initiative_setup_done",
+     "milestone_setup_done",
+     "refiner_egest_done",
++    "refiner_session_complete",
+     "refiner_phase_at_least",
+     "session_name_for",
+     "source_ref_drift",
+diff --git a/tools/orch/regent/regent/core/refinery.py b/tools/orch/regent/regent/core/refinery.py
+index 1af0cec2..cb9e01bd 100644
+--- a/tools/orch/regent/regent/core/refinery.py
++++ b/tools/orch/regent/regent/core/refinery.py
+@@ -35,6 +35,7 @@ import json
+ import queue
+ import subprocess
+ import threading
++import time
+ from dataclasses import dataclass
+ from pathlib import Path
+ 
+@@ -52,6 +53,12 @@ _TURN_TIMEOUT = 600.0
+ #: boundary a driver can actually observe.
+ _TURN_END = "session_metrics"
+ 
++#: How long to wait for the closing transition to land on disk. `/phase`
++#: is consumed silently and provokes no turn, so there is no turn event
++#: to wait on — the state write is the only observable, and closing stdin
++#: before it lands is a race the driver would lose invisibly.
++_COMPLETE_TIMEOUT = 30.0
++
+ #: How many exploration turns AUGMENT gets before it advances with
+ #: whatever it has. Round 1 took the initial pass plus one "continue
+ #: exploring"; this allows that shape and stops.
+@@ -471,12 +478,43 @@ def _drive_to_complete(
+         )
+ 
+     child.send("/phase COMPLETE")
+-    # COMPLETE is a silent transition (engine consumes /phase without
+-    # querying), so there is no turn to wait for — the state write is
+-    # the effect, and close() waits for the process that made it.
++    if not _wait_for_complete(project_dir, session_name):
++        raise EscalationRequiredError(
++            f"{session_name} did not reach COMPLETE within "
++            f"{_COMPLETE_TIMEOUT:.0f}s of the transition — its briefs are "
++            "written, but nothing marked the refinement finished.",
++            stage="refiner",
++            step="egest_complete",
++        )
+     return turns
+ 
+ 
++def _wait_for_complete(
++    project_dir: Path, session_name: str, timeout: float = _COMPLETE_TIMEOUT
++) -> bool:
++    """Poll session.yaml until the closing transition shows up.
++
++    Polling rather than listening: `/phase` is consumed by the engine
++    without a query, so it emits no turn to wait on, and the file IS the
++    effect. Returning before it lands would let close() send EOF into a
++    transition still in flight.
++
++    Args:
++        project_dir: Project directory.
++        session_name: Refinery session name.
++        timeout: Seconds to wait before giving up.
++
++    Returns:
++        True once the session records COMPLETE.
++    """
++    deadline = time.monotonic() + timeout
++    while time.monotonic() < deadline:
++        if _current_phase(project_dir, session_name) == "COMPLETE":
++            return True
++        time.sleep(0.5)
++    return _current_phase(project_dir, session_name) == "COMPLETE"
++
++
+ def _uncovered_decisions(
+     project_dir: Path, session_name: str, briefs: list[dict]
+ ) -> list[str]:
+diff --git a/tools/orch/regent/tests/test_pipeline.py b/tools/orch/regent/tests/test_pipeline.py
+index 080babf0..1ee1039d 100644
+--- a/tools/orch/regent/tests/test_pipeline.py
++++ b/tools/orch/regent/tests/test_pipeline.py
+@@ -223,7 +223,7 @@ class TestRunPipelineHappyPath:
+                 return_value=True,
+             ),
+             patch(
+-                "regent.core.pipeline.reconcile.refiner_egest_done",
++                "regent.core.pipeline.reconcile.refiner_session_complete",
+                 return_value=True,
+             ),
+             patch(
+diff --git a/tools/orch/regent/tests/test_refinery.py b/tools/orch/regent/tests/test_refinery.py
+index 385dd7c3..bb5d8347 100644
+--- a/tools/orch/regent/tests/test_refinery.py
++++ b/tools/orch/regent/tests/test_refinery.py
+@@ -252,9 +252,39 @@ class TestDriveToComplete:
+             },
+         )
+         child = _FakeChild()
+-        refinery._drive_to_complete(child, tmp_path, "refinery-x")
++        # The closing transition is a file write, so the driver polls for
++        # it; here it is already there.
++        monkey = getattr(refinery, "_wait_for_complete")
++        try:
++            refinery._wait_for_complete = lambda *a, **k: True
++            refinery._drive_to_complete(child, tmp_path, "refinery-x")
++        finally:
++            refinery._wait_for_complete = monkey
+         assert child.sent[-1] == "/phase COMPLETE"
+ 
++    def test_escalates_when_the_transition_never_lands(self, tmp_path):
++        _store(
++            tmp_path,
++            "refinery-x",
++            "decisions.yaml",
++            {"decisions": [{"id": "d-001"}]},
++        )
++        _store(
++            tmp_path,
++            "refinery-x",
++            "briefs.yaml",
++            {"briefs": [{"type": "milestone", "decision_refs": ["d-001"]}]},
++        )
++        child = _FakeChild()
++        monkey = getattr(refinery, "_wait_for_complete")
++        try:
++            refinery._wait_for_complete = lambda *a, **k: False
++            with pytest.raises(EscalationRequiredError) as excinfo:
++                refinery._drive_to_complete(child, tmp_path, "refinery-x")
++        finally:
++            refinery._wait_for_complete = monkey
++        assert excinfo.value.step == "egest_complete"
++
+     def test_asks_once_for_missing_coverage_then_escalates(self, tmp_path):
+         _store(
+             tmp_path,

@@ -1,0 +1,60 @@
+{
+ "id": "regent-project-auto-enqueue",
+ "kind": "feature",
+ "start": "dcde50300304bc224f2e37efcb97c956a9901ff3",
+ "ref": "fd7e623d75dfc72d1bf5261ba1267a9387972f1f",
+ "expected_src": [
+  "tools/orch/dao-cli/dao_cli/core/registry.py",
+  "tools/orch/regent/regent/cli.py"
+ ],
+ "ref_tests": [
+  "tools/orch/regent/tests/test_cli.py"
+ ],
+ "suites": [
+  "tools/orch/dao-cli",
+  "tools/orch/regent"
+ ],
+ "ref_diff_lines": 217,
+ "start_failures": {
+  "tools/orch/dao-cli": [],
+  "tools/orch/regent": [
+   "tests.test_cli.TestRunAndClose::test_emits_report_on_success",
+   "tests.test_cli.TestRunAndClose::test_emits_report_and_reraises_on_escalation",
+   "tests.test_cli.TestAutopsyFailure::test_failing_report_is_shown_not_swallowed",
+   "tests.test_cli.TestAutopsyFailure::test_a_plain_crash_is_reported_as_failed_not_completed",
+   "tests.test_cli.TestAutopsyFailure::test_an_interrupt_in_the_pipeline_is_reported_as_failed",
+   "tests.test_cli.TestAutopsyFailure::test_the_escalation_still_names_its_own_stage"
+  ]
+ },
+ "ref_failures": {
+  "tools/orch/dao-cli": [],
+  "tools/orch/regent": [
+   "tests.test_cli.TestRunAndClose::test_emits_report_on_success",
+   "tests.test_cli.TestRunAndClose::test_emits_report_and_reraises_on_escalation",
+   "tests.test_cli.TestAutopsyFailure::test_failing_report_is_shown_not_swallowed",
+   "tests.test_cli.TestAutopsyFailure::test_a_plain_crash_is_reported_as_failed_not_completed",
+   "tests.test_cli.TestAutopsyFailure::test_an_interrupt_in_the_pipeline_is_reported_as_failed",
+   "tests.test_cli.TestAutopsyFailure::test_the_escalation_still_names_its_own_stage"
+  ]
+ },
+ "hidden_at_ref": {
+  "tools/orch/dao-cli": {
+   "passed": 0,
+   "failed": 0
+  },
+  "tools/orch/regent": {
+   "passed": 15,
+   "failed": 6
+  }
+ },
+ "hidden_at_start": {
+  "tools/orch/dao-cli": {
+   "passed": 0,
+   "failed": 0
+  },
+  "tools/orch/regent": {
+   "passed": 12,
+   "failed": 9
+  }
+ }
+}

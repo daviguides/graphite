@@ -1,0 +1,217 @@
+diff --git a/tools/orch/dao-cli/dao_cli/core/registry.py b/tools/orch/dao-cli/dao_cli/core/registry.py
+index 7c84c5fa..895c4ca5 100644
+--- a/tools/orch/dao-cli/dao_cli/core/registry.py
++++ b/tools/orch/dao-cli/dao_cli/core/registry.py
+@@ -60,6 +60,22 @@ class RegistryEntry:
+ 
+             Inert on its own: with `shared_branch` false there is no
+             umbrella for it to name.
++        auto_enqueue: Whether a finished plan in this project is handed
++            to the queue to start executing. Default true, which is
++            what every project did before this key existed.
++
++            False means regent does the whole run — briefs, dry runs,
++            the outward gate, the real setup and its GitHub issues —
++            and stops with the work set up. A project-level answer
++            because the alternative is a CLI flag, and a CLI flag is
++            only a guarantee for the person who remembers to type it:
++            the app spawns `regent run` without it, so a project that
++            must not start executing on its own cannot be protected
++            from the command line.
++
++            Distinct from `auto_pilot`, which is about whether a run
++            settles its own decisions. Turning that off to stop the
++            hand-off also stops the run at every hold.
+     """
+ 
+     name: str
+@@ -67,6 +83,7 @@ class RegistryEntry:
+     path: str
+     shared_branch: bool = False
+     branch_prefix: str = ""
++    auto_enqueue: bool = True
+ 
+ 
+ def load_registry() -> list[RegistryEntry]:
+@@ -93,6 +110,7 @@ def load_registry() -> list[RegistryEntry]:
+             path=entry.get("path", ""),
+             shared_branch=bool(entry.get("shared_branch", False)),
+             branch_prefix=str(entry.get("branch_prefix", "") or ""),
++            auto_enqueue=bool(entry.get("auto_enqueue", True)),
+         )
+         for entry in raw
+         if isinstance(entry, dict) and "name" in entry and "repo" in entry
+@@ -115,6 +133,10 @@ def save_registry(entries: list[RegistryEntry]) -> None:
+             item["shared_branch"] = True
+         if e.branch_prefix:
+             item["branch_prefix"] = e.branch_prefix
++        # Written only when it differs from the default, so an entry
++        # that never opted out keeps the shape it already has on disk.
++        if not e.auto_enqueue:
++            item["auto_enqueue"] = False
+         data.append(item)
+     REGISTRY_PATH.write_text(
+         yaml.safe_dump(data, default_flow_style=False, sort_keys=False),
+diff --git a/tools/orch/regent/regent/cli.py b/tools/orch/regent/regent/cli.py
+index 5b9bd092..dbed9f3c 100644
+--- a/tools/orch/regent/regent/cli.py
++++ b/tools/orch/regent/regent/cli.py
+@@ -74,6 +74,34 @@ def _resolve_source_dir(project_dir: Path) -> Path:
+     return Path(source_root) if source_root else Path.cwd()
+ 
+ 
++def _project_auto_enqueue(source_dir: Path) -> bool:
++    """Whether this project lets a finished plan start executing.
++
++    The default lives on the project rather than on the command line
++    because a command-line default only protects the person who
++    remembers to type it — the app spawns `regent run` with no such
++    flag, so a project that must not start executing on its own could
++    not be protected from here.
++
++    Unreadable registry means True: this key withholds a hand-off, and
++    withholding one because a file could not be opened would look
++    exactly like a queue that silently stopped picking work up.
++
++    Args:
++        source_dir: The run's source checkout, which is what dao's
++            registry maps back to a project.
++
++    Returns:
++        The project's `auto_enqueue`, or True when it cannot be read.
++    """
++    try:
++        from dao_cli.core.registry import lookup_project
++
++        return bool(lookup_project(start=source_dir).auto_enqueue)
++    except Exception:
++        return True
++
++
+ def _build_config(
+     item_id: str,
+     *,
+@@ -84,20 +112,23 @@ def _build_config(
+     text: str | None,
+     project_dir: Path | None,
+     headless: bool = False,
+-    enqueue: bool = True,
++    enqueue: bool | None = None,
+ ) -> PipelineConfig:
+     """Assemble one PipelineConfig, gated on outward_gate.gated_real_setup."""
+     resolved_project_dir = project_dir or find_project_dir()
++    source_dir = _resolve_source_dir(resolved_project_dir)
+     return PipelineConfig(
+         project_dir=resolved_project_dir,
+-        source_dir=_resolve_source_dir(resolved_project_dir),
++        source_dir=source_dir,
+         ledger_path=_ledger_path(resolved_project_dir, item_id),
+         signal_source=source,
+         item_id=item_id,
+         initiative_name=initiative,
+         milestone_names=milestones,
+         headless=headless,
+-        enqueue=enqueue,
++        enqueue=(
++            _project_auto_enqueue(source_dir) if enqueue is None else enqueue
++        ),
+         signal_file=file,
+         signal_text=text,
+         real_setup=outward_gate.gated_real_setup,
+@@ -273,15 +304,16 @@ def run(
+             "the app as escalation records instead of taking over stdio."
+         ),
+     ),
+-    enqueue: bool = typer.Option(
+-        True,
++    enqueue: bool | None = typer.Option(
++        None,
+         "--enqueue/--no-enqueue",
+         help=(
+             "Hand the finished plan to the queue. --no-enqueue does "
+             "everything else — briefs, dry runs, the outward gate, the "
+             "real setup and its GitHub issues — and leaves the work set "
+             "up instead of running. Not the same as turning auto-pilot "
+-            "off, which also stops the run at every hold."
++            "off, which also stops the run at every hold. Unset, the "
++            "project's own `auto_enqueue` in the registry decides."
+         ),
+     ),
+ ) -> None:
+@@ -332,15 +364,16 @@ def resume(
+             "the app as escalation records instead of taking over stdio."
+         ),
+     ),
+-    enqueue: bool = typer.Option(
+-        True,
++    enqueue: bool | None = typer.Option(
++        None,
+         "--enqueue/--no-enqueue",
+         help=(
+             "Hand the finished plan to the queue. --no-enqueue does "
+             "everything else — briefs, dry runs, the outward gate, the "
+             "real setup and its GitHub issues — and leaves the work set "
+             "up instead of running. Not the same as turning auto-pilot "
+-            "off, which also stops the run at every hold."
++            "off, which also stops the run at every hold. Unset, the "
++            "project's own `auto_enqueue` in the registry decides."
+         ),
+     ),
+ ) -> None:
+diff --git a/tools/orch/regent/tests/test_cli.py b/tools/orch/regent/tests/test_cli.py
+index b5b87e58..3694a153 100644
+--- a/tools/orch/regent/tests/test_cli.py
++++ b/tools/orch/regent/tests/test_cli.py
+@@ -7,6 +7,7 @@ from rich.console import Console
+ from typer.testing import CliRunner
+ 
+ import regent.cli
++from regent import cli
+ from regent.cli import _build_config, app
+ from regent.core import outward_gate, paths
+ from regent.core.ledger import LedgerCheckpoint, append_step
+@@ -448,3 +449,44 @@ class TestDecideMounted:
+             ],
+         )
+         assert result.exit_code == 1
++
++
++class TestEnqueueDefaultsToTheProject:
++    """A CLI flag protects whoever types it; the app types nothing."""
++
++    def _entry(self, auto_enqueue: bool):
++        from dao_cli.core.registry import RegistryEntry
++
++        return RegistryEntry(
++            name="p",
++            repo="o/p",
++            path="",
++            auto_enqueue=auto_enqueue,
++        )
++
++    def test_the_project_can_withhold_the_hand_off(self, tmp_path):
++        with patch(
++            "dao_cli.core.registry.lookup_project",
++            return_value=self._entry(False),
++        ):
++            assert cli._project_auto_enqueue(tmp_path) is False
++
++    def test_a_project_that_never_opted_out_still_enqueues(self, tmp_path):
++        with patch(
++            "dao_cli.core.registry.lookup_project",
++            return_value=self._entry(True),
++        ):
++            assert cli._project_auto_enqueue(tmp_path) is True
++
++    def test_an_unreadable_registry_does_not_withhold(self, tmp_path):
++        """Withholding because a file would not open reads as a dead queue.
++
++        The failure mode this key creates is "nothing is executing", and
++        that must never be reachable by accident — only by someone
++        writing it down.
++        """
++        with patch(
++            "dao_cli.core.registry.lookup_project",
++            side_effect=OSError("no registry"),
++        ):
++            assert cli._project_auto_enqueue(tmp_path) is True

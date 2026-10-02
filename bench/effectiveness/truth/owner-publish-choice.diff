@@ -1,0 +1,412 @@
+diff --git a/tools/orch/dao-cli/CLAUDE.md b/tools/orch/dao-cli/CLAUDE.md
+index 64173206..18cdbcae 100644
+--- a/tools/orch/dao-cli/CLAUDE.md
++++ b/tools/orch/dao-cli/CLAUDE.md
+@@ -34,7 +34,7 @@ dao_cli/
+ │   ├── yaml_io.py   # load_yaml, save_yaml
+ │   └── gh.py        # run_gh, run_gh_text (GitHub CLI wrapper, strips GH_HOST)
+ └── data/
+-    ├── owners.yaml           # Known owner defaults
++    ├── owners.yaml           # Per-owner: gh_account, boards, publish
+     └── workflows/
+         └── self-implementation.yaml  # Mode definitions
+ ```
+diff --git a/tools/orch/dao-cli/dao_cli/core/gh.py b/tools/orch/dao-cli/dao_cli/core/gh.py
+index 783818ce..21267f80 100644
+--- a/tools/orch/dao-cli/dao_cli/core/gh.py
++++ b/tools/orch/dao-cli/dao_cli/core/gh.py
+@@ -208,6 +208,33 @@ def _load_owner_gh_account(owner: str) -> str | None:
+     return owner_config.get("gh_account")
+ 
+ 
++def owner_publishes(owner: str | None) -> bool:
++    """Whether this owner's work gets GitHub issues and board entries.
++
++    Publishing is per-owner because the decision is per-client, not
++    per-milestone: some clients want the work tracked on their board,
++    others deliberately want nothing on GitHub Issues.
++
++    Absent means yes. Every owner mapped before this property existed
++    was being published to, so silence has to keep meaning what it
++    meant — a new key must not retroactively mute anyone.
++
++    Args:
++        owner: GitHub owner name, or None when unresolved.
++
++    Returns:
++        True unless the owner explicitly opted out.
++    """
++    if not owner or not OWNERS_DATA.exists():
++        return True
++
++    from dao_cli.core.yaml_io import load_yaml
++
++    data = load_yaml(path=OWNERS_DATA)
++    owner_config = data.get(owner) or {}
++    return owner_config.get("publish", True) is not False
++
++
+ def ensure_gh_auth(owner: str) -> None:
+     """Ensure active gh account has access to owner.
+ 
+diff --git a/tools/orch/dao-cli/dao_cli/data/owners.yaml b/tools/orch/dao-cli/dao_cli/data/owners.yaml
+index 051fc3ae..26c6a48b 100644
+--- a/tools/orch/dao-cli/dao_cli/data/owners.yaml
++++ b/tools/orch/dao-cli/dao_cli/data/owners.yaml
+@@ -1,3 +1,9 @@
++# publish: whether this owner's tasks get a GitHub issue and a board
++# entry. Omitted means true — every owner here predates the key and was
++# being published to. Set it to false for a client whose work should
++# stay off GitHub Issues; instrumentation still creates the task YAMLs,
++# it just stops at the forge.
++
+ daviguides:
+   gh_account: daviguides
+   boards: [2, 5, 6]
+diff --git a/tools/orch/dao-cli/tests/dao_cli/test_owner_publishes.py b/tools/orch/dao-cli/tests/dao_cli/test_owner_publishes.py
+new file mode 100644
+index 00000000..19893809
+--- /dev/null
++++ b/tools/orch/dao-cli/tests/dao_cli/test_owner_publishes.py
+@@ -0,0 +1,75 @@
++"""Tests for owner_publishes — the per-client forge opt-out."""
++
++import dao_cli.core.gh as gh_module
++from dao_cli.core.gh import owner_publishes
++from dao_cli.core.yaml_io import save_yaml
++
++
++def _owners(tmp_path, monkeypatch, data: dict) -> None:
++    """Point the module at a temporary owners.yaml."""
++    path = tmp_path / "owners.yaml"
++    save_yaml(path=path, data=data)
++    monkeypatch.setattr(gh_module, "OWNERS_DATA", path)
++
++
++class TestOwnerPublishes:
++    def test_absent_key_means_yes(self, tmp_path, monkeypatch):
++        """Silence keeps meaning what it meant before the key existed.
++
++        Every owner mapped before this property was added was being
++        published to; a new key must not retroactively mute anyone.
++        """
++        _owners(tmp_path, monkeypatch, {"acme": {"gh_account": "a"}})
++        assert owner_publishes("acme") is True
++
++    def test_explicit_false_means_no(self, tmp_path, monkeypatch):
++        _owners(
++            tmp_path,
++            monkeypatch,
++            {"acme": {"gh_account": "a", "publish": False}},
++        )
++        assert owner_publishes("acme") is False
++
++    def test_explicit_true_means_yes(self, tmp_path, monkeypatch):
++        _owners(
++            tmp_path,
++            monkeypatch,
++            {"acme": {"gh_account": "a", "publish": True}},
++        )
++        assert owner_publishes("acme") is True
++
++    def test_unmapped_owner_publishes(self, tmp_path, monkeypatch):
++        """Not being in the file is not an opt-out."""
++        _owners(tmp_path, monkeypatch, {"acme": {"publish": False}})
++        assert owner_publishes("other") is True
++
++    def test_unresolved_owner_publishes(self, tmp_path, monkeypatch):
++        """A caller that could not resolve an owner gets the default.
++
++        Silently declining to publish because the owner lookup failed
++        would look identical to a deliberate opt-out.
++        """
++        _owners(tmp_path, monkeypatch, {"acme": {"publish": False}})
++        assert owner_publishes(None) is True
++
++    def test_missing_file_publishes(self, tmp_path, monkeypatch):
++        monkeypatch.setattr(
++            gh_module, "OWNERS_DATA", tmp_path / "nope.yaml"
++        )
++        assert owner_publishes("acme") is True
++
++    def test_null_entry_publishes(self, tmp_path, monkeypatch):
++        """A key with no body parses as None, not an empty dict."""
++        _owners(tmp_path, monkeypatch, {"acme": None})
++        assert owner_publishes("acme") is True
++
++    def test_only_false_opts_out(self, tmp_path, monkeypatch):
++        """A truthy-but-wrong value is not read as an opt-out.
++
++        Only the literal `false` mutes an owner — a typo'd string
++        should not silently stop publishing a client's work.
++        """
++        _owners(
++            tmp_path, monkeypatch, {"acme": {"publish": "no"}}
++        )
++        assert owner_publishes("acme") is True
+diff --git a/tools/orch/foreman/foreman/core/engine.py b/tools/orch/foreman/foreman/core/engine.py
+index 7ef6fb0c..ba6aa1c2 100644
+--- a/tools/orch/foreman/foreman/core/engine.py
++++ b/tools/orch/foreman/foreman/core/engine.py
+@@ -8,6 +8,8 @@ import asyncio
+ from datetime import UTC, datetime
+ from pathlib import Path
+ 
++from dao_cli.core.gh import owner_publishes
++from dao_cli.core.project import resolve_owner
+ from dao_cli.task import print_task_resume_rich
+ from gradient_cli.core.compiler import (
+     compile_plugins_for_mode,
+@@ -298,8 +300,16 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+     # Resolve milestone name from task data
+     milestone_name = task_data.get("milestone", "")
+ 
+-    # Auto-publish: create GitHub issue if missing
+-    if not task_data.get("issue") and milestone_name:
++    # Auto-publish: create GitHub issue if missing.
++    # Checked here as well as inside instrument, because for an owner
++    # that declines the forge this branch is true on every run of every
++    # task, forever — spawning a subprocess each time to decide to do
++    # nothing.
++    if (
++        not task_data.get("issue")
++        and milestone_name
++        and owner_publishes(resolve_owner())
++    ):
+         from foreman.core.instrumentation import publish_task
+ 
+         publish_task(
+@@ -378,7 +388,6 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+                     load_board_configs,
+                     _set_board_field,
+                 )
+-                from dao_cli.core.project import resolve_owner
+ 
+                 owner = resolve_owner()
+                 if owner:
+diff --git a/tools/orch/instrument/CLAUDE.md b/tools/orch/instrument/CLAUDE.md
+index 38b50a2f..ba3d18fe 100644
+--- a/tools/orch/instrument/CLAUDE.md
++++ b/tools/orch/instrument/CLAUDE.md
+@@ -19,7 +19,7 @@ Split out of foreman in Aug 2026. Foreman was the only Layer-0 tool both segment
+ 
+ All `setup` commands take `--model` and `--dry-run`. `setup initiative` and `setup milestone` also take `--output text|json`.
+ 
+-There is no `--skip-issues`. It existed because publishing was stitched inside setup and needed a switch; publishing is `dao task publish` now, so a project that does not track work on GitHub simply never runs it.
++There is no `--skip-issues`. It existed because publishing was stitched inside setup and needed a per-invocation switch. The decision is per-client, not per-run, so it lives on the owner instead: `publish: false` in dao's `owners.yaml` stops `setup` at the task YAMLs. Absent means yes.
+ 
+ ### `--output json`
+ 
+diff --git a/tools/orch/instrument/instrument/core/milestone.py b/tools/orch/instrument/instrument/core/milestone.py
+index 98ddaeae..b68897fc 100644
+--- a/tools/orch/instrument/instrument/core/milestone.py
++++ b/tools/orch/instrument/instrument/core/milestone.py
+@@ -463,6 +463,8 @@ def _publish_task(
+         ms_initiative: Initiative label from milestone.
+         initiative: Initiative name for path resolution.
+     """
++    from dao_cli.core.gh import owner_publishes
++    from dao_cli.core.project import resolve_owner
+     from dao_cli.exceptions import PublishError
+     from dao_cli.task import publish_task as dao_publish_task
+ 
+@@ -485,6 +487,14 @@ def _publish_task(
+         )
+         return
+ 
++    # An owner can decline the forge entirely. Silence here rather than
++    # a warning: not publishing is this owner's configured intent, and
++    # a milestone of twenty tasks would otherwise announce it twenty
++    # times. `resolve_owner` falls back to the git remote, so this
++    # answers True for anything unmapped.
++    if not owner_publishes(resolve_owner()):
++        return
++
+     # Resolve GitHub auth for this repo's owner
+     from continuum_core.github import resolve_auth_env
+ 
+diff --git a/tools/orch/regent/regent/core/reconcile.py b/tools/orch/regent/regent/core/reconcile.py
+index 7aea8018..918a575a 100644
+--- a/tools/orch/regent/regent/core/reconcile.py
++++ b/tools/orch/regent/regent/core/reconcile.py
+@@ -11,6 +11,7 @@ callers, no separate "resume mode".
+ from dataclasses import dataclass
+ from pathlib import Path
+ 
++from dao_cli.core.gh import owner_publishes
+ from dao_cli.core.yaml_io import load_yaml
+ from intake.core.models import InboxStatus, hash_content
+ from intake.core.reader import load_inbox_item
+@@ -210,20 +211,20 @@ def milestone_setup_done(
+ ) -> bool:
+     """Check whether a milestone's real setup fully landed.
+ 
+-    milestone.yaml must exist AND every task under it must have a
+-    linked GitHub issue. task.yaml's "issue" field is instrument's own
+-    concrete signal that a GitHub issue was created for that task —
+-    reused here rather than shelling out to `gh issue list`, keeping
+-    this check to local file reads like every other predicate in this
+-    module.
+-
+-    Known limit: this equates "instrumented" with "published". A
+-    project deliberately kept off GitHub Issues has tasks that never
+-    get an "issue" field, so this predicate stays False and the
+-    pipeline re-runs setup on every resume. That was invisible while
+-    publishing was welded into setup; now that `dao task publish` is a
+-    separate act a caller can decline, it is reachable — and needs a
+-    definition of "set up" that does not assume GitHub.
++    milestone.yaml must exist AND every task under it must have its
++    own task.yaml. For an owner that publishes, each task must also
++    carry a linked GitHub issue — task.yaml's "issue" field is
++    instrument's own concrete signal that one was created, reused here
++    rather than shelling out to `gh issue list`, keeping this check to
++    local file reads like every other predicate in this module.
++
++    The issue half is conditional because publishing is now a separate
++    act a caller can decline (`publish: false` on the owner). Asking
++    for an issue that will never exist would keep this False forever
++    and re-run an SDK-backed setup on every resume. Instrumentation
++    produces task YAMLs; publication produces issues; this predicate
++    asks about instrumentation, and only extends to issues for owners
++    where the two still coincide.
+ 
+     Args:
+         project_dir: Project directory.
+@@ -231,7 +232,8 @@ def milestone_setup_done(
+         milestone_name: Milestone name.
+ 
+     Returns:
+-        True if milestone.yaml exists and every task has an issue.
++        True if milestone.yaml exists, every task has a task.yaml, and
++        — for a publishing owner — every task has an issue.
+     """
+     ms_dir = (
+         project_dir
+@@ -248,15 +250,34 @@ def milestone_setup_done(
+     task_dirs = [d for d in tasks_dir.iterdir() if d.is_dir()]
+     if not task_dirs:
+         return False
++    expect_issues = owner_publishes(_project_owner(project_dir))
+     for task_dir in task_dirs:
+         task_yaml = task_dir / "task.yaml"
+         if not task_yaml.exists():
+             return False
+-        if not load_yaml(path=task_yaml).get("issue"):
++        if expect_issues and not load_yaml(path=task_yaml).get("issue"):
+             return False
+     return True
+ 
+ 
++def _project_owner(project_dir: Path) -> str | None:
++    """Read the owner out of a project directory's project.yaml.
++
++    Args:
++        project_dir: Project directory.
++
++    Returns:
++        The owner, or None if the file or the field is missing —
++        which `owner_publishes` reads as "publishes", the safe default.
++    """
++    yaml_path = project_dir / "project.yaml"
++    if not yaml_path.exists():
++        return None
++    project = load_yaml(path=yaml_path).get("project") or {}
++    owner = project.get("owner")
++    return owner if isinstance(owner, str) else None
++
++
+ __all__ = [
+     "DriftStatus",
+     "capture_done",
+diff --git a/tools/orch/regent/tests/test_reconcile.py b/tools/orch/regent/tests/test_reconcile.py
+index 9c71b318..9c168ae5 100644
+--- a/tools/orch/regent/tests/test_reconcile.py
++++ b/tools/orch/regent/tests/test_reconcile.py
+@@ -368,3 +368,87 @@ class TestMilestoneSetupDone:
+             data={"task": "t2", "issue": 11},
+         )
+         assert milestone_setup_done(tmp_path, "init-x", "ms-x") is True
++
++    def _publishing(self, monkeypatch, publishes: bool):
++        """Pin what the owner lookup answers for this project dir."""
++        monkeypatch.setattr(
++            "regent.core.reconcile.owner_publishes",
++            lambda owner: publishes,
++        )
++
++    def test_issueless_tasks_pass_when_owner_does_not_publish(
++        self, tmp_path, monkeypatch
++    ):
++        """The predicate that used to strand a non-publishing client.
++
++        Asking for an issue that will never be created kept this False
++        forever, and every resume re-ran an SDK-backed setup.
++        """
++        self._publishing(monkeypatch, False)
++        ms_dir = self._ms_dir(tmp_path)
++        save_yaml(
++            path=ms_dir / "milestone.yaml", data={"milestone": "ms-x"}
++        )
++        save_yaml(
++            path=ms_dir / "tasks" / "t1" / "task.yaml",
++            data={"task": "t1"},
++        )
++        assert milestone_setup_done(tmp_path, "init-x", "ms-x") is True
++
++    def test_missing_task_yaml_still_fails_without_publishing(
++        self, tmp_path, monkeypatch
++    ):
++        """Declining the forge relaxes the issue check, nothing else.
++
++        The task YAML is what instrumentation itself produces; a task
++        directory without one means setup did not finish.
++        """
++        self._publishing(monkeypatch, False)
++        ms_dir = self._ms_dir(tmp_path)
++        save_yaml(
++            path=ms_dir / "milestone.yaml", data={"milestone": "ms-x"}
++        )
++        (ms_dir / "tasks" / "t1").mkdir(parents=True)
++        assert milestone_setup_done(tmp_path, "init-x", "ms-x") is False
++
++    def test_owner_read_from_project_yaml(self, tmp_path, monkeypatch):
++        """The owner comes from the project dir being reconciled."""
++        seen: list[str | None] = []
++        monkeypatch.setattr(
++            "regent.core.reconcile.owner_publishes",
++            lambda owner: seen.append(owner) or True,
++        )
++        save_yaml(
++            path=tmp_path / "project.yaml",
++            data={"project": {"owner": "AccelVeo"}},
++        )
++        ms_dir = self._ms_dir(tmp_path)
++        save_yaml(
++            path=ms_dir / "milestone.yaml", data={"milestone": "ms-x"}
++        )
++        save_yaml(
++            path=ms_dir / "tasks" / "t1" / "task.yaml",
++            data={"task": "t1", "issue": 1},
++        )
++        milestone_setup_done(tmp_path, "init-x", "ms-x")
++        assert seen == ["AccelVeo"]
++
++    def test_owner_is_none_when_project_yaml_absent(
++        self, tmp_path, monkeypatch
++    ):
++        """No project.yaml means no owner — and no owner publishes."""
++        seen: list[str | None] = []
++        monkeypatch.setattr(
++            "regent.core.reconcile.owner_publishes",
++            lambda owner: seen.append(owner) or True,
++        )
++        ms_dir = self._ms_dir(tmp_path)
++        save_yaml(
++            path=ms_dir / "milestone.yaml", data={"milestone": "ms-x"}
++        )
++        save_yaml(
++            path=ms_dir / "tasks" / "t1" / "task.yaml",
++            data={"task": "t1", "issue": 1},
++        )
++        milestone_setup_done(tmp_path, "init-x", "ms-x")
++        assert seen == [None]

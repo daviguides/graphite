@@ -574,6 +574,130 @@ explicitly requested — in each tool's SDK wrapper / agent class that builds
 the SDK options.
 """
 
+# ------------------------------------------------- cross-module (2026-10-01)
+# Mined with mine_cross.py: non-test source changes span >= 2 tools. Written
+# as issues from the start, so they have no hinted statement.
+
+[[task]]
+id = "regent-project-auto-enqueue"
+kind = "feature"
+difficulty = "medium"
+ref = "fd7e623d75"
+suites = ["tools/orch/dao-cli", "tools/orch/regent"]
+prompt = """
+`regent run --no-enqueue` only protects whoever remembers to type it. The
+app launches `regent run` without that flag, and so does anything else
+that drives a run, so a project that must never start executing on its own
+cannot actually be protected.
+
+Make it a project setting: `auto_enqueue` on the project's dao-cli
+registry entry, next to `shared_branch`. Default true (what every project
+does today). False means regent does the whole run — briefs, dry runs, the
+outward gate, the real setup and its GitHub issues — and stops with the
+work set up instead of handing it to the queue, whoever launched it. The
+command-line flag stays, but overrides the project setting only when it is
+given explicitly. A registry that cannot be read counts as true. Write the
+key to the registry file only when it is false, so existing entries keep
+their shape.
+"""
+
+[[task]]
+id = "owner-publish-choice"
+kind = "feature"
+difficulty = "hard"
+ref = "e3a567043f"
+suites = ["tools/orch/dao-cli", "tools/orch/regent", "tools/orch/instrument", "tools/orch/foreman"]
+leak_allow = ["owners.yaml"]  # the owners config file users edit
+prompt = """
+Some clients' work must stay off GitHub Issues, and there is no way to say
+so. Worse, the pipeline loops for them: regent considers a milestone's
+setup finished only when every task has a GitHub issue, so for such a
+client it re-runs the (SDK-backed) setup on every resume, forever.
+
+Add a per-owner `publish` setting to dao-cli's owners data (owners.yaml).
+Absent means publish — every owner mapped today keeps being published;
+only a literal `false` opts out (a typo'd string must not silently stop
+publishing). For an owner that does not publish:
+- regent counts a milestone's setup as done when every task has its
+  task.yaml; an issue is not required (a missing task.yaml still means not
+  done). Regent learns the owner from the project's own project.yaml.
+- instrument does not create issues, silently (no warning per task).
+- foreman stops trying to auto-publish the task's issue on every run.
+"""
+
+[[task]]
+id = "refinement-stays-finished"
+kind = "bugfix"
+difficulty = "hard"
+ref = "76530285c6"
+suites = ["tools/orch/refiner", "tools/orch/regent"]
+prompt = """
+A regent run produced 22 findings, 8 decisions and 11 briefs and still
+reported nothing decided: the refinement never reads as finished. Two
+defects on that path:
+
+1. A refiner session that reached COMPLETE is downgraded to paused moments
+   later. Every exit path (stdin closing, the app killing the child, a
+   human typing /stop) pauses the session, and pausing overwrites the
+   terminal state. A complete session must stay complete; unfinished
+   sessions still pause.
+2. Regent skips the step that closes the refinement: that step counts as
+   already done when the phase is at or past EGEST and briefs exist, but
+   the briefs are on disk before the step is ever reached, so the closing
+   transition is never sent. The step is done only when the session is
+   actually complete (status complete and briefs present). After sending
+   the closing transition, regent must wait (up to ~30 s) for completion
+   to be recorded before closing the session's stdin, and escalate if it
+   never lands.
+"""
+
+[[task]]
+id = "foreman-validating-reject"
+kind = "feature"
+difficulty = "hard"
+ref = "f6af34e43c"
+suites = ["tools/orch/dao-cli", "tools/orch/foreman"]
+prompt = """
+Two problems when foreman resumes a task:
+
+1. VALIDATING has no structured way to say "this is not actually done": it
+   can only write prose into last_action / next_steps, which resume does
+   not (and must not) parse. Add `dao task update --validation-verdict
+   approved|rejected --rejection-reason '<why>'`, stored in task.yaml. On
+   resume, a rejected VALIDATING verdict sends the task back to
+   IMPLEMENTING, and that IMPLEMENTING session's prompt includes the
+   rejection reason so it continues instead of restarting blind. A
+   verdict left from an earlier VALIDATING attempt is cleared before each
+   new VALIDATING attempt.
+2. Worse, confirmed live: resume advances to the next mode whenever the
+   stored mode has a session entry, without checking that its gate passed.
+   A task whose VALIDATING failed its gate to FINALIZING (unchecked
+   checkboxes) goes straight to FINALIZING on the next dispatch and
+   attempts a real merge. Resume must re-check the gate before advancing,
+   and re-run the stored mode when it does not pass.
+"""
+
+[[task]]
+id = "milestone-status-ssot"
+kind = "refactor"
+difficulty = "medium"
+ref = "93be3c744b"
+suites = ["tools/orch/dao-cli", "tools/orch/foreman"]
+prompt = """
+A task's status is stored twice — in its task.yaml and in the task list of
+milestone.yaml — and the two drift: one is updated and not the other, so
+`dao milestone status` and `dao milestone resume` show a task as pending
+or in progress while its task.yaml says done, and `foreman run milestone`
+can re-run finished tasks.
+
+Make task.yaml the only source of a task's status. milestone.yaml stops
+storing a status per task (neither creating nor updating milestone task
+entries writes one), and everything that shows or filters task status for
+a milestone — dao's milestone status / resume / markdown output,
+foreman's choice of pending tasks in a milestone run, foreman's milestone
+update after a mode — reads it from each task's task.yaml.
+"""
+
 # ---------------------------------------------------------------- questions
 # Not localization tasks: the question names its symbol by design, so they
 # are not leak-checked and stay out of issue-form pilots.

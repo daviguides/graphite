@@ -1,0 +1,58 @@
+{
+ "id": "refinement-stays-finished",
+ "kind": "bugfix",
+ "start": "bcccdf21368ba7fa4a74a824f3c023b036f1ad54",
+ "ref": "76530285c675c61002e865561fea27b2c96b696e",
+ "expected_src": [
+  "tools/orch/refiner/refiner/core/state.py",
+  "tools/orch/regent/regent/core/pipeline.py",
+  "tools/orch/regent/regent/core/reconcile.py",
+  "tools/orch/regent/regent/core/refinery.py"
+ ],
+ "ref_tests": [
+  "tools/orch/refiner/tests/test_session_terminal.py",
+  "tools/orch/regent/tests/test_pipeline.py",
+  "tools/orch/regent/tests/test_refinery.py"
+ ],
+ "suites": [
+  "tools/orch/refiner",
+  "tools/orch/regent"
+ ],
+ "ref_diff_lines": 325,
+ "start_failures": {
+  "tools/orch/refiner": [],
+  "tools/orch/regent": [
+   "tests.test_cli.TestRunAndClose::test_emits_report_on_success",
+   "tests.test_cli.TestRunAndClose::test_emits_report_and_reraises_on_escalation",
+   "tests.test_cli.TestRunCommand::test_run_invokes_pipeline_and_reports"
+  ]
+ },
+ "ref_failures": {
+  "tools/orch/refiner": [],
+  "tools/orch/regent": [
+   "tests.test_cli.TestRunAndClose::test_emits_report_on_success",
+   "tests.test_cli.TestRunAndClose::test_emits_report_and_reraises_on_escalation",
+   "tests.test_cli.TestRunCommand::test_run_invokes_pipeline_and_reports"
+  ]
+ },
+ "hidden_at_ref": {
+  "tools/orch/refiner": {
+   "passed": 2,
+   "failed": 0
+  },
+  "tools/orch/regent": {
+   "passed": 35,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/orch/refiner": {
+   "passed": 1,
+   "failed": 1
+  },
+  "tools/orch/regent": {
+   "passed": 32,
+   "failed": 3
+  }
+ }
+}

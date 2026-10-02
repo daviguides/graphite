@@ -1,0 +1,233 @@
+diff --git a/tools/orch/dao-cli/dao_cli/milestone.py b/tools/orch/dao-cli/dao_cli/milestone.py
+index b3f7088d..059c0ed9 100644
+--- a/tools/orch/dao-cli/dao_cli/milestone.py
++++ b/tools/orch/dao-cli/dao_cli/milestone.py
+@@ -280,7 +280,6 @@ def update(
+         task_entry: dict[str, str | int | None] = {
+             "name": add_task,
+             "issue": task_issue,
+-            "status": task_status or "pending",
+         }
+         if task_mode:
+             task_entry["mode"] = task_mode
+@@ -288,14 +287,11 @@ def update(
+         tasks.append(task_entry)
+         data["tasks"] = tasks
+ 
+-    if update_task and (task_status or task_mode):
++    if update_task and task_mode:
+         tasks = data.get("tasks") or []
+         for t in tasks:
+             if t.get("name") == update_task:
+-                if task_status:
+-                    t["status"] = task_status
+-                if task_mode:
+-                    t["mode"] = task_mode
++                t["mode"] = task_mode
+                 break
+         data["tasks"] = tasks
+ 
+@@ -433,7 +429,8 @@ def _milestone_to_markdown(
+             issue_val = t_extras.get("issue") or t.get("issue")
+             issue = f"#{issue_val}" if issue_val else "-"
+ 
+-            status = t.get("status", "pending")
++            # Status from task.yaml (SSOT)
++            status = t_extras.get("status", "pending")
+             mode = t_extras.get("mode") or "-"
+             branch = t_extras.get("branch") or "-"
+ 
+@@ -563,15 +560,28 @@ def status(
+     console.print(f"  [bold]origin[/]: {data.get('origin', '-')}")
+     console.print(f"  [bold]created[/]: {data.get('created', '-')}")
+ 
+-    # Tasks summary
++    # Tasks summary — derive status from task.yaml (SSOT)
+     tasks = data.get("tasks") or []
+     if tasks:
++        task_names_for_status = [
++            t.get("name", "")
++            for t in tasks
++            if t.get("name")
++        ]
++        status_extras = _load_task_extras(
++            task_names=task_names_for_status,
++        )
+         console.print()
+         console.print("  [bold]Tasks:[/]")
+         for t in tasks:
++            t_name = t.get("name", "")
+             issue = t.get("issue") or "-"
+-            st = t.get("status", "pending")
+-            console.print(f"    {t['name']} [dim](#{issue})[/] — {st}")
++            st = status_extras.get(t_name, {}).get(
++                "status", "pending"
++            )
++            console.print(
++                f"    {t_name} [dim](#{issue})[/] — {st}"
++            )
+ 
+     # Decisions summary
+     decisions = data.get("decisions") or []
+@@ -705,7 +715,8 @@ def _milestone_resume_markdown(
+             issue_val = t_extras.get("issue") or t.get("issue")
+             issue = f"#{issue_val}" if issue_val else "-"
+ 
+-            st = t.get("status", "pending")
++            # Status from task.yaml (SSOT)
++            st = t_extras.get("status", "pending")
+             mode = t_extras.get("mode") or "-"
+             branch = t_extras.get("branch") or "-"
+ 
+@@ -977,7 +988,7 @@ def resume(
+         if value is not None:
+             console.print(f"  [bold]{key}[/]: {value}")
+ 
+-    # Tasks summary
++    # Tasks summary — status from task.yaml (SSOT)
+     tasks = data.get("tasks") or []
+     if tasks:
+         console.print()
+@@ -986,7 +997,7 @@ def resume(
+             t_name = t.get("name", "")
+             t_ex = extras.get(t_name, {})
+             issue = t.get("issue") or "-"
+-            st = t.get("status", "pending")
++            st = t_ex.get("status", "pending")
+             mode_str = t_ex.get("mode") or ""
+             marker = " [green]<-[/]" if t_name == current_task else ""
+             console.print(
+diff --git a/tools/orch/dao-cli/tests/dao_cli/test_milestone.py b/tools/orch/dao-cli/tests/dao_cli/test_milestone.py
+index d4c0e265..5aae65e4 100644
+--- a/tools/orch/dao-cli/tests/dao_cli/test_milestone.py
++++ b/tools/orch/dao-cli/tests/dao_cli/test_milestone.py
+@@ -123,7 +123,7 @@ class TestMilestoneUpdate:
+     """Tests for dao milestone update command."""
+ 
+     def test_adds_task(self, project_dir):
+-        """Update --add-task appends task entry."""
++        """Update --add-task appends task entry (no status in milestone)."""
+         _create_milestone_yaml(project_dir)
+ 
+         with patch(
+@@ -142,8 +142,6 @@ class TestMilestoneUpdate:
+                     "scaffold",
+                     "--task-issue",
+                     "1",
+-                    "--task-status",
+-                    "done",
+                 ],
+             )
+ 
+@@ -155,17 +153,17 @@ class TestMilestoneUpdate:
+         assert len(data["tasks"]) == 1
+         assert data["tasks"][0]["name"] == "scaffold"
+         assert data["tasks"][0]["issue"] == 1
+-        assert data["tasks"][0]["status"] == "done"
++        assert "status" not in data["tasks"][0]
+ 
+-    def test_updates_task_status(self, project_dir):
+-        """Update --update-task changes task status."""
++    def test_updates_task_mode(self, project_dir):
++        """Update --update-task changes task mode (status is SSOT in task.yaml)."""
+         yaml_path = _create_milestone_yaml(project_dir)
+         data = load_yaml(path=yaml_path)
+         data["tasks"] = [
+             {
+                 "name": "scaffold",
+                 "issue": 1,
+-                "status": "pending",
++                "mode": "EXPLORING",
+             },
+         ]
+         save_yaml(path=yaml_path, data=data)
+@@ -182,15 +180,16 @@ class TestMilestoneUpdate:
+                     "test-ms",
+                     "--update-task",
+                     "scaffold",
+-                    "--task-status",
+-                    "done",
++                    "--task-mode",
++                    "IMPLEMENTING",
+                 ],
+             )
+ 
+         assert result.exit_code == 0
+ 
+         data = load_yaml(path=yaml_path)
+-        assert data["tasks"][0]["status"] == "done"
++        assert data["tasks"][0]["mode"] == "IMPLEMENTING"
++        assert "status" not in data["tasks"][0]
+ 
+     def test_adds_decision(self, project_dir):
+         """Update --add-decision appends decision."""
+diff --git a/tools/orch/foreman/foreman/core/hooks.py b/tools/orch/foreman/foreman/core/hooks.py
+index e5144eaf..1bb9df2c 100644
+--- a/tools/orch/foreman/foreman/core/hooks.py
++++ b/tools/orch/foreman/foreman/core/hooks.py
+@@ -461,10 +461,8 @@ def post_hook_milestone_update(
+         ms_data = load_yaml(path=ms_path)
+ 
+         tasks = ms_data.get("tasks") or []
+-        is_done = mode == "FINALIZING"
+         for t in tasks:
+             if t.get("name") == task_name:
+-                t["status"] = "done" if is_done else "paused"
+                 t["mode"] = mode
+                 break
+         ms_data["tasks"] = tasks
+diff --git a/tools/orch/foreman/foreman/core/milestone.py b/tools/orch/foreman/foreman/core/milestone.py
+index d21ff5e5..a68939e6 100644
+--- a/tools/orch/foreman/foreman/core/milestone.py
++++ b/tools/orch/foreman/foreman/core/milestone.py
+@@ -47,6 +47,25 @@ from foreman.display import (
+ from foreman.exceptions import SetupError
+ 
+ 
++def _is_task_done(task_name: str, milestone: str) -> bool:
++    """Check if a task is done by reading its task.yaml (SSOT).
++
++    Args:
++        task_name: Task name.
++        milestone: Milestone name.
++
++    Returns:
++        True if task.yaml status is 'done'.
++    """
++    path = resolve_task_yaml_path(
++        task_name=task_name, milestone=milestone
++    )
++    if path.exists():
++        data = load_yaml(path=path)
++        return data.get("status") == "done"
++    return False
++
++
+ def _read_briefs(name: str) -> tuple[str, dict[str, str]]:
+     """Read milestone brief and task briefs from project dir.
+ 
+@@ -561,7 +580,6 @@ async def setup_milestone(
+                 td = load_yaml(path=tp)
+                 task_entry: dict[str, Any] = {
+                     "name": item.name,
+-                    "status": "in_progress",
+                     "mode": "EXPLORING",
+                 }
+                 if td.get("issue"):
+@@ -633,9 +651,14 @@ async def run_milestone(
+     ms_data = load_yaml(path=ms_path)
+     tasks = ms_data.get("tasks") or []
+ 
+-    # Filter pending tasks
++    # Filter pending tasks — read status from task.yaml (SSOT)
+     pending = [
+-        t for t in tasks if t.get("status") != "done"
++        t
++        for t in tasks
++        if not _is_task_done(
++            t.get("name", ""),
++            config.milestone_name,
++        )
+     ]
+ 
+     if not pending:

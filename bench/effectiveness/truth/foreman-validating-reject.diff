@@ -1,0 +1,555 @@
+diff --git a/tools/orch/dao-cli/dao_cli/task.py b/tools/orch/dao-cli/dao_cli/task.py
+index 1921f99f..e614ff3a 100644
+--- a/tools/orch/dao-cli/dao_cli/task.py
++++ b/tools/orch/dao-cli/dao_cli/task.py
+@@ -406,6 +406,26 @@ def update(
+         "--blockers",
+         help="Current blockers (use 'null' to clear).",
+     ),
++    validation_verdict: str | None = typer.Option(
++        None,
++        "--validation-verdict",
++        help=(
++            "VALIDATING mode only: 'approved' or 'rejected' — a "
++            "structured verdict distinct from prose in last_action, "
++            "so foreman can route control flow on it (e.g. rejected "
++            "sends the task back to IMPLEMENTING) without parsing "
++            "free text."
++        ),
++    ),
++    rejection_reason: str | None = typer.Option(
++        None,
++        "--rejection-reason",
++        help=(
++            "Required context when --validation-verdict rejected: "
++            "why validation failed, injected into the next "
++            "IMPLEMENTING session's prompt."
++        ),
++    ),
+     summary: str | None = typer.Option(
+         None,
+         "--summary",
+@@ -514,6 +534,10 @@ def update(
+     if blockers is not None:
+         value = None if blockers == "null" else blockers
+         data["blockers"] = value
++    if validation_verdict is not None:
++        data["validation_verdict"] = validation_verdict
++    if rejection_reason is not None:
++        data["rejection_reason"] = rejection_reason
+     if summary is not None:
+         data["summary"] = summary
+     if pr is not None:
+diff --git a/tools/orch/dao-cli/docs/commands.md b/tools/orch/dao-cli/docs/commands.md
+index 70372f8e..cfd90e62 100644
+--- a/tools/orch/dao-cli/docs/commands.md
++++ b/tools/orch/dao-cli/docs/commands.md
+@@ -72,6 +72,8 @@ dao task update \
+   [--last-action "Research done"] \
+   [--next-steps "Write plan"] \
+   [--blockers "Waiting on API"] \
++  [--validation-verdict rejected] \
++  [--rejection-reason "steps 5-13 never ran"] \
+   [--summary "Updated description"] \
+   [--next-mode IMPLEMENTING] \
+   [--required-context "zazen + shodo"] \
+@@ -179,6 +181,13 @@ dao gate check <MODE> \
+ | VALIDATING | git working tree clean |
+ | FINALIZING | all validation.md checkboxes checked |
+ 
++If a VALIDATING session determines the implementation isn't actually
++complete, it should not mark checkboxes as if it passed — instead
++run `dao task update --validation-verdict rejected --rejection-reason
++"<why>"`. Foreman routes the task back to IMPLEMENTING with that
++reason attached, instead of retrying VALIDATING blind or (worse)
++advancing to FINALIZING on a phase that was never delivered.
++
+ ## dao worktree
+ 
+ *Stub — pending implementation.*
+diff --git a/tools/orch/foreman/foreman/core/engine.py b/tools/orch/foreman/foreman/core/engine.py
+index 3d435ad9..b556e638 100644
+--- a/tools/orch/foreman/foreman/core/engine.py
++++ b/tools/orch/foreman/foreman/core/engine.py
+@@ -12,6 +12,8 @@ from dao_cli.task import print_task_resume_rich
+ from gradient_cli.core.compiler import (
+     compile_plugins_for_mode,
+ )
++from rich.panel import Panel
++from rich.text import Text
+ 
+ from foreman.core.events import create_emitter
+ from foreman.core.hooks import (
+@@ -238,8 +240,43 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+                         f"has a session entry."
+                     )
+                 current_mode = stored_mode
++            elif (
++                stored_mode == "VALIDATING"
++                and task_data.get("validation_verdict") == "rejected"
++            ):
++                # Structured signal from the VALIDATING session
++                # itself (not prose-parsing): it explicitly rejected
++                # its own validation. Route back to IMPLEMENTING with
++                # the reason attached, instead of blindly retrying
++                # VALIDATING (same question, same answer — wasted
++                # cost) or advancing to FINALIZING (skipping a phase
++                # that was never actually delivered).
++                current_mode = "IMPLEMENTING"
+             else:
+-                current_mode = next_from_stored
++                # A session entry only means the mode was ATTEMPTED,
++                # not that its gate to the next mode passed. Advancing
++                # blindly lets a task skip a phase it never delivered
++                # — e.g. VALIDATING can log a session and still fail
++                # its gate to FINALIZING (checkboxes unmarked); naive
++                # resume would jump straight into FINALIZING (a real
++                # merge attempt) without validation ever being
++                # satisfied. Re-verify the gate before committing to
++                # the advance; fall back to re-running stored_mode
++                # if it doesn't actually pass.
++                docs_dir_for_gate = resolve_task_docs_dir(
++                    task_name=config.task_name,
++                )
++                gate_recheck = do_gate_check(
++                    mode=next_from_stored,
++                    task_name=config.task_name,
++                    workflow=workflow,
++                    docs_dir=docs_dir_for_gate,
++                )
++                current_mode = (
++                    next_from_stored
++                    if gate_recheck["passed"]
++                    else stored_mode
++                )
+         else:
+             current_mode = stored_mode
+ 
+@@ -439,9 +476,6 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+         parts = [p for p in [rover_output, foreman_output] if p]
+         pre_output = "\n".join(parts)
+         if pre_output:
+-            from rich.panel import Panel
+-            from rich.text import Text
+-
+             console.print(
+                 Panel(
+                     Text.from_ansi(pre_output),
+@@ -453,9 +487,6 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+ 
+         # --- FINALIZING: deterministic (no SDK) ---
+         if current_mode == "FINALIZING":
+-            from rich.panel import Panel
+-            from rich.text import Text
+-
+             # Merge sequence panel
+             emitter.emit("finalizing_start")
+             with console.capture() as fin_capture:
+@@ -797,8 +828,6 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+         emitter.emit("post_hooks_done", mode=current_mode)
+         post_output = post_capture.get().strip()
+         if post_output:
+-            from rich.text import Text
+-
+             console.print(
+                 Panel(
+                     Text.from_ansi(post_output),
+@@ -884,8 +913,6 @@ async def run_task(config: ExecutionConfig) -> RunResult:
+             break
+ 
+         # Mode completion panel
+-        from rich.panel import Panel
+-
+         console.print()
+         session_line = (
+             f"\n[dim]Session: {record.session_id}[/]"
+diff --git a/tools/orch/foreman/foreman/core/hooks.py b/tools/orch/foreman/foreman/core/hooks.py
+index a009341e..e8faab67 100644
+--- a/tools/orch/foreman/foreman/core/hooks.py
++++ b/tools/orch/foreman/foreman/core/hooks.py
+@@ -1586,6 +1586,30 @@ def pre_hook_validation(
+     """
+     print_step("VALIDATING: running deterministic checks")
+ 
++    # Clear any validation_verdict/rejection_reason left over from
++    # a PRIOR VALIDATING attempt before this one runs. Without this,
++    # a stale "rejected" from a past cycle would still be sitting
++    # in task.yaml if the current attempt's SDK session forgets (or
++    # isn't asked) to re-set it — silently re-triggering the
++    # route-back-to-IMPLEMENTING path even after this run passes
++    # cleanly. The current session is the only one that gets to
++    # decide this run's verdict.
++    try:
++        from dao_cli.core.project import resolve_task_yaml_path
++        from dao_cli.core.yaml_io import load_yaml, save_yaml
++
++        yaml_path = resolve_task_yaml_path(task_name=task_name)
++        task_data = load_yaml(path=yaml_path)
++        if (
++            task_data.get("validation_verdict") is not None
++            or task_data.get("rejection_reason") is not None
++        ):
++            task_data["validation_verdict"] = None
++            task_data["rejection_reason"] = None
++            save_yaml(path=yaml_path, data=task_data)
++    except Exception:
++        pass
++
+     results: dict[str, Any] = {
+         "test_passed": None,
+         "test_output": "",
+diff --git a/tools/orch/foreman/foreman/core/prompt.py b/tools/orch/foreman/foreman/core/prompt.py
+index 41f3e3fc..927c30a7 100644
+--- a/tools/orch/foreman/foreman/core/prompt.py
++++ b/tools/orch/foreman/foreman/core/prompt.py
+@@ -59,9 +59,47 @@ def _format_validation_results(
+         )
+         lines.append("")
+ 
++    lines.append(
++        "## Validation verdict — required\n\n"
++        "Before you stop, record a structured verdict — this drives "
++        "foreman's control flow, not the prose in `last_action`:\n\n"
++        "- **Implementation genuinely complete and correct**: run "
++        "`dao task update --validation-verdict approved`.\n"
++        "- **Not actually done** (even if tests pass — e.g. scope "
++        "incomplete, a step was skipped, a driver/script is missing): "
++        "do NOT mark checkboxes as if it passed. Run "
++        "`dao task update --validation-verdict rejected "
++        "--rejection-reason '<short, specific reason>'`. Foreman will "
++        "route the task back to IMPLEMENTING with your reason attached "
++        "— you do not need to (and should not try to) fix it yourself "
++        "in this VALIDATING session.\n"
++    )
++    lines.append("")
++
+     return "\n".join(lines)
+ 
+ 
++def _format_rejection_context(reason: str) -> str:
++    """Format the prior VALIDATING rejection for an IMPLEMENTING re-run.
++
++    Args:
++        reason: The rejection_reason recorded by the prior VALIDATING
++            session.
++
++    Returns:
++        Formatted markdown section.
++    """
++    return (
++        "\n\n## Returned from VALIDATING — not yet complete\n\n"
++        "A prior VALIDATING session rejected this task instead of "
++        "advancing it to FINALIZING. Reason given:\n\n"
++        f"> {reason}\n\n"
++        "Address this specifically before finishing this mode — "
++        "this is not a fresh start, it's a continuation of "
++        "unfinished work.\n"
++    )
++
++
+ def compute_gate_result(
+     task_data: dict[str, Any],
+     task_name: str,
+@@ -214,6 +252,17 @@ def compose_prompt(
+     if validation_results:
+         prompt += _format_validation_results(validation_results)
+ 
++    # Returning to IMPLEMENTING after a VALIDATING rejection — carry
++    # the reason forward so this session knows it's a continuation,
++    # not a fresh task.
++    if (
++        task_data.get("mode") == "IMPLEMENTING"
++        and task_data.get("rejection_reason")
++    ):
++        prompt += _format_rejection_context(
++            task_data["rejection_reason"],
++        )
++
+     return prompt
+ 
+ 
+diff --git a/tools/orch/foreman/tests/test_validating_reject_route_back.py b/tools/orch/foreman/tests/test_validating_reject_route_back.py
+new file mode 100644
+index 00000000..6908036b
+--- /dev/null
++++ b/tools/orch/foreman/tests/test_validating_reject_route_back.py
+@@ -0,0 +1,279 @@
++"""Tests for the structured VALIDATING-reject route-back to
++IMPLEMENTING, and the general gate-recheck-before-advance fix.
++
++Two related gaps in resume-mode resolution (`run_task` in
++engine.py), both stemming from the same root cause: a session
++entry for a mode means it was ATTEMPTED, not that its gate to the
++next mode actually passed.
++
++1. No route-back: when VALIDATING's own SDK session concludes the
++   implementation isn't actually done, it had no structured way to
++   say so — only free prose in `last_action`/`next_steps`, which
++   the resume logic doesn't (and shouldn't) parse to decide control
++   flow. A new `validation_verdict`/`rejection_reason` pair (set via
++   `dao task update`, same mechanism as `last_action`/`next_steps`)
++   gives it one.
++
++2. Skip-ahead: resume blindly advanced to `next_from_stored` on any
++   session entry, with no re-check that the gate to that next mode
++   actually passes. A task whose VALIDATING attempt failed its gate
++   to FINALIZING (checkboxes unmarked) would, on the very next
++   dispatch, resolve `current_mode = "FINALIZING"` directly and
++   attempt a real merge — skipping a phase that was never delivered.
++"""
++
++import asyncio
++from contextlib import contextmanager
++from pathlib import Path
++from typing import Any
++from unittest.mock import AsyncMock, MagicMock, patch
++
++from foreman.core.engine import run_task
++from foreman.core.models import ExecutionConfig, SessionRecord
++
++
++def _make_fake_sdk(record: SessionRecord) -> AsyncMock:
++    sdk = AsyncMock()
++    sdk.execute = AsyncMock(return_value=record)
++    sdk.is_connected = True
++    sdk.session_id = "fake-session"
++    sdk.send_pause = AsyncMock()
++    sdk.disconnect = AsyncMock()
++    return sdk
++
++
++@contextmanager
++def _resume_context(
++    *,
++    task_data: dict[str, Any],
++    workflow_modes: list[str],
++    gate_passed: bool = True,
++    executed_mode: str = "IMPLEMENTING",
++):
++    """Mock everything run_task needs except resume-mode resolution
++    (the code under test). The SDK session immediately errors out
++    right after mode resolution so the test only observes WHICH
++    mode was chosen to run, not a full mode execution."""
++    record = SessionRecord(
++        mode=executed_mode,
++        session_id="fake-session",
++        last_text="ok",
++    )
++    fake_sdk = _make_fake_sdk(record)
++    mock_cleanup = MagicMock(return_value=True)
++
++    def _next_mode(workflow: str, current: str) -> str | None:
++        idx = workflow_modes.index(current)
++        return (
++            workflow_modes[idx + 1]
++            if idx + 1 < len(workflow_modes)
++            else None
++        )
++
++    patches = {
++        "load_task_data": patch(
++            "foreman.core.engine.load_task_data",
++            return_value=task_data.copy(),
++        ),
++        "save_task_data": patch(
++            "foreman.core.engine.save_task_data",
++        ),
++        "get_worktree_path": patch(
++            "foreman.core.engine.get_worktree_path",
++            return_value=Path("/fake/wt"),
++        ),
++        "get_task_mode": patch(
++            "foreman.core.engine.get_task_mode",
++            return_value=task_data["mode"],
++        ),
++        "get_task_workflow": patch(
++            "foreman.core.engine.get_task_workflow",
++            return_value="self-implementation",
++        ),
++        "list_workflow_modes": patch(
++            "foreman.core.engine.list_workflow_modes",
++            return_value=workflow_modes,
++        ),
++        "get_next_mode": patch(
++            "foreman.core.engine.get_next_mode",
++            side_effect=_next_mode,
++        ),
++        "resolve_task_docs_dir": patch(
++            "foreman.core.engine.resolve_task_docs_dir",
++            return_value=Path("/fake/docs"),
++        ),
++        "resolve_plugins": patch(
++            "foreman.core.engine.resolve_plugins_for_mode",
++            return_value=[],
++        ),
++        "compile_plugins": patch(
++            "foreman.core.engine.compile_plugins_for_mode",
++            return_value=(None, []),
++        ),
++        "compose_prompt": patch(
++            "foreman.core.engine.compose_prompt",
++            return_value="# Prompt",
++        ),
++        "compute_gate_result": patch(
++            "foreman.core.engine.compute_gate_result",
++            return_value={"passed": True, "checks": []},
++        ),
++        "print_resume": patch(
++            "foreman.core.engine.print_task_resume_rich",
++        ),
++        "pre_hook_rebase": patch(
++            "foreman.core.engine.pre_hook_rebase",
++        ),
++        "pre_hook_validation": patch(
++            "foreman.core.engine.pre_hook_validation",
++            return_value={},
++        ),
++        "post_hook_dao": patch(
++            "foreman.core.engine.post_hook_dao_update",
++        ),
++        "post_hook_milestone": patch(
++            "foreman.core.engine.post_hook_milestone_update",
++        ),
++        "post_hook_push": patch(
++            "foreman.core.engine.post_hook_commit_and_push",
++            return_value="clean",
++        ),
++        "sdk_wrapper": patch(
++            "foreman.core.engine.SDKWrapper",
++            return_value=fake_sdk,
++        ),
++        "cleanup": patch(
++            "foreman.core.engine.cleanup_worktree",
++            mock_cleanup,
++        ),
++        # First call: resume-block gate re-check (code under test).
++        # Second call (if reached): post-mode gate check for the
++        # NEXT mode after this run's mode executes.
++        "do_gate_check": patch(
++            "foreman.core.engine.do_gate_check",
++            return_value={"passed": gate_passed, "checks": []},
++        ),
++        "create_emitter": patch(
++            "foreman.core.engine.create_emitter",
++            return_value=MagicMock(
++                active=False, emit=MagicMock(),
++            ),
++        ),
++        "do_transition": patch(
++            "foreman.core.engine.do_transition",
++            side_effect=lambda task_data, new_mode: {
++                **task_data, "mode": new_mode,
++            },
++        ),
++    }
++
++    entered = {}
++    try:
++        for name, p in patches.items():
++            entered[name] = p.__enter__()
++        yield entered
++    finally:
++        for p in reversed(list(patches.values())):
++            p.__exit__(None, None, None)
++
++
++class TestValidatingRejectRoutesBackToImplementing:
++    """Structured validation_verdict: rejected → IMPLEMENTING."""
++
++    def test_rejected_verdict_routes_to_implementing(self) -> None:
++        config = ExecutionConfig(task_name="regent-dogfood-validation")
++        task_data = {
++            "workflow": "self-implementation",
++            "mode": "VALIDATING",
++            "status": "in_progress",
++            "validation_verdict": "rejected",
++            "rejection_reason": "steps 5-13 of the dogfood run "
++            "were never actually executed",
++            "sessions": [{"mode": "VALIDATING", "session_id": "s1"}],
++        }
++
++        with _resume_context(
++            task_data=task_data,
++            workflow_modes=["IMPLEMENTING", "VALIDATING", "FINALIZING"],
++            executed_mode="IMPLEMENTING",
++        ) as ctx:
++            result = asyncio.run(run_task(config))
++
++        # Routed straight to IMPLEMENTING for THIS resume decision —
++        # not the (correct) later gate check for IMPLEMENTING's own
++        # next transition, which still happens normally.
++        assert result.modes_executed == ["IMPLEMENTING"]
++
++    def test_approved_verdict_advances_normally(self) -> None:
++        """Regression: an approved (or absent) verdict doesn't
++        trip the reject path — normal gate-checked advance."""
++        config = ExecutionConfig(task_name="regent-dogfood-validation")
++        task_data = {
++            "workflow": "self-implementation",
++            "mode": "VALIDATING",
++            "status": "in_progress",
++            "validation_verdict": "approved",
++            "sessions": [{"mode": "VALIDATING", "session_id": "s1"}],
++        }
++
++        with _resume_context(
++            task_data=task_data,
++            workflow_modes=["VALIDATING", "FINALIZING"],
++            gate_passed=True,
++            executed_mode="FINALIZING",
++        ) as ctx:
++            result = asyncio.run(run_task(config))
++
++        assert result.modes_executed == ["FINALIZING"]
++        ctx["do_gate_check"].assert_called()
++
++
++class TestGateRecheckBeforeAdvance:
++    """Resume must not skip a phase whose gate never actually
++    passed, even without an explicit rejected verdict (e.g. a gate
++    failure with no structured signal at all)."""
++
++    def test_failed_gate_reruns_stored_mode_instead_of_skipping(
++        self,
++    ) -> None:
++        config = ExecutionConfig(task_name="regent-dogfood-validation")
++        task_data = {
++            "workflow": "self-implementation",
++            "mode": "VALIDATING",
++            "status": "in_progress",
++            "sessions": [{"mode": "VALIDATING", "session_id": "s1"}],
++        }
++
++        with _resume_context(
++            task_data=task_data,
++            workflow_modes=["VALIDATING", "FINALIZING"],
++            gate_passed=False,
++            executed_mode="VALIDATING",
++        ) as ctx:
++            result = asyncio.run(run_task(config))
++
++        # Must re-run VALIDATING, NOT skip ahead into FINALIZING —
++        # the gate to FINALIZING was rechecked and failed.
++        assert result.modes_executed == ["VALIDATING"]
++        ctx["do_gate_check"].assert_called()
++
++    def test_passed_gate_advances_normally(self) -> None:
++        """Regression: unrelated intermediate-mode advance with a
++        genuinely passing gate is unaffected."""
++        config = ExecutionConfig(task_name="some-task")
++        task_data = {
++            "workflow": "self-implementation",
++            "mode": "EXPLORING",
++            "status": "in_progress",
++            "sessions": [{"mode": "EXPLORING", "session_id": "s1"}],
++        }
++
++        with _resume_context(
++            task_data=task_data,
++            workflow_modes=["EXPLORING", "RESEARCHING"],
++            gate_passed=True,
++            executed_mode="RESEARCHING",
++        ) as ctx:
++            result = asyncio.run(run_task(config))
++
++        assert result.modes_executed == ["RESEARCHING"]

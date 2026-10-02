@@ -1,0 +1,69 @@
+{
+ "id": "milestone-status-ssot",
+ "kind": "refactor",
+ "start": "8fd31a86d58536eeee7f774fc2c1a8c901a96d7d",
+ "ref": "93be3c744bd144b99cc9a77cdf8326dbc065a7ba",
+ "expected_src": [
+  "tools/orch/dao-cli/dao_cli/milestone.py",
+  "tools/orch/foreman/foreman/core/hooks.py",
+  "tools/orch/foreman/foreman/core/milestone.py"
+ ],
+ "ref_tests": [
+  "tools/orch/dao-cli/tests/dao_cli/test_milestone.py"
+ ],
+ "suites": [
+  "tools/orch/dao-cli",
+  "tools/orch/foreman"
+ ],
+ "ref_diff_lines": 233,
+ "start_failures": {
+  "tools/orch/dao-cli": [
+   "tests.dao_cli.test_task_publish.TestTaskPublish::test_ensures_milestone_before_issue"
+  ],
+  "tools/orch/foreman": [
+   "::tests.test_plugins",
+   "tests.test_engine.TestRunTaskDryRun::test_dry_run_returns_prompt",
+   "tests.test_prompt.TestComposePrompt::test_basic_prompt",
+   "tests.test_prompt.TestComposePrompt::test_includes_branch_and_issue",
+   "tests.test_prompt.TestComposePrompt::test_includes_current_state",
+   "tests.test_prompt.TestComposePrompt::test_includes_key_context",
+   "tests.test_prompt.TestComposePrompt::test_includes_resume_action",
+   "tests.test_prompt.TestComposePrompt::test_omits_none_fields"
+  ]
+ },
+ "ref_failures": {
+  "tools/orch/dao-cli": [
+   "tests.dao_cli.test_task_publish.TestTaskPublish::test_ensures_milestone_before_issue"
+  ],
+  "tools/orch/foreman": [
+   "::tests.test_plugins",
+   "tests.test_engine.TestRunTaskDryRun::test_dry_run_returns_prompt",
+   "tests.test_prompt.TestComposePrompt::test_basic_prompt",
+   "tests.test_prompt.TestComposePrompt::test_includes_branch_and_issue",
+   "tests.test_prompt.TestComposePrompt::test_includes_current_state",
+   "tests.test_prompt.TestComposePrompt::test_includes_key_context",
+   "tests.test_prompt.TestComposePrompt::test_includes_resume_action",
+   "tests.test_prompt.TestComposePrompt::test_omits_none_fields"
+  ]
+ },
+ "hidden_at_ref": {
+  "tools/orch/dao-cli": {
+   "passed": 39,
+   "failed": 0
+  },
+  "tools/orch/foreman": {
+   "passed": 0,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/orch/dao-cli": {
+   "passed": 38,
+   "failed": 1
+  },
+  "tools/orch/foreman": {
+   "passed": 0,
+   "failed": 0
+  }
+ }
+}

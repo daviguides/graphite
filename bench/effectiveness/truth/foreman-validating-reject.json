@@ -1,0 +1,120 @@
+{
+ "id": "foreman-validating-reject",
+ "kind": "feature",
+ "start": "8255e66c62abd8edb7edd17cdf3d8d362f126bb5",
+ "ref": "f6af34e43c1d58435b0ae275dd3ba9a36beb70e8",
+ "expected_src": [
+  "tools/orch/dao-cli/dao_cli/task.py",
+  "tools/orch/foreman/foreman/core/engine.py",
+  "tools/orch/foreman/foreman/core/hooks.py",
+  "tools/orch/foreman/foreman/core/prompt.py"
+ ],
+ "ref_tests": [
+  "tools/orch/foreman/tests/test_validating_reject_route_back.py"
+ ],
+ "suites": [
+  "tools/orch/dao-cli",
+  "tools/orch/foreman"
+ ],
+ "ref_diff_lines": 555,
+ "start_failures": {
+  "tools/orch/dao-cli": [
+   "tests.dao_cli.test_completer.TestMilestoneCompletions::test_lists_milestones",
+   "tests.dao_cli.test_completer.TestMilestoneCompletions::test_includes_goal_in_description",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_tasks_from_milestone",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_enriches_from_task_yaml",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_all_tasks_without_milestone",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_combines_milestones_and_standalone",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_standalone_shows_mode_and_summary",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_empty_when_no_standalone",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_standalone_fallback",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_with_milestone",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_scan_finds_milestone_task",
+   "tests.dao_cli.test_core_utils.TestResolveTaskDocsDir::test_returns_same_as_yaml_parent",
+   "tests.dao_cli.test_core_utils.TestResolveMilestoneYamlPath::test_returns_correct_path",
+   "tests.dao_cli.test_hook.TestCompleteCommands::test_complete_milestones",
+   "tests.dao_cli.test_hook.TestCompleteCommands::test_complete_tasks_with_milestone",
+   "tests.dao_cli.test_milestone.TestMilestoneCreate::test_creates_milestone_yaml",
+   "tests.dao_cli.test_milestone.TestMilestoneUpdate::test_adds_task",
+   "tests.dao_cli.test_milestone.TestMilestoneUpdate::test_adds_decision",
+   "tests.dao_cli.test_milestone.TestMilestoneStatus::test_json_output",
+   "tests.dao_cli.test_milestone.TestMilestoneStatus::test_md_output",
+   "tests.dao_cli.test_milestone.TestMilestoneStatusEnrichedMdCli::test_md_no_current_task_outside_worktree"
+  ],
+  "tools/orch/foreman": [
+   "tests.test_engine.TestRunTaskDryRun::test_dry_run_returns_prompt",
+   "tests.test_hooks_push.TestFinalizeCleanup::test_returns_true_when_all_succeed",
+   "tests.test_prompt.TestComposePrompt::test_basic_prompt",
+   "tests.test_prompt.TestComposePrompt::test_includes_branch_and_issue",
+   "tests.test_prompt.TestComposePrompt::test_includes_current_state",
+   "tests.test_prompt.TestComposePrompt::test_includes_key_context",
+   "tests.test_prompt.TestComposePrompt::test_includes_resume_action",
+   "tests.test_prompt.TestComposePrompt::test_omits_none_fields",
+   "tests.test_setup_task.TestExtractTaskMetadata::test_parses_sdk_json_response",
+   "tests.test_setup_task.TestExtractTaskMetadata::test_raises_on_empty_response",
+   "tests.test_setup_task.TestSetupTaskFlow::test_creates_task_yaml_with_key_context",
+   "tests.test_setup_task.TestSetupTaskFlow::test_dry_run_no_side_effects",
+   "tests.test_setup_task.TestSetupTaskFlow::test_normalizes_string_key_context"
+  ]
+ },
+ "ref_failures": {
+  "tools/orch/dao-cli": [
+   "tests.dao_cli.test_completer.TestMilestoneCompletions::test_lists_milestones",
+   "tests.dao_cli.test_completer.TestMilestoneCompletions::test_includes_goal_in_description",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_tasks_from_milestone",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_enriches_from_task_yaml",
+   "tests.dao_cli.test_completer.TestTaskCompletions::test_all_tasks_without_milestone",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_combines_milestones_and_standalone",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_standalone_shows_mode_and_summary",
+   "tests.dao_cli.test_completer.TestStartTargetCompletions::test_empty_when_no_standalone",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_standalone_fallback",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_with_milestone",
+   "tests.dao_cli.test_core_utils.TestResolveTaskYamlPath::test_scan_finds_milestone_task",
+   "tests.dao_cli.test_core_utils.TestResolveTaskDocsDir::test_returns_same_as_yaml_parent",
+   "tests.dao_cli.test_core_utils.TestResolveMilestoneYamlPath::test_returns_correct_path",
+   "tests.dao_cli.test_hook.TestCompleteCommands::test_complete_milestones",
+   "tests.dao_cli.test_hook.TestCompleteCommands::test_complete_tasks_with_milestone",
+   "tests.dao_cli.test_milestone.TestMilestoneCreate::test_creates_milestone_yaml",
+   "tests.dao_cli.test_milestone.TestMilestoneUpdate::test_adds_task",
+   "tests.dao_cli.test_milestone.TestMilestoneUpdate::test_adds_decision",
+   "tests.dao_cli.test_milestone.TestMilestoneStatus::test_json_output",
+   "tests.dao_cli.test_milestone.TestMilestoneStatus::test_md_output",
+   "tests.dao_cli.test_milestone.TestMilestoneStatusEnrichedMdCli::test_md_no_current_task_outside_worktree"
+  ],
+  "tools/orch/foreman": [
+   "tests.test_engine.TestRunTaskDryRun::test_dry_run_returns_prompt",
+   "tests.test_hooks_push.TestFinalizeCleanup::test_returns_true_when_all_succeed",
+   "tests.test_prompt.TestComposePrompt::test_basic_prompt",
+   "tests.test_prompt.TestComposePrompt::test_includes_branch_and_issue",
+   "tests.test_prompt.TestComposePrompt::test_includes_current_state",
+   "tests.test_prompt.TestComposePrompt::test_includes_key_context",
+   "tests.test_prompt.TestComposePrompt::test_includes_resume_action",
+   "tests.test_prompt.TestComposePrompt::test_omits_none_fields",
+   "tests.test_setup_task.TestExtractTaskMetadata::test_parses_sdk_json_response",
+   "tests.test_setup_task.TestExtractTaskMetadata::test_raises_on_empty_response",
+   "tests.test_setup_task.TestSetupTaskFlow::test_creates_task_yaml_with_key_context",
+   "tests.test_setup_task.TestSetupTaskFlow::test_dry_run_no_side_effects",
+   "tests.test_setup_task.TestSetupTaskFlow::test_normalizes_string_key_context"
+  ]
+ },
+ "hidden_at_ref": {
+  "tools/orch/dao-cli": {
+   "passed": 0,
+   "failed": 0
+  },
+  "tools/orch/foreman": {
+   "passed": 4,
+   "failed": 0
+  }
+ },
+ "hidden_at_start": {
+  "tools/orch/dao-cli": {
+   "passed": 0,
+   "failed": 0
+  },
+  "tools/orch/foreman": {
+   "passed": 0,
+   "failed": 4
+  }
+ }
+}
