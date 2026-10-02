@@ -9,7 +9,8 @@ use graphite_store::{confidence, Confidence, GraphStore, Outcome};
 use serde_json::{json, Value};
 
 use crate::answer::{
-    grep_output_bytes, rank, Answer, Budget, Item, LineFilter, NameVerdict, OutFormat, Target,
+    grep_output_bytes, grep_output_lines, rank, Answer, Budget, Item, LineFilter, NameVerdict,
+    OutFormat, Target,
 };
 use crate::engine::Engine;
 use crate::search::{display_path, Hit, SearchOutcome, SearchSpec};
@@ -743,8 +744,8 @@ pub fn build(
     // only when it searched more than one.
     let single_file = spec.paths.len() == 1 && Path::new(&spec.paths[0]).is_file();
     let raw_bytes = grep_output_bytes(&a, !single_file);
-    if a.budget.is_none() && !spec.all && spec.format == OutFormat::Model {
-        a.budget = Some(Budget::implicit(raw_bytes));
+    if !spec.all && spec.format == OutFormat::Model {
+        cap_to_grep_output(&mut a, raw_bytes);
     }
 
     let mut class_counts = serde_json::Map::new();
@@ -764,6 +765,33 @@ pub fn build(
         "names": a.names.iter().map(|n| json!({"name": n.name, "verdict": n.verdict})).collect::<Vec<_>>(),
     });
     Ok((a, stats))
+}
+
+/// Never cost more than the agent's own command: the plain output (the first N lines of it under
+/// `| head -N`) plus a bounded overhead. Binding cap → the default-budget escape hint.
+fn cap_to_grep_output(a: &mut Answer, grep_bytes: usize) {
+    let grep_lines = grep_output_lines(a);
+    // References only the graph found (aliased calls) are what the answer adds: room for them.
+    let graph_only: usize = a
+        .items
+        .iter()
+        .filter(|i| i.class == "graph_only")
+        .map(|i| crate::answer::item_line(i).len() + 1)
+        .sum();
+    let share = graph_only
+        + match a.budget.as_ref().and_then(|b| b.lines) {
+            Some(n) if grep_lines > 0 => grep_bytes * n.min(grep_lines) / grep_lines,
+            _ => grep_bytes,
+        };
+    let cap = Budget::implicit(share);
+    match &mut a.budget {
+        None => a.budget = Some(cap),
+        Some(b) if b.bytes.is_none_or(|x| x > cap.bytes.unwrap_or(usize::MAX)) => {
+            b.bytes = cap.bytes;
+            b.implicit = true;
+        }
+        Some(_) => {}
+    }
 }
 
 /// Model-format text + stats (the record is `build`'s first value).

@@ -40,19 +40,38 @@ pub struct Budget {
     pub implicit: bool,
 }
 
-/// What a default budget may add on top of the plain grep output: header line, verdict,
-/// per-line annotations and the footer.
-pub const DEFAULT_OVERHEAD: usize = 1024;
+/// Bounds of what a default budget may add on top of the plain grep output (header line,
+/// verdict, per-line annotations, footer): a quarter of that output, never under the header's
+/// own size, never over 1 KB.
+pub const OVERHEAD_MIN: usize = 384;
+pub const OVERHEAD_MAX: usize = 1024;
+
+/// Bytes an answer may add over a plain output of `grep_bytes`.
+pub fn overhead(grep_bytes: usize) -> usize {
+    (grep_bytes / 4).clamp(OVERHEAD_MIN, OVERHEAD_MAX)
+}
 
 impl Budget {
     /// The default budget for a search whose plain output is `grep_bytes` long.
     pub fn implicit(grep_bytes: usize) -> Self {
         Self {
-            bytes: Some(grep_bytes + DEFAULT_OVERHEAD),
+            bytes: Some(grep_bytes + overhead(grep_bytes)),
             implicit: true,
             ..Default::default()
         }
     }
+}
+
+/// Lines the agent's own command would have printed for these items (context and `--` included).
+pub fn grep_output_lines(a: &Answer) -> usize {
+    a.items
+        .iter()
+        .filter(|i| i.class != "graph_only")
+        .map(|it| {
+            let ctx = it.before.len() + it.after.len();
+            1 + ctx + usize::from(ctx > 0)
+        })
+        .sum()
 }
 
 /// Bytes the agent's own command would have printed for these items: `path:line:text` (no path
@@ -237,6 +256,11 @@ pub fn rank(class: &str, test: bool) -> u8 {
         ("other_identifier", _) => 13,
         _ => 14,
     }
+}
+
+/// Definitions and direct uses (prod or test): kept under any budget, folded per file if needed.
+fn is_direct(it: &Item) -> bool {
+    matches!(it.class.as_str(), "definition" | "call" | "graph_only")
 }
 
 fn is_priority(it: &Item) -> bool {
@@ -822,22 +846,16 @@ pub fn render_model(a: &Answer) -> String {
     // Budgeted: header first; then definitions and direct call sites (as many full lines as fit,
     // every other call site collapsed per file); then the rest by rank. The footer is recomputed
     // and chunks are dropped from the tail until the whole answer fits exactly.
-    let bytes = byte_cap.unwrap_or(usize::MAX);
+    // A default budget covers the body and footer: the header (the agent's own command echoed,
+    // the verdict, pipeline notices) is always there on top of it.
+    let bytes = byte_cap.map_or(usize::MAX, |b| if implicit { b + head.len() } else { b });
     let lines_max = line_cap.unwrap_or(usize::MAX);
     // The footer gets a share of a byte budget; facts degrade inside it (see `footer_line`).
     let allowance = byte_cap.map(|b| (b / 4).max(160));
     let more = implicit.then(|| whole_answer_hint(a));
-    let mut prio: Vec<&Item> = listable
-        .iter()
-        .copied()
-        .filter(|i| is_priority(i))
-        .collect();
+    let mut prio: Vec<&Item> = listable.iter().copied().filter(|i| is_direct(i)).collect();
     prio.sort_by_key(|i| i.class != "definition");
-    let rest: Vec<&Item> = listable
-        .iter()
-        .copied()
-        .filter(|i| !is_priority(i))
-        .collect();
+    let rest: Vec<&Item> = listable.iter().copied().filter(|i| !is_direct(i)).collect();
     let mut not_shown: BTreeMap<String, usize> = BTreeMap::new();
     let mut cut_paths: Vec<String> = Vec::new();
 
@@ -1136,6 +1154,16 @@ mod tests {
         assert!(human.contains("no test covers `f` ⚠") && model.contains("no test covers `f` ⚠"));
     }
 
+    /// Bytes after the header lines (what a default budget covers).
+    fn body_len(t: &str) -> usize {
+        let head: usize = t
+            .lines()
+            .take_while(|l| l.starts_with("# graphite:"))
+            .map(|l| l.len() + 1)
+            .sum();
+        t.len() - head
+    }
+
     /// Every definition and direct call site is in `t`, as a full line or in a collapsed one.
     fn assert_every_direct_site_kept(a: &Answer, t: &str) {
         for it in a
@@ -1161,7 +1189,7 @@ mod tests {
         a.budget = Some(Budget::implicit(grep));
         let t = render_model(&a);
         assert!(
-            t.len() <= grep + DEFAULT_OVERHEAD,
+            body_len(&t) <= grep + overhead(grep),
             "{} > {grep}+overhead",
             t.len()
         );
@@ -1201,6 +1229,34 @@ mod tests {
         assert_eq!(render_model(&b), render_model(&a));
     }
 
+    // kinhin: decision(ref="docs/foundation/interception.md#4-size-budget-never-byte-cut")
+    #[test]
+    fn overhead_is_a_quarter_of_the_grep_output_within_bounds() {
+        assert_eq!(overhead(0), OVERHEAD_MIN);
+        assert_eq!(overhead(1000), OVERHEAD_MIN);
+        assert_eq!(overhead(3000), 750);
+        assert_eq!(overhead(1_000_000), OVERHEAD_MAX);
+    }
+
+    // kinhin: decision(ref="docs/foundation/interception.md#4-size-budget-never-byte-cut")
+    #[test]
+    fn test_call_sites_are_folded_not_dropped() {
+        let mut a = answer(40);
+        for (i, it) in a
+            .items
+            .iter_mut()
+            .enumerate()
+            .filter(|(_, i)| i.class == "call")
+        {
+            it.test = i % 2 == 0;
+        }
+        let grep = grep_output_bytes(&a, true);
+        a.budget = Some(Budget::implicit(grep / 2));
+        let t = render_model(&a);
+        assert!(body_len(&t) <= grep / 2 + overhead(grep / 2), "{t}");
+        assert_every_direct_site_kept(&a, &t);
+    }
+
     #[test]
     fn grep_output_counts_context_and_single_file_shape() {
         let mut a = answer(0);
@@ -1215,6 +1271,7 @@ mod tests {
         // a.py:12:def f():\n a.py-13-    pass\n --\n
         assert_eq!(grep_output_bytes(&a, true), 17 + 17 + 3);
         assert_eq!(grep_output_bytes(&a, false), 12 + 12 + 3);
+        assert_eq!(grep_output_lines(&a), 3);
     }
 
     fn footer_of(t: &str) -> &str {

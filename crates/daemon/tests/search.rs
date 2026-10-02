@@ -123,8 +123,13 @@ fn default_budget_discloses_the_rest() {
         .map(|i| format!("notes.txt:{}:# needle {i}\n", i + 1).len())
         .sum();
     assert_eq!(grep_bytes, plain);
+    let head: usize = text
+        .lines()
+        .take_while(|l| l.starts_with("# graphite:"))
+        .map(|l| l.len() + 1)
+        .sum();
     assert!(
-        text.len() <= grep_bytes + graphite_daemon::answer::DEFAULT_OVERHEAD,
+        text.len() - head <= grep_bytes + graphite_daemon::answer::overhead(grep_bytes),
         "{}",
         text.len()
     );
@@ -141,6 +146,40 @@ fn default_budget_discloses_the_rest() {
         footer.contains("— to see them: grep -rn needle [0-9]+ . | head -c "),
         "{footer}"
     );
+}
+
+// kinhin: decision(ref="docs/foundation/interception.md#4-size-budget-never-byte-cut")
+#[test]
+fn a_line_budget_also_costs_at_most_those_grep_lines() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join(".git")).unwrap();
+    let body: String = (0..400).map(|i| format!("# needle {i}\n")).collect();
+    write(&root, "notes.txt", &body);
+    let engine = Engine::open(RepoPaths::new(&root)).unwrap();
+    engine.index_all().unwrap();
+    let mut s = spec(&root, "needle [0-9]+");
+    s.budget = Some(graphite_daemon::answer::Budget {
+        lines: Some(40),
+        source: "head -40".into(),
+        ..Default::default()
+    });
+    let res = search::run(&s, &root).unwrap();
+    let (text, stats) = judge::render(&engine, &s, &res, false).unwrap();
+    // A tenth of the plain grep output (`| head -40` of 400 lines), plus the bounded overhead,
+    // on top of the header.
+    let share = stats["raw_bytes"].as_u64().unwrap() as usize * 40 / 400;
+    let head: usize = text
+        .lines()
+        .take_while(|l| l.starts_with("# graphite:"))
+        .map(|l| l.len() + 1)
+        .sum();
+    let body = text.len() - head;
+    assert!(
+        body <= share + graphite_daemon::answer::overhead(share),
+        "{body}\n{text}"
+    );
+    assert!(text.lines().count() <= 40, "{text}");
 }
 
 // kinhin: decision(ref="docs/foundation/interception.md#2-the-answer-an-enriched-grep")
