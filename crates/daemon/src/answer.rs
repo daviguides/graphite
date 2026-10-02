@@ -202,10 +202,11 @@ pub struct Body {
     pub lines: Vec<(u32, String)>,
 }
 
-/// At most this many bodies per answer…
-pub const MAX_BODIES: usize = 2;
+/// Bodies are given only when the production hits fall in at most this many functions (more
+/// means the agent hasn't narrowed down yet)…
+pub const MAX_BODIES: usize = 6;
 /// …each at most this long (longer functions are left to the agent's own read)…
-pub const MAX_BODY_LINES: u32 = 80;
+pub const MAX_BODY_LINES: u32 = 60;
 /// …and together at most this many bytes.
 pub const MAX_BODY_BYTES: usize = 6000;
 

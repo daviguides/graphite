@@ -336,9 +336,12 @@ fn integrated_list_is_relevance_ordered_single_list() {
     // one header, one footer, everything else is a self-contained `path:line:` match line or a
     // `path-line-` body line (grep's context shape)
     let body: Vec<&str> = text.lines().filter(|l| !l.starts_with('#')).collect();
+    let context_line = |l: &str| {
+        l.split_once(".py-")
+            .is_some_and(|(_, r)| r.split('-').next().unwrap().parse::<u32>().is_ok())
+    };
     assert!(
-        body.iter()
-            .all(|l| l.contains(':') || l.starts_with("pkg/core.py-")),
+        body.iter().all(|l| l.contains(':') || context_line(l)),
         "{text}"
     );
     assert_eq!(
@@ -348,11 +351,19 @@ fn integrated_list_is_relevance_ordered_single_list() {
         2,
         "{text}"
     );
-    // The single definition's body, whole, in grep's context shape after the footer.
+    // Bodies after the footer, in grep's context shape: the definition first, then the
+    // production callers' functions.
+    let bodies: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("# graphite: body of"))
+        .collect();
     assert!(
-        text.ends_with("# graphite: body of resolve_owner (pkg/core.py:1-2), whole — no need to read it\npkg/core.py-1-def resolve_owner():\npkg/core.py-2-    return 1\n"),
+        bodies[0].starts_with("# graphite: body of resolve_owner (pkg/core.py:1-2)"),
         "{text}"
     );
+    assert!(text.contains("pkg/core.py-1-def resolve_owner():\npkg/core.py-2-    return 1\n"));
+    assert!(text.contains("# graphite: body of a (pkg/use.py:3-4)"), "{text}");
+    assert!(text.find("# no test covers").unwrap() < text.find("# graphite: body of").unwrap());
     assert!(text.lines().next().unwrap().contains("graph "), "{text}");
     // ranks never decrease
     let ranks: Vec<u8> = a

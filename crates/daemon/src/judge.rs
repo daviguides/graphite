@@ -796,9 +796,11 @@ fn cap_to_grep_output(a: &mut Answer, grep_bytes: usize) {
 }
 
 /// Functions whose whole source the agent is about to read: the definitions an identifier search
-/// found, or the one or two functions every production match of a pattern search falls in. None
-/// when the answer points at more functions than that (the agent hasn't chosen yet), when a body
-/// is long (the agent reads the part it needs), or when the agent filtered or listed files only.
+/// found and the functions its production call sites (or a pattern search's production matches)
+/// sit in. In pilot C2, 25 of 62 ranges the agent read next were mostly one such function, read
+/// after an answer whose hits fell in 2–43 functions. None when the hits fall in more than
+/// `MAX_BODIES` functions (the agent hasn't narrowed down yet); long functions are skipped (the
+/// agent reads the part it needs); the agent's own filters or `-l` turn bodies off.
 fn bodies(
     engine: &Engine,
     spec: &SearchSpec,
@@ -810,12 +812,13 @@ fn bodies(
         return Vec::new();
     }
     let wanted: &[&str] = match a.mode.as_str() {
-        "identifier" => &["definition"],
+        "identifier" => &["definition", "call", "graph_only"],
         "grouped" => &["match"],
         _ => return Vec::new(),
     };
     let mut syms: HashMap<String, Vec<Symbol>> = HashMap::new();
-    let mut picked: Vec<(String, Symbol)> = Vec::new();
+    // (path as shown, function, is a definition hit, hits inside it)
+    let mut picked: Vec<(String, Symbol, bool, usize)> = Vec::new();
     for it in a
         .items
         .iter()
@@ -834,30 +837,36 @@ fn bodies(
         let functions = in_file
             .iter()
             .filter(|s| matches!(s.kind, SymbolKind::Function | SymbolKind::Method));
-        let sym = if it.class == "definition" {
-            functions.filter(|s| s.start_line == it.line).min_by_key(|s| s.end_line)
+        let def = it.class == "definition";
+        let sym = if def {
+            functions
+                .filter(|s| s.start_line == it.line)
+                .min_by_key(|s| s.end_line)
         } else {
             functions
                 .filter(|s| s.start_line <= it.line && it.line <= s.end_line)
                 .min_by_key(|s| s.end_line - s.start_line)
         };
+        // Module-level hits (imports, constants) have no body to give.
         let Some(sym) = sym else {
-            // A match outside any function (module level): no single body to give.
-            if it.class == "match" {
-                return Vec::new();
-            }
             continue;
         };
-        if !picked.iter().any(|(_, p)| p.id == sym.id) {
-            picked.push((it.path.clone(), sym.clone()));
+        match picked.iter_mut().find(|p| p.1.id == sym.id) {
+            Some(p) => {
+                p.2 |= def;
+                p.3 += 1;
+            }
+            None => picked.push((it.path.clone(), sym.clone(), def, 1)),
         }
         if picked.len() > MAX_BODIES {
             return Vec::new();
         }
     }
+    // Definitions first, then the functions with the most hits.
+    picked.sort_by_key(|p| (!p.2, std::cmp::Reverse(p.3)));
     let mut out = Vec::new();
     let mut bytes = 0usize;
-    for (path, sym) in picked {
+    for (path, sym, _, _) in picked {
         if sym.end_line - sym.start_line + 1 > MAX_BODY_LINES {
             continue;
         }
