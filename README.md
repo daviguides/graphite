@@ -15,17 +15,16 @@ AI agents spend most of their time reading files to understand architecture befo
 
 ## Architecture
 
-```
-Source code ──► Tree-sitter ──► CozoDB (facts + rules, RocksDB)
-                                       │
-                                       ▼ derived
-                              In-memory adjacency (hot traversals)
-                                       │
-                              ONE DAEMON PER REPO
-                                       │ unix socket
-                    ┌──────────┬───────┴────────┬──────────┐
-                    CLI      MCP shim      Hooks       Runner bridge
-                  (Bash)     (stdio)    (grep/edit)    (socket)
+```mermaid
+graph TD
+    SC[Source code] --> TS[Tree-sitter]
+    TS --> COZO[CozoDB<br/>facts + Datalog rules, RocksDB]
+    COZO -->|derived| ADJ[In-memory adjacency<br/>hot traversals]
+    ADJ --> DAEMON[ONE DAEMON PER REPO<br/>unix socket]
+    DAEMON --> CLI[CLI<br/>Bash]
+    DAEMON --> MCP[MCP shim<br/>stdio]
+    DAEMON --> HOOKS[Hooks<br/>grep / edit]
+    DAEMON --> RUNNER[Runner<br/>bridge]
 ```
 
 **Hybrid engine** (decided after measured benchmark):

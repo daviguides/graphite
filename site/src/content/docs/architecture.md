@@ -24,18 +24,7 @@ CozoDB is the only thing written by the watcher. The in-memory adjacency is deri
 
 ## How it flows
 
-```
-Source code ──► Tree-sitter ──► CozoDB (facts + rules, RocksDB)
-                                       │
-                                       ▼ derived
-                              In-memory adjacency (hot traversals)
-                                       │
-                              ONE DAEMON PER REPO
-                                       │ unix socket
-                    ┌──────────┬───────┴────────┬──────────┐
-                    CLI      MCP shim      Hooks       Runner
-                  (Bash)     (stdio)    (grep/edit)    bridge
-```
+![Graphite architecture: source code flows through Tree-sitter into CozoDB, derives an in-memory adjacency, served by one daemon per repo to CLI, MCP shim, hooks and runner clients](/diagrams/architecture.svg)
 
 ## Daemon
 
