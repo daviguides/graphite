@@ -9,6 +9,10 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
   <div class="container">
     <h1>The graph that makes your<br><span class="accent">agent finish faster</span></h1>
     <p class="subtitle">Embedded code-graph engine for AI code assistants. One Rust daemon per repo extracts dependencies via Tree-sitter, serves blast radius with source inline. Your agent acts in turn 1, not turn 15.</p>
+    <div style="display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 20px;">
+      <img src={`${base}/favicon.svg`} alt="" width="36" height="36" />
+      <span style="font-family: var(--font-mono); font-size: 20px; font-weight: 700; color: var(--color-text-primary);">Graphite</span>
+    </div>
     <a href="https://github.com/daviguides/graphite" class="hero-cta">View on GitHub</a>
     <p class="hero-links">Rust &middot; Single binary &middot; CozoDB + in-memory adjacency &middot; <a href={`${base}/docs/architecture`}>Docs</a></p>
 
