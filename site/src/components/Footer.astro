@@ -1,13 +1,19 @@
 ---
 const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---
-<footer class="border-t border-border-dim py-8 text-center text-text-dim text-xs">
+<footer class="border-t border-border-dim py-12 text-center">
   <div class="max-w-7xl mx-auto px-4 md:px-6">
-    <div class="flex justify-center gap-8 mb-3 text-[0.8125rem]">
-      <a href="https://github.com/daviguides/graphite" class="text-text-secondary hover:text-accent no-underline">GitHub</a>
+    <div class="flex items-center justify-center gap-3 mb-4">
+      <img src={`${base}/favicon.svg`} alt="" width="28" height="28" />
+      <span class="font-mono text-sm font-bold text-text-primary">Graphite</span>
+    </div>
+    <p class="text-text-secondary text-sm mb-6">The graph that makes your agent finish faster.</p>
+    <a href="https://github.com/daviguides/graphite" class="inline-flex items-center gap-2 bg-accent text-ground font-semibold text-sm px-6 py-3 rounded-lg hover:opacity-90 no-underline transition-opacity">View on GitHub</a>
+    <div class="flex justify-center gap-8 mt-8 mb-4 text-[0.8125rem]">
       <a href={`${base}/docs/architecture`} class="text-text-secondary hover:text-accent no-underline">Documentation</a>
       <a href={`${base}/docs/benchmarks`} class="text-text-secondary hover:text-accent no-underline">Benchmarks</a>
+      <a href={`${base}/docs/quickstart`} class="text-text-secondary hover:text-accent no-underline">Quickstart</a>
     </div>
-    <p>Built by <a href="https://github.com/daviguides" class="text-text-secondary hover:text-text-primary no-underline">daviguides</a></p>
+    <p class="text-text-dim text-xs">Built by <a href="https://github.com/daviguides" class="text-text-secondary hover:text-text-primary no-underline">daviguides</a></p>
   </div>
 </footer>
