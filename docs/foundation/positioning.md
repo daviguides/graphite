@@ -26,7 +26,7 @@ Not "understand your codebase" — finish the task. Faster, with fewer mistakes,
 | Comparisons | Measured, specific. Wall-clock time, not adjectives. |
 | Claims | Always about agent execution time, not tool features. |
 
-**Tone**: engineering log, not marketing page. Confident because measured. Show the before/after in turns and seconds, not in feature lists.
+**Tone**: storytelling grounded in evidence. Lead with the pain the developer feels ("your agent reads 30 files before it acts"), then prove the solution with real numbers and transcripts. Confident because measured, compelling because narrated. Evidence without story is a paper nobody reads; story without evidence is hype nobody trusts.
 
 ## Use / Avoid
 
