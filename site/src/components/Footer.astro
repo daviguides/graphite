@@ -1,7 +1,13 @@
 ---
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---
 <footer class="border-t border-border-dim py-8 text-center text-text-dim text-xs">
   <div class="max-w-7xl mx-auto px-4 md:px-6">
+    <div class="flex justify-center gap-8 mb-3 text-[0.8125rem]">
+      <a href="https://github.com/daviguides/graphite" class="text-text-secondary hover:text-accent no-underline">GitHub</a>
+      <a href={`${base}/docs/architecture`} class="text-text-secondary hover:text-accent no-underline">Documentation</a>
+      <a href={`${base}/docs/benchmarks`} class="text-text-secondary hover:text-accent no-underline">Benchmarks</a>
+    </div>
     <p>Built by <a href="https://github.com/daviguides" class="text-text-secondary hover:text-text-primary no-underline">daviguides</a></p>
   </div>
 </footer>

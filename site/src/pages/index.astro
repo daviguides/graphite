@@ -1,11 +1,350 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
+import '../styles/landing.css';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
 ---
 <BaseLayout title="The graph that makes your agent finish faster">
-  <div set:html={await Astro.slots.render('default')} />
+
+<div class="hero">
+  <div class="container">
+    <h1>The graph that makes your<br><span class="accent">agent finish faster</span></h1>
+    <p class="subtitle">Embedded code-graph engine for AI code assistants. One Rust daemon per repo extracts dependencies via Tree-sitter, serves blast radius with source inline. Your agent acts in turn 1, not turn 15.</p>
+    <a href="https://github.com/daviguides/graphite" class="hero-cta">View on GitHub</a>
+    <p class="hero-links">Rust &middot; Single binary &middot; CozoDB + in-memory adjacency &middot; <a href={`${base}/docs/architecture`}>Docs</a></p>
+
+    <div class="graph-hero" aria-hidden="true">
+      <svg viewBox="0 0 700 320" xmlns="http://www.w3.org/2000/svg">
+        <line class="edge" x1="350" y1="80" x2="220" y2="160"/>
+        <line class="edge" x1="350" y1="80" x2="480" y2="160"/>
+        <line class="edge" x1="220" y1="160" x2="140" y2="240"/>
+        <line class="edge" x1="220" y1="160" x2="280" y2="240"/>
+        <line class="edge" x1="480" y1="160" x2="420" y2="240"/>
+        <line class="edge" x1="480" y1="160" x2="560" y2="240"/>
+        <line class="edge" x1="140" y1="240" x2="80" y2="300"/>
+        <line class="edge" x1="280" y1="240" x2="340" y2="300"/>
+        <line class="edge" x1="560" y1="240" x2="620" y2="300"/>
+        <line class="edge-blast" x1="350" y1="80" x2="220" y2="160" id="b1"/>
+        <line class="edge-blast" x1="350" y1="80" x2="480" y2="160" id="b2"/>
+        <line class="edge-blast" x1="220" y1="160" x2="140" y2="240" id="b3"/>
+        <line class="edge-blast" x1="220" y1="160" x2="280" y2="240" id="b4"/>
+        <line class="edge-blast" x1="480" y1="160" x2="420" y2="240" id="b5"/>
+        <line class="edge-blast" x1="480" y1="160" x2="560" y2="240" id="b6"/>
+        <circle class="node-active" cx="350" cy="80" r="8" id="n0"/>
+        <circle class="node-blast" cx="220" cy="160" r="6" id="n1"/>
+        <circle class="node-blast" cx="480" cy="160" r="6" id="n2"/>
+        <circle class="node-blast" cx="140" cy="240" r="6" id="n3"/>
+        <circle class="node-blast" cx="280" cy="240" r="6" id="n4"/>
+        <circle class="node-blast" cx="420" cy="240" r="6" id="n5"/>
+        <circle class="node-blast" cx="560" cy="240" r="6" id="n6"/>
+        <circle class="node" cx="80" cy="300" r="5"/>
+        <circle class="node" cx="340" cy="300" r="5"/>
+        <circle class="node" cx="620" cy="300" r="5"/>
+        <text class="node-label" x="350" y="65" text-anchor="middle">changed_fn()</text>
+        <text class="node-label" x="220" y="150" text-anchor="middle" style="opacity:0" id="l1">caller_a</text>
+        <text class="node-label" x="480" y="150" text-anchor="middle" style="opacity:0" id="l2">caller_b</text>
+        <text class="node-label" x="140" y="232" text-anchor="middle" style="opacity:0" id="l3">handler</text>
+        <text class="node-label" x="280" y="232" text-anchor="middle" style="opacity:0" id="l4">test_a</text>
+        <text class="node-label" x="420" y="232" text-anchor="middle" style="opacity:0" id="l5">service</text>
+        <text class="node-label" x="560" y="232" text-anchor="middle" style="opacity:0" id="l6">api_route</text>
+      </svg>
+    </div>
+  </div>
+</div>
+
+<div class="landing-section fade-in">
+  <div class="container">
+    <p class="section-label">The problem</p>
+    <h2 class="section-title">Your agent explores when it should be acting</h2>
+    <p class="section-desc">AI code assistants spend most of their turns reading files to understand architecture. Each file read is a tool call, each tool call is latency, each wrong file is a wasted turn.</p>
+    <div class="pain-grid">
+      <div class="pain-card">
+        <div class="number">30</div>
+        <h3>Files read per task</h3>
+        <p>The agent reads dozens of files to map dependencies before making a single edit. Most of those reads discover things the graph already knows.</p>
+      </div>
+      <div class="pain-card">
+        <div class="number">60%</div>
+        <h3>Time spent exploring</h3>
+        <p>Exploration dominates execution. The agent's first edit often comes after 5+ tool calls of pure discovery. Every session re-discovers the same codebase.</p>
+      </div>
+      <div class="pain-card">
+        <div class="number">0</div>
+        <h3>Persistent context</h3>
+        <p>Understanding dies with the session. No queryable graph, no dependency index, no blast radius. Every new conversation starts blind.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="landing-section fade-in">
+  <div class="container">
+    <p class="section-label">Measured</p>
+    <h2 class="section-title">Real tasks, real repo, real numbers</h2>
+    <p class="section-desc">Effectiveness benchmark on a production multi-language repo (Python, TypeScript, Rust; 50K+ lines). Same model, same tasks, multiple repeats. Interception hooks deliver graph context transparently.</p>
+    <div class="evidence-grid">
+      <div class="evidence-card without">
+        <h4>Without Graphite</h4>
+        <div class="metric"><div class="value">14.5</div><div class="label">median turns per task</div></div>
+        <div class="metric"><div class="value">89.8s</div><div class="label">median wall-clock</div></div>
+        <div class="metric"><div class="value">6.5</div><div class="label">files read per task</div></div>
+        <div class="metric"><div class="value">7.0</div><div class="label">calls before first edit</div></div>
+      </div>
+      <div class="evidence-card with-graphite">
+        <h4>With Graphite</h4>
+        <div class="metric"><div class="value" style="color: var(--color-accent)">11.5</div><div class="label">median turns per task</div></div>
+        <div class="metric"><div class="value" style="color: var(--color-accent)">68.7s</div><div class="label">median wall-clock</div></div>
+        <div class="metric"><div class="value" style="color: var(--color-accent)">3.0</div><div class="label">files read per task</div></div>
+        <div class="metric"><div class="value" style="color: var(--color-accent)">5.0</div><div class="label">calls before first edit</div></div>
+      </div>
+    </div>
+    <p class="evidence-note">Pilot C2 vs A2 on issue-form tasks (hard/medium difficulty, cross-module). Hook latency median 27ms. Full methodology in <a href={`${base}/docs/benchmarks`}>benchmarks</a>.</p>
+  </div>
+</div>
+
+<div class="landing-section fade-in">
+  <div class="container">
+    <p class="section-label">How it works</p>
+    <h2 class="section-title">Extract, persist, serve</h2>
+    <p class="section-desc">One daemon per repo keeps the graph always hot. Every agent session queries the same indexed graph through a local socket.</p>
+    <div class="mechanism-steps">
+      <div class="step">
+        <div class="step-number">01</div>
+        <h3>Extract</h3>
+        <p>Tree-sitter parses source code into symbols, calls, imports, inheritance. Python today; Rust and TypeScript next. Deterministic IDs, edge confidence tags.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">02</div>
+        <h3>Persist</h3>
+        <p>CozoDB (embedded Datalog) holds facts and derives confidence by rule. In-memory adjacency serves traversals in microseconds. Atomic per-file updates; reads never wait for writes.</p>
+      </div>
+      <div class="step">
+        <div class="step-number">03</div>
+        <h3>Serve</h3>
+        <p>CLI, MCP shim, and interception hooks deliver blast radius, source inline, covering tests. The agent gets the answer and the code in one call.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="landing-section fade-in">
+  <div class="container">
+    <p class="section-label">In practice</p>
+    <h2 class="section-title">What the agent sees</h2>
+    <p class="section-desc">Interception hooks rewrite the agent's grep into an enriched graph-aware answer. The agent gets structural context without changing its habits.</p>
+    <div class="cli-demo">
+      <div class="cli-header">
+        <span class="cli-dot"></span><span class="cli-dot"></span><span class="cli-dot"></span>
+        <span class="cli-title">terminal</span>
+      </div>
+      <div class="cli-body">
+<span class="cli-prompt">$</span> <span class="cli-highlight">graphite blast rebase_onto_base</span>
+
+<span class="cli-comment"># Blast radius: 4 symbols in 3 files (depth 3, trusted edges only)</span>
+<span class="cli-comment"># Confidence: 3 EXTRACTED, 1 INFERRED (resolved)</span>
+
+<span class="cli-confidence-e">EXTRACTED</span>  rover/git_ops.py:142    <span class="cli-highlight">rebase_onto_base()</span>
+  <span class="cli-output">  def rebase_onto_base(repo_path, base_branch, ...):</span>
+  <span class="cli-output">      """Rebase current worktree onto the given base branch."""</span>
+
+<span class="cli-confidence-e">EXTRACTED</span>  rover/git_ops.py:198    <span class="cli-highlight">rebase_main_onto_current()</span>
+  <span class="cli-output">  calls rebase_onto_base (depth 1)</span>
+
+<span class="cli-confidence-e">EXTRACTED</span>  runner/engine.py:87     <span class="cli-highlight">pre_hook()</span>
+  <span class="cli-output">  calls rebase_main_onto_current (depth 2)</span>
+
+<span class="cli-confidence-i">INFERRED</span>   runner/engine.py:245    <span class="cli-highlight">execute_task()</span>
+  <span class="cli-output">  calls pre_hook (depth 3, resolved via call chain)</span>
+
+<span class="cli-comment"># Covering tests: tests/test_rover.py, tests/test_engine.py</span>
+<span class="cli-comment"># graph_rev: 1847  stale: false  latency: 0.4ms</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="landing-section fade-in">
+  <div class="container">
+    <p class="section-label">Honesty built in</p>
+    <h2 class="section-title">The agent knows when to trust the graph</h2>
+    <p class="section-desc">Every edge carries a confidence tier and provenance. Responses disclose when a result is a lower bound and why. Assertiveness from transparency, not from hiding uncertainty.</p>
+    <div class="confidence-demo">
+      <div class="confidence-tier extracted">
+        <div class="tier-label">EXTRACTED</div>
+        <div class="tier-line"></div>
+        <p>Parsed directly from source. Static call, explicit import, type annotation. The graph saw it in the AST.</p>
+      </div>
+      <div class="confidence-tier inferred">
+        <div class="tier-label">INFERRED</div>
+        <div class="tier-line"></div>
+        <p>Derived by rule. Duck-typed call resolved to a likely target. Marked with provenance so the agent can verify if needed.</p>
+      </div>
+      <div class="confidence-tier ambiguous">
+        <div class="tier-label">AMBIGUOUS</div>
+        <div class="tier-line"></div>
+        <p>Multiple possible targets. Dynamic dispatch, reflection, generated code. The graph says "I don't know which one" instead of guessing.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="landing-section fade-in">
+  <div class="container">
+    <p class="section-label">Under the hood</p>
+    <h2 class="section-title">Hybrid engine, measured</h2>
+    <div class="arch-diagram">
+      <svg viewBox="0 0 720 440" xmlns="http://www.w3.org/2000/svg" aria-label="Graphite architecture diagram">
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-auto">
+            <path d="M 0 0 L 10 5 L 0 10" fill="none" stroke="var(--color-accent)" stroke-width="1.5"/>
+          </marker>
+          <marker id="arr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-auto">
+            <path d="M 0 0 L 10 5 L 0 10" fill="none" stroke="var(--color-text-dim)" stroke-width="1.5"/>
+          </marker>
+        </defs>
+        <rect x="140" y="24" width="140" height="42" rx="6" fill="var(--color-surface)" stroke="var(--color-text-dim)" stroke-width="1"/>
+        <text x="210" y="50" text-anchor="middle" font-family="var(--font-mono)" font-size="13" fill="var(--color-text-primary)">Source code</text>
+        <line x1="280" y1="45" x2="330" y2="45" stroke="var(--color-accent)" stroke-width="1.5" marker-end="url(#arr)"/>
+        <rect x="340" y="24" width="140" height="42" rx="6" fill="var(--color-surface)" stroke="var(--color-accent)" stroke-width="1"/>
+        <text x="410" y="50" text-anchor="middle" font-family="var(--font-mono)" font-size="13" fill="var(--color-accent)">Tree-sitter</text>
+        <line x1="410" y1="66" x2="410" y2="100" stroke="var(--color-accent)" stroke-width="1.5" marker-end="url(#arr)"/>
+        <rect x="210" y="110" width="400" height="56" rx="6" fill="var(--color-surface)" stroke="var(--color-accent)" stroke-width="1"/>
+        <text x="410" y="134" text-anchor="middle" font-family="var(--font-mono)" font-size="14" fill="var(--color-accent)">CozoDB</text>
+        <text x="410" y="153" text-anchor="middle" font-family="var(--font-sans)" font-size="11" fill="var(--color-text-secondary)">facts + Datalog rules, RocksDB</text>
+        <line x1="410" y1="166" x2="410" y2="200" stroke="var(--color-accent)" stroke-width="1.5" marker-end="url(#arr)"/>
+        <text x="435" y="190" font-family="var(--font-sans)" font-size="10" fill="var(--color-text-secondary)">derived</text>
+        <rect x="210" y="210" width="400" height="42" rx="6" fill="var(--color-surface)" stroke="var(--color-text-dim)" stroke-width="1"/>
+        <text x="410" y="236" text-anchor="middle" font-family="var(--font-mono)" font-size="13" fill="var(--color-text-primary)">In-memory adjacency</text>
+        <line x1="410" y1="252" x2="410" y2="286" stroke="var(--color-text-dim)" stroke-width="1.5" marker-end="url(#arr-m)"/>
+        <rect x="160" y="296" width="500" height="48" rx="8" fill="var(--color-surface-alt)" stroke="var(--color-accent)" stroke-width="1.5" stroke-dasharray="6 3"/>
+        <text x="340" y="325" font-family="var(--font-mono)" font-size="13" font-weight="700" fill="var(--color-accent)">ONE DAEMON PER REPO</text>
+        <text x="560" y="325" font-family="var(--font-sans)" font-size="11" fill="var(--color-text-secondary)">unix socket</text>
+        <line x1="260" y1="344" x2="260" y2="376" stroke="var(--color-text-dim)" stroke-width="1" marker-end="url(#arr-m)"/>
+        <line x1="360" y1="344" x2="360" y2="376" stroke="var(--color-text-dim)" stroke-width="1" marker-end="url(#arr-m)"/>
+        <line x1="460" y1="344" x2="460" y2="376" stroke="var(--color-text-dim)" stroke-width="1" marker-end="url(#arr-m)"/>
+        <line x1="560" y1="344" x2="560" y2="376" stroke="var(--color-text-dim)" stroke-width="1" marker-end="url(#arr-m)"/>
+        <rect x="215" y="386" width="90" height="44" rx="6" fill="var(--color-surface)" stroke="var(--color-text-dim)" stroke-width="1"/>
+        <text x="260" y="405" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--color-text-primary)">CLI</text>
+        <text x="260" y="421" text-anchor="middle" font-family="var(--font-sans)" font-size="10" fill="var(--color-text-secondary)">Bash</text>
+        <rect x="315" y="386" width="90" height="44" rx="6" fill="var(--color-surface)" stroke="var(--color-text-dim)" stroke-width="1"/>
+        <text x="360" y="405" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--color-text-primary)">MCP shim</text>
+        <text x="360" y="421" text-anchor="middle" font-family="var(--font-sans)" font-size="10" fill="var(--color-text-secondary)">stdio</text>
+        <rect x="415" y="386" width="90" height="44" rx="6" fill="var(--color-surface)" stroke="var(--color-text-dim)" stroke-width="1"/>
+        <text x="460" y="405" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--color-text-primary)">Hooks</text>
+        <text x="460" y="421" text-anchor="middle" font-family="var(--font-sans)" font-size="10" fill="var(--color-text-secondary)">grep / edit</text>
+        <rect x="515" y="386" width="90" height="44" rx="6" fill="var(--color-surface)" stroke="var(--color-text-dim)" stroke-width="1"/>
+        <text x="560" y="405" text-anchor="middle" font-family="var(--font-mono)" font-size="12" fill="var(--color-text-primary)">Runner</text>
+        <text x="560" y="421" text-anchor="middle" font-family="var(--font-sans)" font-size="10" fill="var(--color-text-secondary)">bridge</text>
+      </svg>
+    </div>
+    <div class="arch-features">
+      <div class="arch-feature">
+        <h4>Always-hot graph</h4>
+        <p>File watcher indexes eagerly. Queries hit an already-indexed graph. At most a short freshness barrier, never a rebuild.</p>
+        <div class="perf">mtime check + BLAKE3 per file</div>
+      </div>
+      <div class="arch-feature">
+        <h4>Microsecond traversals</h4>
+        <p>In-memory adjacency serves blast radius in plain Rust BFS. CozoDB handles facts, rules, and search.</p>
+        <div class="perf">19-80 µs on worst real hub</div>
+      </div>
+      <div class="arch-feature">
+        <h4>Source inline</h4>
+        <p>Responses return verbatim source with line numbers alongside graph context. One call = dependency context + actual code.</p>
+        <div class="perf">Zero follow-up file reads</div>
+      </div>
+      <div class="arch-feature">
+        <h4>Single binary</h4>
+        <p>Tree-sitter grammars, CozoDB, daemon, clients, file watcher. One Rust executable. No runtime, no npm, no venv.</p>
+        <div class="perf">~7K lines of Rust</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="landing-section fade-in">
+  <div class="container">
+    <p class="section-label">Landscape</p>
+    <h2 class="section-title">Different priorities, different architecture</h2>
+    <p class="section-desc">Competing tools optimize for ease of adoption. Graphite optimizes for agent execution speed. Background watcher, source inline, consolidated queries, runner integration.</p>
+    <div style="overflow-x: auto;">
+      <table class="landscape-table">
+        <thead><tr><th>Tool</th><th>Language</th><th>Storage</th><th>Speed focus</th><th>Stars</th></tr></thead>
+        <tbody>
+          <tr><td>Graphify</td><td>Python</td><td>NetworkX</td><td>Token reduction</td><td class="stars">120K+</td></tr>
+          <tr><td>CodeGraph</td><td>TS + Rust</td><td>SQLite + FTS5</td><td>Tool call reduction</td><td class="stars">71K+</td></tr>
+          <tr><td>GitNexus</td><td>TypeScript</td><td>KuzuDB</td><td>Community clustering</td><td class="stars">47K+</td></tr>
+          <tr><td>codebase-memory</td><td>C</td><td>Knowledge graph</td><td>Sub-ms queries</td><td class="stars">44K+</td></tr>
+          <tr><td>Graft</td><td>TypeScript</td><td>JSON + markdown</td><td>Pre-query freshness</td><td class="stars">9K+</td></tr>
+          <tr class="graphite"><td style="color: var(--color-accent)">Graphite</td><td>Rust</td><td>CozoDB (Datalog)</td><td>Always-hot, source inline, zero exploration</td><td class="stars">-</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="landing-section fade-in getting-started">
+  <div class="container">
+    <p class="section-label">Get started</p>
+    <h2 class="section-title">Three commands</h2>
+    <div class="cli-demo">
+      <div class="cli-header">
+        <span class="cli-dot"></span><span class="cli-dot"></span><span class="cli-dot"></span>
+        <span class="cli-title">terminal</span>
+      </div>
+      <div class="cli-body">
+<span class="cli-comment"># Build from source</span>
+<span class="cli-prompt">$</span> <span class="cli-highlight">cargo build --release</span>
+
+<span class="cli-comment"># Start the daemon (indexes your repo immediately)</span>
+<span class="cli-prompt">$</span> <span class="cli-highlight">./target/release/graphite-cli daemon</span>
+
+<span class="cli-comment"># See what your current diff will break</span>
+<span class="cli-prompt">$</span> <span class="cli-highlight">./target/release/graphite-cli diff-impact</span>
+      </div>
+    </div>
+  </div>
+</div>
+
 </BaseLayout>
 
 <script>
-  // For now, redirect to the static landing page
-  // Will be replaced with Astro-native landing when ready
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+}, { threshold: 0.1 });
+document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+
+(function animateGraph() {
+  const blastEdges = ['b1','b2','b3','b4','b5','b6'];
+  const blastNodes = ['n1','n2','n3','n4','n5','n6'];
+  const labels = ['l1','l2','l3','l4','l5','l6'];
+  const delays = [0, 0, 400, 400, 400, 400];
+  function pulse() {
+    blastEdges.forEach((id, i) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      setTimeout(() => { el.style.transition = 'opacity 0.4s ease-out'; el.style.opacity = '1'; }, delays[i]);
+      setTimeout(() => { el.style.transition = 'opacity 0.8s ease-in'; el.style.opacity = '0'; }, delays[i] + 2000);
+    });
+    blastNodes.forEach((id, i) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      setTimeout(() => { el.style.transition = 'opacity 0.4s ease-out'; el.style.opacity = '0.8'; }, delays[i]);
+      setTimeout(() => { el.style.transition = 'opacity 0.8s ease-in'; el.style.opacity = '0'; }, delays[i] + 2000);
+    });
+    labels.forEach((id, i) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      setTimeout(() => { el.style.transition = 'opacity 0.4s ease-out'; el.style.opacity = '1'; }, delays[i]);
+      setTimeout(() => { el.style.transition = 'opacity 0.8s ease-in'; el.style.opacity = '0'; }, delays[i] + 2000);
+    });
+  }
+  if (window.matchMedia('(prefers-reduced-motion: no-preference)').matches) {
+    pulse();
+    setInterval(pulse, 4000);
+  } else {
+    blastEdges.forEach(id => { const el = document.getElementById(id); if (el) el.style.opacity = '1'; });
+    blastNodes.forEach(id => { const el = document.getElementById(id); if (el) el.style.opacity = '0.8'; });
+    labels.forEach(id => { const el = document.getElementById(id); if (el) el.style.opacity = '1'; });
+  }
+})();
 </script>

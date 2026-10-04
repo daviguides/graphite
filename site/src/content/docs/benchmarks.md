@@ -7,7 +7,7 @@ Real measurements on real code. No synthetic demos, no cherry-picked examples.
 
 ## Effectiveness bench
 
-Measured on Continuum (Python, 50K+ lines). Same model (Sonnet), same tasks, multiple repeats per arm. Tasks are real bug fixes and features from project history, written as issue-form prompts without file paths or function names.
+Measured on a production multi-language repo (Python, TypeScript, Rust; 50K+ lines). Same model (Sonnet), same tasks, multiple repeats per arm. Tasks are real bug fixes and features from project history, written as issue-form prompts without file paths or function names.
 
 ### Arms
 

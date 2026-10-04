@@ -49,7 +49,7 @@ graph TD
 
 ~6,900 lines of Rust across 6 crates. Compiles clean, single binary.
 
-### Bench Results (pilots on real Continuum tasks)
+### Bench Results (pilots on real multi-language repo tasks)
 
 - **Pilot A** (no Graphite): baseline
 - **Pilot B** (CLI + prompt line): turns ratio 1.05, wall-clock 0.88, but agent often didn't use Graphite or grepped after a complete answer
