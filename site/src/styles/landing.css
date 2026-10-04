@@ -272,13 +272,10 @@
 .getting-started .cli-demo { max-width: 680px; }
 
 @media (prefers-reduced-motion: no-preference) {
-  .fade-in {
+  .js-ready .fade-in {
     opacity: 0;
     transform: translateY(20px);
     transition: opacity 0.5s ease-out, transform 0.5s ease-out;
   }
-  .fade-in.visible { opacity: 1; transform: translateY(0); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .fade-in { opacity: 1; transform: none; }
+  .js-ready .fade-in.visible { opacity: 1; transform: translateY(0); }
 }
