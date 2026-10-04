@@ -36,7 +36,7 @@
 .hero h1 .accent { color: var(--color-accent); }
 
 .hero .subtitle {
-  font-size: clamp(18px, 2.5vw, 22px);
+  font-size: clamp(16px, 2vw, 18px);
   color: var(--color-text-secondary);
   max-width: 640px;
   margin: 0 auto 48px;
