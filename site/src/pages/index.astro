@@ -140,8 +140,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
         <span class="cli-dot"></span><span class="cli-dot"></span><span class="cli-dot"></span>
         <span class="cli-title">terminal</span>
       </div>
-      <div class="cli-body">
-<span class="cli-prompt">$</span> <span class="cli-highlight">graphite blast rebase_onto_base</span>
+      <pre class="cli-body" is:raw><span class="cli-prompt">$</span> <span class="cli-highlight">graphite blast rebase_onto_base</span>
 
 <span class="cli-comment"># Blast radius: 4 symbols in 3 files (depth 3, trusted edges only)</span>
 <span class="cli-comment"># Confidence: 3 EXTRACTED, 1 INFERRED (resolved)</span>
@@ -160,8 +159,7 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
   <span class="cli-output">  calls pre_hook (depth 3, resolved via call chain)</span>
 
 <span class="cli-comment"># Covering tests: tests/test_rover.py, tests/test_engine.py</span>
-<span class="cli-comment"># graph_rev: 1847  stale: false  latency: 0.4ms</span>
-      </div>
+<span class="cli-comment"># graph_rev: 1847  stale: false  latency: 0.4ms</span></pre>
     </div>
   </div>
 </div>
@@ -295,16 +293,14 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, '');
         <span class="cli-dot"></span><span class="cli-dot"></span><span class="cli-dot"></span>
         <span class="cli-title">terminal</span>
       </div>
-      <div class="cli-body">
-<span class="cli-comment"># Build from source</span>
+      <pre class="cli-body" is:raw><span class="cli-comment"># Build from source</span>
 <span class="cli-prompt">$</span> <span class="cli-highlight">cargo build --release</span>
 
 <span class="cli-comment"># Start the daemon (indexes your repo immediately)</span>
 <span class="cli-prompt">$</span> <span class="cli-highlight">./target/release/graphite-cli daemon</span>
 
 <span class="cli-comment"># See what your current diff will break</span>
-<span class="cli-prompt">$</span> <span class="cli-highlight">./target/release/graphite-cli diff-impact</span>
-      </div>
+<span class="cli-prompt">$</span> <span class="cli-highlight">./target/release/graphite-cli diff-impact</span></pre>
     </div>
   </div>
 </div>
