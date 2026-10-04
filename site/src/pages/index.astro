@@ -1,0 +1,11 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+<BaseLayout title="The graph that makes your agent finish faster">
+  <div set:html={await Astro.slots.render('default')} />
+</BaseLayout>
+
+<script>
+  // For now, redirect to the static landing page
+  // Will be replaced with Astro-native landing when ready
+</script>
