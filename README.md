@@ -28,7 +28,7 @@ Source code ──► Tree-sitter ──► CozoDB (facts + rules, RocksDB)
                   (Bash)     (stdio)    (grep/edit)    (socket)
 ```
 
-**Hybrid engine** (decided after [measured benchmark](references/studies/storage-benchmark.md)):
+**Hybrid engine** (decided after measured benchmark):
 - CozoDB (`mnestic` fork, RocksDB) holds facts, derives confidence by rule, handles search
 - In-memory adjacency serves traversals: 19–80 µs on worst real hubs vs 3–13 ms through DB
 - Background crate runs community detection and PageRank off the query path
@@ -87,17 +87,8 @@ crates/
   query/          blast, diff, lookup, traverse, compress, envelope
   store/          CozoDB store + adjacency
 bench/            Storage benchmark + effectiveness benchmark
-docs/foundation/  Vision, architecture, features, positioning
-references/       Studies, landscape analysis
+site/             Landing page and public documentation
 ```
-
-## Docs
-
-- [Vision](docs/foundation/vision.md) — what, why, optimization targets
-- [Architecture](docs/foundation/architecture.md) — hybrid engine, daemon design, module map
-- [Features & Roadmap](docs/foundation/features.md) — v1–v8 roadmap, every feature placed and sourced
-- [Positioning](docs/foundation/positioning.md) — landscape comparison, differentiators
-- [Interception](docs/foundation/interception.md) — hook design, enriched grep, steering strategy
 
 ## Optimization Targets
 
