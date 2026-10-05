@@ -38,6 +38,8 @@ Hook latency: 27ms median. Zero silent-stale answers observed.
 
 Wall-clock improved on every task. Turns improved on 3 of 5.
 
+Correctness: 10/10 without Graphite, 9/10 with. The one failure changed a function in place and never ran the test suite; its only Graphite call looked up two names that are not symbols and got nothing back. A blast query on the function it changed lists the caller it missed and the covering tests, two of which the change broke. Zero failures were caused by a Graphite answer.
+
 ### Adoption
 
 Arm B (CLI available but not intercepted) showed the agent often didn't use Graphite, or grepped after receiving a complete answer. Arm C (interception hooks) closes this gap: the agent gets graph context transparently through its existing `grep`/`find` commands.

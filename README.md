@@ -41,19 +41,20 @@ graph TD
 | Python extractor (Tree-sitter) | Implemented |
 | CozoDB store + in-memory adjacency | Implemented |
 | Daemon (watcher, freshness barrier, socket server) | Implemented |
-| CLI (`diff-impact`, `blast`, `context`, `search`, `grep`) | Implemented |
-| Enriched grep + interception hooks | Implemented |
-| Effectiveness bench (pilots A, B, C run) | Active |
+| CLI (`init`, `lookup`, `blast`, `diff-impact`, `hooks`) | Implemented |
+| Enriched grep + interception hooks (`graphite-hook`) | Implemented |
+| Effectiveness bench (pilots A, B, C, C2 run) | Active |
 | Rust / TypeScript extractors | v1.1 |
 | MCP shim, runner integration | v1.1–v1.2 |
 
-~6,900 lines of Rust across 6 crates. Compiles clean, single binary.
+~17,800 lines of Rust across 7 crates. Clippy clean, two binaries (`graphite`, `graphite-hook`).
 
 ### Bench Results (pilots on real multi-language repo tasks)
 
 - **Pilot A** (no Graphite): baseline
 - **Pilot B** (CLI + prompt line): turns ratio 1.05, wall-clock 0.88, but agent often didn't use Graphite or grepped after a complete answer
 - **Pilot C** (interception hooks + enriched grep): closes the adoption gap, hooks deliver answers where the agent already is
+- **Pilot C2** (issue-form tasks, no file or function named; default answer budget, more shell shapes intercepted): turns ratio 0.83, wall-clock 0.86 against a fresh baseline. Files read 6.5 to 3.0. One failure in 10 runs, where the agent never ran the test suite; zero failures caused by a Graphite answer
 
 Full analysis in [`bench/effectiveness/`](bench/effectiveness/).
 
@@ -64,17 +65,17 @@ For a detailed comparison with other code-graph tools (Graphify, CodeGraph, Graf
 ```bash
 cargo build --release
 
-# Start daemon for current repo
-./target/release/graphite-cli daemon
+# Start the daemon for the current repo and index it
+./target/release/graphite init
 
 # Blast radius of a symbol
-./target/release/graphite-cli blast my_function
+./target/release/graphite blast my_function
 
 # Impact of current diff
-./target/release/graphite-cli diff-impact
+./target/release/graphite diff-impact
 
-# Install interception hooks (Claude Code)
-./target/release/graphite-cli hooks install
+# Install interception hooks (Claude Code; needs graphite-hook on PATH)
+./target/release/graphite hooks install
 ```
 
 ## Project Structure
@@ -84,10 +85,11 @@ crates/
   cli/            CLI entry point
   daemon/         Per-repo daemon (watcher, socket, freshness, queries)
   extract-python/ Python Tree-sitter extractor
+  hooks/          graphite-hook: PreToolUse/PostToolUse interception
   model/          Symbol, Edge, SymbolKind, Confidence types
   query/          blast, diff, lookup, traverse, compress, envelope
   store/          CozoDB store + adjacency
-bench/            Storage benchmark + effectiveness benchmark
+bench/            Storage, effectiveness and interception-replay benchmarks
 site/             Landing page and public documentation
 ```
 
