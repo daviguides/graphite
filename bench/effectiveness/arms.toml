@@ -48,11 +48,12 @@ requires = ["graphite"]
 
 [arms.C]
 name = "graphite-text+hooks"
-# B2 plus interception hooks (feat/interception): PreToolUse on Bash routes
-# grep/cat/find the graph can answer through `graphite-hook run`; post hooks
-# enrich native Grep/Read and nudge edits. Installed into the task worktree's
-# project .claude/settings.json and restored on teardown. Binaries from
-# `./build_interception.sh` (GRAPHITE_BIN / GRAPHITE_HOOK_BIN), never main's target/.
+# B2 plus interception hooks: PreToolUse on Bash routes grep/cat/find the
+# graph can answer through `graphite-hook run`; post hooks enrich native
+# Grep/Read and nudge edits. Installed into the task worktree's project
+# .claude/settings.json and restored on teardown. Binaries: main's
+# target/release (GRAPHITE_BIN / GRAPHITE_HOOK_BIN); `./build_interception.sh <ref>`
+# rebuilds the binaries of an earlier pilot.
 setup = ["{graphite} init --repo {tree}", "{graphite_hook} install --repo {tree}"]
 teardown = ["{graphite_hook} uninstall --repo {tree}", "{graphite} daemon stop --repo {tree}"]
 prompt_suffix = """
