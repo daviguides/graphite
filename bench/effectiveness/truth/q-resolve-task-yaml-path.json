@@ -21,7 +21,9 @@
   "tools/orch/runner/runner/core/sync.py"
  ],
  "test_callers": [
-  "tools/orch/dao-cli/tests/dao_cli/test_core_utils.py",
+  "tools/orch/dao-cli/tests/dao_cli/test_core_utils.py"
+ ],
+ "mentioned_only": [
   "tools/orch/marshal/tests/test_dispatch.py"
  ]
 }

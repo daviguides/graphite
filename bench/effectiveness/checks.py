@@ -221,7 +221,8 @@ def check_question(task, truth: dict, final_text: str) -> dict:
                 listed.append(line.lstrip("./"))
     listed = sorted(set(listed))
     truth_set = set(truth["callers"])
-    acceptable = truth_set | set(truth.get("defined_in", [])) | set(truth.get("test_callers", []))
+    acceptable = (truth_set | set(truth.get("defined_in", [])) | set(truth.get("test_callers", []))
+                  | set(truth.get("mentioned_only", [])))
     hit = truth_set & set(listed)
     recall = len(hit) / len(truth_set) if truth_set else 1.0
     precision = len([f for f in listed if f in acceptable]) / len(listed) if listed else 0.0

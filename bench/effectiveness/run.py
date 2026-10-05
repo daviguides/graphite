@@ -126,6 +126,20 @@ AGENT_STOP_SUBTYPES = {"success", "error_max_turns", "error_max_budget_usd"}
 
 
 
+def new_files(truth: dict) -> set[str]:
+    """Files the reference diff creates (`new file mode`)."""
+    diff = TRUTH / f"{truth.get('id', '')}.diff"
+    if not diff.exists():
+        return set()
+    out, path = set(), None
+    for line in diff.read_text(errors="replace").splitlines():
+        if line.startswith("diff --git "):
+            path = line.split(" b/", 1)[1] if " b/" in line else None
+        elif line.startswith("new file mode") and path:
+            out.add(path)
+    return out
+
+
 def attribute(record: dict, truth: dict, is_question: bool) -> dict | None:
     """Graphite arms (B, B2, C): did Graphite cause the failure?
 
@@ -146,6 +160,9 @@ def attribute(record: dict, truth: dict, is_question: bool) -> dict | None:
     if record.get("success"):
         return {"class": "graphite_used_success"}
     truth_files = set(truth["callers"] if is_question else truth.get("expected_src", []))
+    # A file the reference creates did not exist at the start commit: no
+    # graph answer could have named it.
+    truth_files -= new_files(truth)
     covered_by_agent = set(record.get("answer_files" if is_question else "files_edited") or [])
     missed = truth_files - covered_by_agent
     omitted = sorted(missed - set(record.get("graphite_paths") or []))

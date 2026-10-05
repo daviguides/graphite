@@ -8,8 +8,10 @@ Question tasks: the non-test files that call the symbol at the pinned commit.
 Usage: python3 build_truth.py [task-id ...] [--no-suites]
 """
 
+import io
 import re
 import sys
+import tokenize
 
 from common import (MIRROR, TRUTH, WORK, add_worktree, changed_files, dump_json,
                     ensure_mirror, git, load_tasks, remove_worktree, resolve_start,
@@ -25,20 +27,39 @@ def _suite_or_die(tree, suite: str, label: str) -> dict:
     return r
 
 
+def calls_in_code(source: str, symbol: str) -> bool:
+    """True if `symbol(` occurs as code: a NAME token followed by `(`, not
+    inside a comment, docstring or string. Unparsable files fall back to
+    the textual match."""
+    try:
+        toks = [t for t in tokenize.generate_tokens(io.StringIO(source).readline)
+                if t.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.INDENT,
+                                  tokenize.DEDENT, tokenize.COMMENT)]
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        return f"{symbol}(" in source
+    return any(a.type == tokenize.NAME and a.string == symbol and b.string == "("
+               for a, b in zip(toks, toks[1:]))
+
+
 def question_truth(task, sha: str) -> dict:
+    """Callers = files that call the symbol in code. Files that only name it
+    in a comment, docstring or string are kept apart as `mentioned_only`:
+    not required for recall, not spurious for precision."""
     pattern = f"{task.symbol}("
     out = git("grep", "-n", "-F", pattern, sha, "--", "*.py", check=False)
-    callers: set[str] = set()
+    candidates: set[str] = set()
     defs: set[str] = set()
     for line in out.splitlines():
         _, path, _, text = line.split(":", 3)
         if re.match(rf"\s*(async\s+)?def\s+{re.escape(task.symbol)}\(", text):
             defs.add(path)
             continue
-        callers.add(path)
+        candidates.add(path)
+    callers = {p for p in candidates if calls_in_code(git("show", f"{sha}:{p}"), task.symbol)}
     src, tests = split_src_tests(sorted(callers))
     return {"id": task.id, "kind": "question", "sha": sha, "symbol": task.symbol,
-            "defined_in": sorted(defs), "callers": src, "test_callers": tests}
+            "defined_in": sorted(defs), "callers": src, "test_callers": tests,
+            "mentioned_only": sorted(candidates - callers)}
 
 
 def code_truth(task, start: str, ref: str, with_suites: bool) -> dict:

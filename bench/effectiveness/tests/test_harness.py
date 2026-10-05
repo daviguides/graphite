@@ -571,3 +571,46 @@ def test_no_new_failures_skips_the_rerun(tmp_path):
     def boom(tree, suite):
         raise AssertionError("must not rerun")
     assert checks.confirm_new_failures(tmp_path, "s", set(), set(), runner=boom) == ([], [])
+
+
+# Full run 2026-10-04: q-find-project-dir failed 6/6 in both arms at recall
+# 0.885 — three of the 26 "callers" only named find_project_dir() in a
+# comment or docstring (pipeline.py:125, dispatch.py:177, paths.py:17), so
+# no correct answer could reach recall 0.9.
+def test_question_truth_counts_code_calls_not_mentions():
+    import build_truth
+    src = '''"""Uses `find_project_dir()` from dao."""
+# find_project_dir() maps a source dir
+x = "find_project_dir(start)"
+'''
+    assert not build_truth.calls_in_code(src, "find_project_dir")
+    assert build_truth.calls_in_code("from p import find_project_dir\nd = find_project_dir()\n",
+                                     "find_project_dir")
+    assert build_truth.calls_in_code("d = mod.find_project_dir (x)\n", "find_project_dir")
+
+
+def test_question_truth_find_project_dir_excludes_comment_mentions():
+    truth = json.loads((common.TRUTH / "q-find-project-dir.json").read_text())
+    assert "tools/orch/regent/regent/core/pipeline.py" in truth["mentioned_only"]
+    assert "tools/orch/regent/regent/core/pipeline.py" not in truth["callers"]
+    assert "tools/orch/runner/runner/core/initiative_run.py" in truth["callers"]
+
+
+def test_listing_a_mentioned_only_file_is_not_spurious():
+    truth = {"callers": ["a.py"], "defined_in": ["d.py"], "test_callers": [], "mentioned_only": ["m.py"]}
+    task = common.load_tasks()["q-find-project-dir"]
+    r = checks.check_question(task, truth, "AFFECTED:\n- a.py\n- m.py\n")
+    assert r["success"] and r["spurious"] == [] and r["precision"] == 1.0
+
+
+# Full run 2026-10-04: runner-durable-attempts C rep 0 was flagged as a
+# Graphite miss for runner/core/attempts.py, a file the reference creates.
+def test_file_created_by_reference_is_never_a_graphite_omission():
+    truth = json.loads((common.TRUTH / "runner-durable-attempts.json").read_text())
+    assert "tools/orch/runner/runner/core/attempts.py" in run.new_files(truth)
+    rec = {"arm": "C", "outcome": "fail", "success": False, "graphite_calls": 0,
+           "graphite_hook_answers": 3, "graphite_paths": ["tools/orch/runner/runner/core/engine.py"],
+           "files_edited": ["tools/orch/runner/runner/core/engine.py",
+                            "tools/orch/runner/runner/core/hooks.py"]}
+    att = run.attribute(rec, truth, False)
+    assert att["class"] == "failure_despite_graphite"

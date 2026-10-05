@@ -1,6 +1,10 @@
-"""Re-run the success checks of recorded code runs after a harness fix.
+"""Re-run the success checks of recorded runs after a harness fix.
 
 Usage: python3 rescore.py results/<label>.jsonl RUN_ID [RUN_ID ...] [--judge-model opus]
+       python3 rescore.py results/<label>.jsonl --questions
+
+Question runs are re-scored from their recorded answer against the current
+truth (no tree, no judge); `--questions` re-scores every question run.
 
 Rebuilds each run's tree at the task's start commit, applies its recorded
 agent.diff, runs check_code again (suites, hidden tests, judge) and rewrites
@@ -12,7 +16,7 @@ import json
 import sys
 from datetime import UTC, datetime
 
-from checks import check_code
+from checks import check_code, check_question
 from common import RESULTS, TRUTH, WORK, add_worktree, git, load_json, load_tasks, remove_worktree, uv_sync
 from run import attribute
 
@@ -20,10 +24,27 @@ CHECK_KEYS = ("outcome", "success", "regression_ok", "regression", "hidden_pass_
               "coverage", "judge", "harness_errors")
 
 
+QUESTION_KEYS = ("answer_files", "missed", "spurious", "recall", "precision", "success", "outcome")
+
+
+def rescore_question(record: dict, task, truth: dict) -> dict:
+    before = {k: record.get(k) for k in QUESTION_KEYS if k in record}
+    record.update(check_question(task, truth, record.get("final_text", "")))
+    if record.get("arm") != "A":
+        record["attribution"] = attribute(record, truth, True)
+    record["rescored_from"] = before
+    record["rescored_at"] = datetime.now(UTC).isoformat()
+    return record
+
+
 def rescore(record: dict, judge_model: str) -> dict:
     task = load_tasks()[record["task"]]
     truth = load_json(TRUTH / f"{task.id}.json")
     out_dir = RESULTS / "runs" / record["run_id"]
+    if task.is_question:
+        record = rescore_question(record, task, truth)
+        (out_dir / "record.json").write_text(json.dumps(record, indent=1))
+        return record
     diff = (out_dir / "agent.diff").read_text()
     tree = WORK / "rescore" / record["run_id"]
     add_worktree(truth["start"], tree)
@@ -53,13 +74,16 @@ def main() -> None:
         judge_model = args[i + 1]
         args = args[:i] + args[i + 2:]
     path, ids = args[0], set(args[1:])
+    questions = "--questions" in ids
+    ids.discard("--questions")
+    question_ids = {t for t, task in load_tasks().items() if task.is_question}
     lines = []
     with open(path) as fh:
         for line in fh:
             if not line.strip():
                 continue
             r = json.loads(line)
-            if r["run_id"] in ids:
+            if r["run_id"] in ids or (questions and r["task"] in question_ids):
                 r = rescore(r, judge_model)
                 print(f"[{r['run_id']}] outcome={r['outcome']} was={r['rescored_from'].get('outcome')}")
             lines.append(json.dumps(r))
