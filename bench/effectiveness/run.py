@@ -116,6 +116,7 @@ def hook_answers(path: Path) -> list[dict]:
 def attribute(record: dict, truth: dict, is_question: bool) -> dict | None:
     """Graphite arms (B, B2, C): did Graphite cause the failure?
 
+    Used = at least one call or hook answer returned a path.
     graphite_caused_failure = the agent used Graphite, failed, and some
     ground-truth file it did not touch/list was absent from every Graphite
     answer it got — a candidate Graphite correctness miss (needs review:
@@ -125,6 +126,10 @@ def attribute(record: dict, truth: dict, is_question: bool) -> dict | None:
         return None
     if not record.get("graphite_calls") and not record.get("graphite_hook_answers"):
         return {"class": "graphite_not_used"}
+    if not record.get("graphite_paths"):
+        # Calls that returned no paths (NOT FOUND, names that aren't symbols)
+        # gave the agent nothing to act on: not used, never a Graphite miss.
+        return {"class": "graphite_not_used", "reason": "no paths returned"}
     if record.get("success"):
         return {"class": "graphite_used_success"}
     truth_files = set(truth["callers"] if is_question else truth.get("expected_src", []))

@@ -208,7 +208,7 @@ def test_arm_b_setup_and_teardown_on_a_task_worktree(monkeypatch):
 
 def test_attribution_classes():
     truth = {"expected_src": ["a.py", "b.py"]}
-    base = {"arm": "B", "outcome": "fail", "success": False, "graphite_calls": 2}
+    base = {"arm": "B", "outcome": "fail", "success": False, "graphite_calls": 2, "graphite_paths": ["c.py"]}
     assert run.attribute({**base, "graphite_calls": 0}, truth, False)["class"] == "graphite_not_used"
     assert run.attribute({**base, "outcome": "success", "success": True}, truth, False)["class"] == "graphite_used_success"
     caused = run.attribute({**base, "files_edited": ["a.py"], "graphite_paths": ["a.py"]}, truth, False)
@@ -217,6 +217,18 @@ def test_attribution_classes():
     assert despite["class"] == "failure_despite_graphite"
     assert run.attribute({**base, "arm": "A"}, truth, False) is None
     assert run.attribute({**base, "outcome": "harness_error"}, truth, False) is None
+
+
+def test_calls_that_returned_no_paths_are_not_a_graphite_miss():
+    # pilot-issue-C2 refinement-stays-finished rep 0: one call, `graphite lookup pause;
+    # graphite lookup EGEST`, both NOT FOUND, 0 hook answers; the agent then missed
+    # regent/core/pipeline.py, which `blast refiner_egest_done` lists first.
+    rec = {"arm": "C", "outcome": "fail", "success": False, "graphite_calls": 1,
+           "graphite_hook_answers": 0, "graphite_paths": [],
+           "files_edited": ["refiner/reconcile.py"]}
+    truth = {"expected_src": ["refiner/reconcile.py", "regent/core/pipeline.py"]}
+    assert run.attribute(rec, truth, False) == {"class": "graphite_not_used",
+                                                "reason": "no paths returned"}
 
 
 def test_graphite_calls_parsed_from_stream(tmp_path):
