@@ -44,20 +44,14 @@ Harness errors (excluded from every metric): 1 — pilot-issue-A2-owner-publish-
 ## Arm C Graphite use and attribution
 
 - runs that got a complete Graphite answer: 5; of those still searched (grep/find/Grep/Glob) afterwards: 1 (median searches after: 0)
-- graphite_not_used: 0
+- graphite_not_used: 1
 - graphite_used_success: 9
 - failure_despite_graphite: 0
-- graphite_caused_failure: 1
+- graphite_caused_failure: 0
 - hooks (10 runs): median graph answers 9.5, enrich 0.0, fallbacks 0.0, re-asks after complete 3
 - hook answer bytes: median 9636.0 vs raw grep 7176.0; hook latency median 226.0 ms
 - overlap inside one compound command (segments of `a; b`, `&&`, `||`): median duplicated path:line keys 0.0, bytes 0.0 (total 1141 B; 3 commands)
 - overlap across calls (same session, ≤10 s): median duplicated keys 0.0 of 50.5, bytes 0.0 (total 4137 B over 10 runs)
-
-Graphite correctness misses (candidate — review each):
-
-| run | task | omitted file(s) |
-|---|---|---|
-| pilot-issue-C2-refinement-stays-finished-C-0-638573 | refinement-stays-finished | tools/orch/regent/regent/core/pipeline.py |
 
 
 ## Per-task deltas (C vs A)
