@@ -10,6 +10,10 @@ Go (v1.0 exit criteria, features.md): with Graphite (arm B) vs baseline
   * zero silent-stale Graphite answers
 Per-task medians are taken over repeats first, then the median of per-task
 ratios B/A is reported (robust to a few long tasks dominating).
+
+Turns are model round trips (distinct assistant messages). Claude Code's
+`num_turns` counts tool results + 1, so parallel tool calls in one response
+inflate it; it is reported as "tool turns" for reference.
 """
 
 import json
@@ -57,6 +61,11 @@ def fmt(x, nd=1):
     return "–" if x is None else (f"{x:.{nd}f}" if isinstance(x, float) else str(x))
 
 
+def turns(r: dict):
+    """Model round trips; records from before they were recorded fall back to num_turns."""
+    return r.get("round_trips") or r.get("num_turns")
+
+
 def per_task(rows):
     g = defaultdict(list)
     for r in rows:
@@ -68,8 +77,9 @@ def per_task(rows):
             "n": len(rs),
             "kind": rs[0]["kind"],
             "difficulty": rs[0]["difficulty"],
-            "turns": med([r.get("num_turns") for r in rs]),
-            "turns_range": spread([r.get("num_turns") for r in rs]),
+            "turns": med([turns(r) for r in rs]),
+            "turns_range": spread([turns(r) for r in rs]),
+            "tool_turns": med([r.get("num_turns") for r in rs]),
             "wall": med([r.get("wall_s") for r in rs]),
             "wall_range": spread([r.get("wall_s") for r in rs]),
             "graphite_calls": med([r.get("graphite_calls") for r in rs]) if rs[0]["arm"] != "A" else None,
@@ -125,6 +135,7 @@ def verdict(stats) -> tuple[str, list[str]]:
                 - st.mean([stats[(t, "A")]["success_rate"] or 0 for t in ts]))
 
     tr, wr, sd = med_ratio("turns")(paired), med_ratio("wall")(paired), succ_diff(paired)
+    ttr = med_ratio("tool_turns")(paired) if all("tool_turns" in stats[(t, "A")] for t in paired) else None
     tr_ci, wr_ci, sd_ci = (bootstrap(paired, med_ratio("turns")), bootstrap(paired, med_ratio("wall")),
                            bootstrap(paired, succ_diff))
     stale = sum(stats[(t, TREAT)]["stale"] for t in paired)
@@ -133,6 +144,7 @@ def verdict(stats) -> tuple[str, list[str]]:
         f"- paired tasks: {len(paired)} · bootstrap {BOOT} resamples of tasks, 95% CI",
         f"- turns ratio {TREAT}/A: {fmt(tr, 2)} [CI {fmt(tr_ci[0], 2)}–{fmt(tr_ci[1], 2)}] "
         f"(need point <= {target:.2f} and CI upper <= 1.00)",
+        f"- tool turns (num_turns = tool calls + 1) ratio {TREAT}/A, reference only: {fmt(ttr, 2)}",
         f"- wall-clock ratio {TREAT}/A: {fmt(wr, 2)} [CI {fmt(wr_ci[0], 2)}–{fmt(wr_ci[1], 2)}] "
         f"(need point <= {target:.2f} and CI upper <= 1.00)",
         f"- success rate {TREAT}−A: {fmt(sd * 100, 1)} pts [CI {fmt(sd_ci[0] * 100 if sd_ci[0] is not None else None, 1)}"
@@ -210,7 +222,8 @@ def render(all_rows) -> str:
         succ = [r.get("success") for r in rs if r.get("success") is not None]
         out += [f"## Arm {arm} totals", "",
                 f"- runs {len(rs)}, success {sum(1 for s in succ if s)}/{len(succ)}",
-                f"- median turns {fmt(med([r.get('num_turns') for r in rs]))}, "
+                f"- median turns {fmt(med([turns(r) for r in rs]))} "
+                f"(tool turns {fmt(med([r.get('num_turns') for r in rs]))}), "
                 f"median wall {fmt(med([r.get('wall_s') for r in rs]))} s",
                 f"- median files read {fmt(med([r.get('n_files_read') for r in rs]))} "
                 f"(Read tool {fmt(med([r.get('n_files_read_tool') for r in rs]))}, "

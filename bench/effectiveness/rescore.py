@@ -2,6 +2,10 @@
 
 Usage: python3 rescore.py results/<label>.jsonl RUN_ID [RUN_ID ...] [--judge-model opus]
        python3 rescore.py results/<label>.jsonl --questions
+       python3 rescore.py results/<label>.jsonl --turns
+
+`--turns` re-reads every run's stream for the turn counts (round trips,
+num_turns over all result events, duration) without re-checking anything.
 
 Question runs are re-scored from their recorded answer against the current
 truth (no tree, no judge); `--questions` re-scores every question run.
@@ -19,6 +23,7 @@ from datetime import UTC, datetime
 from checks import check_code, check_question
 from common import RESULTS, TRUTH, WORK, add_worktree, git, load_json, load_tasks, remove_worktree, uv_sync
 from run import attribute
+from stream import parse_stream
 
 CHECK_KEYS = ("outcome", "success", "regression_ok", "regression", "hidden_pass_rate",
               "coverage", "judge", "harness_errors")
@@ -66,6 +71,18 @@ def rescore(record: dict, judge_model: str) -> dict:
     return record
 
 
+TURN_KEYS = ("num_turns", "round_trips", "result_events", "duration_ms")
+
+
+def recount_turns(record: dict) -> dict:
+    parsed = parse_stream(RESULTS / "runs" / record["run_id"] / "stream.jsonl")
+    before = {k: record.get(k) for k in TURN_KEYS}
+    record.update({k: parsed[k] for k in TURN_KEYS})
+    if before["num_turns"] != record["num_turns"]:
+        record["turns_recounted_from"] = before
+    return record
+
+
 def main() -> None:
     args = sys.argv[1:]
     judge_model = "opus"
@@ -75,7 +92,9 @@ def main() -> None:
         args = args[:i] + args[i + 2:]
     path, ids = args[0], set(args[1:])
     questions = "--questions" in ids
+    turns = "--turns" in ids
     ids.discard("--questions")
+    ids.discard("--turns")
     question_ids = {t for t, task in load_tasks().items() if task.is_question}
     lines = []
     with open(path) as fh:
@@ -83,6 +102,8 @@ def main() -> None:
             if not line.strip():
                 continue
             r = json.loads(line)
+            if turns and (RESULTS / "runs" / r["run_id"] / "stream.jsonl").exists():
+                r = recount_turns(r)
             if r["run_id"] in ids or (questions and r["task"] in question_ids):
                 r = rescore(r, judge_model)
                 print(f"[{r['run_id']}] outcome={r['outcome']} was={r['rescored_from'].get('outcome')}")

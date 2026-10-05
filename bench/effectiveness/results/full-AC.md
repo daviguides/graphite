@@ -6,7 +6,8 @@ Harness errors (excluded from every metric): 0
 ## Verdict: NO-GO
 
 - paired tasks: 27 · bootstrap 5000 resamples of tasks, 95% CI
-- turns ratio C/A: 0.90 [CI 0.82–1.00] (need point <= 0.80 and CI upper <= 1.00)
+- turns ratio C/A: 0.82 [CI 0.77–0.92] (need point <= 0.80 and CI upper <= 1.00)
+- tool turns (num_turns = tool calls + 1) ratio C/A, reference only: 0.89
 - wall-clock ratio C/A: 0.95 [CI 0.81–1.13] (need point <= 0.80 and CI upper <= 1.00)
 - success rate C−A: -2.5 pts [CI -11.1–6.2] (CI upper must be >= −5: C not provably worse by >5 pts)
 - silent-stale Graphite answers: 0 (must be 0)
@@ -15,14 +16,14 @@ Harness errors (excluded from every metric): 0
 ## Arm A totals
 
 - runs 81, success 68/81
-- median turns 12, median wall 103.0 s
+- median turns 12 (tool turns 12), median wall 103.0 s
 - median files read 3 (Read tool 0, via Bash 3)
 - median tool calls 11, median calls before first edit 7
 
 ## Arm C totals
 
 - runs 81, success 66/81
-- median turns 11, median wall 91.3 s
+- median turns 10 (tool turns 11), median wall 91.3 s
 - median files read 1 (Read tool 0, via Bash 0)
 - median tool calls 10, median calls before first edit 5
 
@@ -30,60 +31,60 @@ Harness errors (excluded from every metric): 0
 
 | task | kind | diff | arm | n | turns (min–max) | wall s (min–max) | tools | search | files read | calls before edit | graphite calls / hook answers | searches after complete | success |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| core-consolidate-pin-model | refactor | medium | A | 3 | 11 (9–12) | 91.9 (56.1–93.9) | 10 | 3 | 7 | 5 | – / – | – | 1.00 |
-| core-consolidate-pin-model | refactor | medium | C | 3 | 8 (8–8) | 42.2 (40.9–86.9) | 7 | 3 | 2 | 5 | 0 / 12 | 0 | 1.00 |
-| dao-idempotent-publish | bugfix | hard | A | 3 | 18 (15–21) | 160.2 (150.8–172.7) | 17 | 7 | 5 | 10 | – / – | – | 0.00 |
-| dao-idempotent-publish | bugfix | hard | C | 3 | 15 (15–16) | 107.3 (100.0–152.0) | 14 | 3 | 1 | 8 | 0 / 21 | – | 0.67 |
-| foreman-validating-reject | feature | hard | A | 3 | 22 (14–26) | 208.6 (171.9–209.0) | 21 | 4 | 5 | 11 | – / – | – | 1.00 |
-| foreman-validating-reject | feature | hard | C | 3 | 17 (13–21) | 237.6 (154.6–307.6) | 16 | 3 | 3 | 9 | 1 / 18 | 0 | 0.67 |
+| core-consolidate-pin-model | refactor | medium | A | 3 | 10 (9–11) | 91.9 (56.1–93.9) | 10 | 3 | 7 | 5 | – / – | – | 1.00 |
+| core-consolidate-pin-model | refactor | medium | C | 3 | 8 (7–8) | 42.2 (40.9–86.9) | 7 | 3 | 2 | 5 | 0 / 12 | 0 | 1.00 |
+| dao-idempotent-publish | bugfix | hard | A | 3 | 18 (14–20) | 160.2 (150.8–172.7) | 17 | 7 | 5 | 10 | – / – | – | 0.00 |
+| dao-idempotent-publish | bugfix | hard | C | 3 | 15 (14–15) | 107.3 (100.0–152.0) | 14 | 3 | 1 | 8 | 0 / 21 | – | 0.67 |
+| foreman-validating-reject | feature | hard | A | 3 | 20 (14–25) | 208.6 (171.9–209.0) | 21 | 4 | 5 | 11 | – / – | – | 1.00 |
+| foreman-validating-reject | feature | hard | C | 3 | 14 (11–14) | 237.6 (154.6–307.6) | 16 | 3 | 3 | 9 | 1 / 18 | 0 | 0.67 |
 | instrument-branch-prefix | feature | medium | A | 3 | 9 (8–11) | 75.5 (54.3–97.0) | 8 | 4 | 5 | 5 | – / – | – | 1.00 |
 | instrument-branch-prefix | feature | medium | C | 3 | 8 (8–8) | 94.8 (70.4–131.0) | 7 | 2 | 0 | 4 | 0 / 11 | 0 | 1.00 |
 | marshal-resolve-by-entry | signature | hard | A | 3 | 12 (10–19) | 133.5 (94.0–213.1) | 11 | 2 | 5 | 7 | – / – | – | 1.00 |
-| marshal-resolve-by-entry | signature | hard | C | 3 | 16 (16–19) | 199.4 (142.3–234.6) | 15 | 2 | 1 | 6 | 0 / 17 | 0.0 | 1.00 |
-| milestone-status-ssot | refactor | medium | A | 3 | 17 (16–18) | 109.7 (103.1–135.1) | 16 | 3 | 8 | 9 | – / – | – | 1.00 |
-| milestone-status-ssot | refactor | medium | C | 3 | 14 (14–18) | 84.7 (74.9–91.3) | 13 | 2 | 1 | 5 | 0 / 12 | 0 | 1.00 |
-| owner-publish-choice | feature | hard | A | 3 | 12 (12–13) | 93.2 (77.7–114.1) | 11 | 4 | 8 | 8 | – / – | – | 1.00 |
-| owner-publish-choice | feature | hard | C | 3 | 15 (13–21) | 107.5 (104.9–111.3) | 14 | 3 | 0 | 8 | 1 / 27 | 0 | 1.00 |
+| marshal-resolve-by-entry | signature | hard | C | 3 | 16 (15–19) | 199.4 (142.3–234.6) | 15 | 2 | 1 | 6 | 0 / 17 | 0.0 | 1.00 |
+| milestone-status-ssot | refactor | medium | A | 3 | 16 (14–16) | 109.7 (103.1–135.1) | 16 | 3 | 8 | 9 | – / – | – | 1.00 |
+| milestone-status-ssot | refactor | medium | C | 3 | 13 (13–17) | 84.7 (74.9–91.3) | 13 | 2 | 1 | 5 | 0 / 12 | 0 | 1.00 |
+| owner-publish-choice | feature | hard | A | 3 | 12 (12–12) | 93.2 (77.7–114.1) | 11 | 4 | 8 | 8 | – / – | – | 1.00 |
+| owner-publish-choice | feature | hard | C | 3 | 13 (12–14) | 107.5 (104.9–111.3) | 14 | 3 | 0 | 8 | 1 / 27 | 0 | 1.00 |
 | q-check-artifacts | question | easy | A | 3 | 3 (3–3) | 16.3 (15.6–18.1) | 2 | 2 | 0 | – | – / – | – | 1.00 |
 | q-check-artifacts | question | easy | C | 3 | 2 (2–2) | 14.8 (8.3–17.1) | 1 | 0 | 0 | – | 1 / 0 | 0 | 1.00 |
 | q-find-project-dir | question | hard | A | 3 | 4 (4–4) | 27.5 (19.8–44.6) | 3 | 2 | 4 | – | – / – | – | 1.00 |
-| q-find-project-dir | question | hard | C | 3 | 5 (5–6) | 26.9 (26.0–34.8) | 4 | 2 | 5 | – | 2 / 6 | 0 | 1.00 |
+| q-find-project-dir | question | hard | C | 3 | 5 (5–5) | 26.9 (26.0–34.8) | 4 | 2 | 5 | – | 2 / 6 | 0 | 1.00 |
 | q-resolve-owner | question | easy | A | 3 | 3 (3–3) | 13.7 (12.8–20.3) | 2 | 2 | 0 | – | – / – | – | 1.00 |
 | q-resolve-owner | question | easy | C | 3 | 3 (3–3) | 14.0 (13.2–18.9) | 2 | 0 | 0 | – | 2 / 0 | 0 | 1.00 |
 | q-resolve-task-yaml-path | question | medium | A | 3 | 3 (3–4) | 20.3 (16.8–25.1) | 2 | 2 | 0 | – | – / – | – | 1.00 |
 | q-resolve-task-yaml-path | question | medium | C | 3 | 3 (3–4) | 48.4 (24.4–63.0) | 2 | 0 | 0 | – | 2 / 0 | 0 | 1.00 |
-| refinement-stays-finished | bugfix | hard | A | 3 | 16 (15–20) | 120.5 (103.0–173.8) | 15 | 3 | 0 | 6 | – / – | – | 1.00 |
-| refinement-stays-finished | bugfix | hard | C | 3 | 16 (16–16) | 109.5 (108.9–134.1) | 15 | 2 | 3 | 3 | 1 / 18 | 0.0 | 1.00 |
-| regent-is-ancestor-tristate | bugfix | medium | A | 3 | 12 (12–12) | 89.8 (74.3–128.6) | 11 | 3 | 2 | 5 | – / – | – | 1.00 |
-| regent-is-ancestor-tristate | bugfix | medium | C | 3 | 8 (8–9) | 81.3 (56.2–85.9) | 7 | 2 | 2 | 5 | 1 / 5 | 0 | 1.00 |
-| regent-key-files-at-ref | feature | hard | A | 3 | 21 (18–21) | 187.3 (116.7–202.1) | 20 | 5 | 8 | 11 | – / – | – | 1.00 |
-| regent-key-files-at-ref | feature | hard | C | 3 | 14 (14–18) | 158.0 (138.8–183.0) | 13 | 3 | 2 | 8 | 0 / 20 | 0.5 | 0.33 |
-| regent-lints-every-task | refactor | medium | A | 3 | 14 (14–17) | 131.4 (126.2–135.4) | 13 | 3 | 2 | 8 | – / – | – | 1.00 |
-| regent-lints-every-task | refactor | medium | C | 3 | 13 (12–16) | 94.4 (93.7–139.9) | 12 | 3 | 2 | 6 | 0 / 8 | 0 | 1.00 |
-| regent-project-auto-enqueue | feature | medium | A | 3 | 14 (12–16) | 123.6 (67.2–139.5) | 13 | 3 | 8 | 6 | – / – | – | 1.00 |
-| regent-project-auto-enqueue | feature | medium | C | 3 | 10 (10–11) | 92.9 (79.8–117.3) | 9 | 2 | 2 | 5 | 1 / 12 | 0 | 1.00 |
-| regent-tristate-siblings | bugfix | medium | A | 3 | 13 (12–14) | 114.6 (107.3–115.6) | 12 | 4 | 4 | 6 | – / – | – | 0.33 |
-| regent-tristate-siblings | bugfix | medium | C | 3 | 11 (11–12) | 77.4 (71.9–196.7) | 10 | 3 | 0 | 5 | 0 / 8 | 0.0 | 0.00 |
+| refinement-stays-finished | bugfix | hard | A | 3 | 16 (14–19) | 120.5 (103.0–173.8) | 15 | 3 | 0 | 6 | – / – | – | 1.00 |
+| refinement-stays-finished | bugfix | hard | C | 3 | 14 (13–15) | 109.5 (108.9–134.1) | 15 | 2 | 3 | 3 | 1 / 18 | 0.0 | 1.00 |
+| regent-is-ancestor-tristate | bugfix | medium | A | 3 | 12 (10–12) | 89.8 (74.3–128.6) | 11 | 3 | 2 | 5 | – / – | – | 1.00 |
+| regent-is-ancestor-tristate | bugfix | medium | C | 3 | 7 (7–9) | 81.3 (56.2–85.9) | 7 | 2 | 2 | 5 | 1 / 5 | 0 | 1.00 |
+| regent-key-files-at-ref | feature | hard | A | 3 | 20 (17–20) | 187.3 (116.7–202.1) | 20 | 5 | 8 | 11 | – / – | – | 1.00 |
+| regent-key-files-at-ref | feature | hard | C | 3 | 14 (13–17) | 158.0 (138.8–183.0) | 13 | 3 | 2 | 8 | 0 / 20 | 0.5 | 0.33 |
+| regent-lints-every-task | refactor | medium | A | 3 | 14 (14–14) | 131.4 (126.2–135.4) | 13 | 3 | 2 | 8 | – / – | – | 1.00 |
+| regent-lints-every-task | refactor | medium | C | 3 | 12 (12–15) | 94.4 (93.7–139.9) | 12 | 3 | 2 | 6 | 0 / 8 | 0 | 1.00 |
+| regent-project-auto-enqueue | feature | medium | A | 3 | 13 (12–15) | 123.6 (67.2–139.5) | 13 | 3 | 8 | 6 | – / – | – | 1.00 |
+| regent-project-auto-enqueue | feature | medium | C | 3 | 10 (9–11) | 92.9 (79.8–117.3) | 9 | 2 | 2 | 5 | 1 / 12 | 0 | 1.00 |
+| regent-tristate-siblings | bugfix | medium | A | 3 | 12 (12–13) | 114.6 (107.3–115.6) | 12 | 4 | 4 | 6 | – / – | – | 0.33 |
+| regent-tristate-siblings | bugfix | medium | C | 3 | 11 (10–12) | 77.4 (71.9–196.7) | 10 | 3 | 0 | 5 | 0 / 8 | 0.0 | 0.00 |
 | rover-auth-on-push | signature | medium | A | 3 | 9 (7–9) | 63.1 (35.8–79.0) | 8 | 2 | 7 | 5 | – / – | – | 1.00 |
-| rover-auth-on-push | signature | medium | C | 3 | 8 (7–9) | 51.4 (42.8–65.2) | 7 | 1 | 0 | 4 | 0 / 10 | 0.0 | 1.00 |
+| rover-auth-on-push | signature | medium | C | 3 | 7 (7–8) | 51.4 (42.8–65.2) | 7 | 1 | 0 | 4 | 0 / 10 | 0.0 | 1.00 |
 | rover-rebase-base-branch | signature | hard | A | 3 | 10 (8–14) | 97.1 (37.2–101.2) | 9 | 3 | 5 | 6 | – / – | – | 1.00 |
-| rover-rebase-base-branch | signature | hard | C | 3 | 9 (6–9) | 37.0 (36.7–49.5) | 8 | 2 | 1 | 6 | 1 / 10 | 0 | 1.00 |
-| runner-auto-merge-queued | bugfix | medium | A | 3 | 17 (15–18) | 124.5 (115.2–145.8) | 16 | 3 | 4 | 6 | – / – | – | 0.67 |
-| runner-auto-merge-queued | bugfix | medium | C | 3 | 13 (12–17) | 124.3 (101.8–126.8) | 12 | 2 | 1 | 5 | 0 / 10 | 0.0 | 1.00 |
-| runner-durable-attempts | feature | hard | A | 3 | 13 (12–20) | 170.8 (162.2–209.0) | 12 | 4 | 3 | 6 | – / – | – | 1.00 |
-| runner-durable-attempts | feature | hard | C | 3 | 18 (16–19) | 161.6 (159.1–168.4) | 17 | 3 | 2 | 8 | 0 / 14 | 0 | 0.67 |
-| runner-gh-timeouts | bugfix | medium | A | 3 | 14 (11–16) | 88.8 (86.0–123.0) | 13 | 3 | 2 | 5 | – / – | – | 0.00 |
-| runner-gh-timeouts | bugfix | medium | C | 3 | 13 (10–14) | 92.8 (77.4–147.9) | 12 | 2 | 1 | 6 | 0 / 7 | 0 | 0.00 |
-| runner-pr-base-guard | bugfix | medium | A | 3 | 14 (12–17) | 120.4 (118.4–139.2) | 13 | 4 | 3 | 8 | – / – | – | 1.00 |
-| runner-pr-base-guard | bugfix | medium | C | 3 | 9 (8–10) | 78.2 (69.5–262.5) | 8 | 2 | 0 | 5 | 0 / 10 | – | 1.00 |
-| runner-wall-clock | feature | medium | A | 3 | 9 (1–13) | 99.7 (83.0–763.6) | 12 | 4 | 3 | 8 | – / – | – | 0.67 |
-| runner-wall-clock | feature | medium | C | 3 | 10 (9–14) | 159.8 (88.6–186.8) | 9 | 2 | 1 | 7 | 1 / 10 | – | 0.67 |
-| sourcerer-monorepo-root | signature | easy | A | 3 | 11 (11–12) | 47.7 (46.4–70.9) | 10 | 3 | 3 | 6 | – / – | – | 0.00 |
-| sourcerer-monorepo-root | signature | easy | C | 3 | 11 (8–12) | 60.2 (43.5–68.6) | 10 | 2 | 2 | 6 | 0 / 6 | 1 | 0.00 |
-| tools-pin-model-default | feature | medium | A | 3 | 8 (7–11) | 54.4 (45.9–60.1) | 7 | 1 | 5 | 5 | – / – | – | 1.00 |
-| tools-pin-model-default | feature | medium | C | 3 | 9 (7–9) | 61.4 (35.9–65.2) | 8 | 1 | 0 | 5 | 0 / 10 | 0 | 1.00 |
-| zen-dedup-relevance | feature | hard | A | 3 | 18 (13–19) | 271.4 (139.9–394.0) | 17 | 1 | 0 | 7 | – / – | – | 1.00 |
-| zen-dedup-relevance | feature | hard | C | 3 | 17 (14–27) | 458.7 (436.0–470.1) | 16 | 0 | 0 | 7 | 0 / 15 | – | 1.00 |
+| rover-rebase-base-branch | signature | hard | C | 3 | 8 (6–8) | 37.0 (36.7–49.5) | 8 | 2 | 1 | 6 | 1 / 10 | 0 | 1.00 |
+| runner-auto-merge-queued | bugfix | medium | A | 3 | 17 (15–17) | 124.5 (115.2–145.8) | 16 | 3 | 4 | 6 | – / – | – | 0.67 |
+| runner-auto-merge-queued | bugfix | medium | C | 3 | 12 (12–17) | 124.3 (101.8–126.8) | 12 | 2 | 1 | 5 | 0 / 10 | 0.0 | 1.00 |
+| runner-durable-attempts | feature | hard | A | 3 | 13 (11–19) | 170.8 (162.2–209.0) | 12 | 4 | 3 | 6 | – / – | – | 1.00 |
+| runner-durable-attempts | feature | hard | C | 3 | 16 (15–17) | 161.6 (159.1–168.4) | 17 | 3 | 2 | 8 | 0 / 14 | 0 | 0.67 |
+| runner-gh-timeouts | bugfix | medium | A | 3 | 13 (11–14) | 88.8 (86.0–123.0) | 13 | 3 | 2 | 5 | – / – | – | 0.00 |
+| runner-gh-timeouts | bugfix | medium | C | 3 | 10 (10–10) | 92.8 (77.4–147.9) | 12 | 2 | 1 | 6 | 0 / 7 | 0 | 0.00 |
+| runner-pr-base-guard | bugfix | medium | A | 3 | 12 (12–14) | 120.4 (118.4–139.2) | 13 | 4 | 3 | 8 | – / – | – | 1.00 |
+| runner-pr-base-guard | bugfix | medium | C | 3 | 8 (8–9) | 78.2 (69.5–262.5) | 8 | 2 | 0 | 5 | 0 / 10 | – | 1.00 |
+| runner-wall-clock | feature | medium | A | 3 | 12 (9–18) | 99.7 (83.0–763.6) | 12 | 4 | 3 | 8 | – / – | – | 0.67 |
+| runner-wall-clock | feature | medium | C | 3 | 9 (8–13) | 159.8 (88.6–186.8) | 9 | 2 | 1 | 7 | 1 / 10 | – | 0.67 |
+| sourcerer-monorepo-root | signature | easy | A | 3 | 11 (11–11) | 47.7 (46.4–70.9) | 10 | 3 | 3 | 6 | – / – | – | 0.00 |
+| sourcerer-monorepo-root | signature | easy | C | 3 | 9 (7–10) | 60.2 (43.5–68.6) | 10 | 2 | 2 | 6 | 0 / 6 | 1 | 0.00 |
+| tools-pin-model-default | feature | medium | A | 3 | 8 (7–10) | 54.4 (45.9–60.1) | 7 | 1 | 5 | 5 | – / – | – | 1.00 |
+| tools-pin-model-default | feature | medium | C | 3 | 8 (7–9) | 61.4 (35.9–65.2) | 8 | 1 | 0 | 5 | 0 / 10 | 0 | 1.00 |
+| zen-dedup-relevance | feature | hard | A | 3 | 16 (13–18) | 271.4 (139.9–394.0) | 17 | 1 | 0 | 7 | – / – | – | 1.00 |
+| zen-dedup-relevance | feature | hard | C | 3 | 16 (14–25) | 458.7 (436.0–470.1) | 16 | 0 | 0 | 7 | 0 / 15 | – | 1.00 |
 
 ## Arm C Graphite use and attribution
 
@@ -114,33 +115,33 @@ Graphite correctness misses (candidate — review each):
 
 | task | turns Δ% | wall Δ% | success A→C |
 |---|---|---|---|
-| core-consolidate-pin-model | -27 | -54 | 1.00→1.00 |
+| core-consolidate-pin-model | -20 | -54 | 1.00→1.00 |
 | dao-idempotent-publish | -17 | -33 | 0.00→0.67 |
-| foreman-validating-reject | -23 | 14 | 1.00→0.67 |
+| foreman-validating-reject | -30 | 14 | 1.00→0.67 |
 | instrument-branch-prefix | -11 | 26 | 1.00→1.00 |
 | marshal-resolve-by-entry | 33 | 49 | 1.00→1.00 |
-| milestone-status-ssot | -18 | -23 | 1.00→1.00 |
-| owner-publish-choice | 25 | 15 | 1.00→1.00 |
+| milestone-status-ssot | -19 | -23 | 1.00→1.00 |
+| owner-publish-choice | 8 | 15 | 1.00→1.00 |
 | q-check-artifacts | -33 | -9 | 1.00→1.00 |
 | q-find-project-dir | 25 | -2 | 1.00→1.00 |
 | q-resolve-owner | 0 | 2 | 1.00→1.00 |
 | q-resolve-task-yaml-path | 0 | 138 | 1.00→1.00 |
-| refinement-stays-finished | 0 | -9 | 1.00→1.00 |
-| regent-is-ancestor-tristate | -33 | -9 | 1.00→1.00 |
-| regent-key-files-at-ref | -33 | -16 | 1.00→0.33 |
-| regent-lints-every-task | -7 | -28 | 1.00→1.00 |
-| regent-project-auto-enqueue | -29 | -25 | 1.00→1.00 |
-| regent-tristate-siblings | -15 | -32 | 0.33→0.00 |
-| rover-auth-on-push | -11 | -19 | 1.00→1.00 |
-| rover-rebase-base-branch | -10 | -62 | 1.00→1.00 |
-| runner-auto-merge-queued | -24 | -0 | 0.67→1.00 |
-| runner-durable-attempts | 38 | -5 | 1.00→0.67 |
-| runner-gh-timeouts | -7 | 5 | 0.00→0.00 |
-| runner-pr-base-guard | -36 | -35 | 1.00→1.00 |
-| runner-wall-clock | 11 | 60 | 0.67→0.67 |
-| sourcerer-monorepo-root | 0 | 26 | 0.00→0.00 |
-| tools-pin-model-default | 12 | 13 | 1.00→1.00 |
-| zen-dedup-relevance | -6 | 69 | 1.00→1.00 |
+| refinement-stays-finished | -12 | -9 | 1.00→1.00 |
+| regent-is-ancestor-tristate | -42 | -9 | 1.00→1.00 |
+| regent-key-files-at-ref | -30 | -16 | 1.00→0.33 |
+| regent-lints-every-task | -14 | -28 | 1.00→1.00 |
+| regent-project-auto-enqueue | -23 | -25 | 1.00→1.00 |
+| regent-tristate-siblings | -8 | -32 | 0.33→0.00 |
+| rover-auth-on-push | -22 | -19 | 1.00→1.00 |
+| rover-rebase-base-branch | -20 | -62 | 1.00→1.00 |
+| runner-auto-merge-queued | -29 | -0 | 0.67→1.00 |
+| runner-durable-attempts | 23 | -5 | 1.00→0.67 |
+| runner-gh-timeouts | -23 | 5 | 0.00→0.00 |
+| runner-pr-base-guard | -33 | -35 | 1.00→1.00 |
+| runner-wall-clock | -25 | 60 | 0.67→0.67 |
+| sourcerer-monorepo-root | -18 | 26 | 0.00→0.00 |
+| tools-pin-model-default | 0 | 13 | 1.00→1.00 |
+| zen-dedup-relevance | 0 | 69 | 1.00→1.00 |
 
 ## Run details
 

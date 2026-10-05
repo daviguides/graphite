@@ -348,6 +348,8 @@ def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
     first_edit_index = None
     call_index = 0
     graphite_stale = 0
+    round_trips: set[str] = set()
+    results: list[dict] = []
     for line in path.read_text(errors="replace").splitlines():
         try:
             ev = json.loads(line)
@@ -358,6 +360,9 @@ def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
             root = (ev.get("cwd") or "").rstrip("/")
         if typ == "assistant":
             nested = ev.get("parent_tool_use_id") is not None
+            if not nested:
+                # One model response streams as several events sharing a message id.
+                round_trips.add(ev.get("message", {}).get("id") or f"anon-{len(round_trips)}")
             for block in ev.get("message", {}).get("content", []) or []:
                 if block.get("type") != "tool_use":
                     continue
@@ -402,10 +407,15 @@ def parse_stream(path: Path, known_files: set[str] | None = None) -> dict:
                         graphite_stale += 1
         elif typ == "result":
             result = ev
+            results.append(ev)
     usage = result.get("usage", {}) or {}
+    # A background task finishing after the agent's answer resumes the session and
+    # emits a second result event that counts only the resumed part.
     return {
-        "num_turns": result.get("num_turns"),
-        "duration_ms": result.get("duration_ms"),
+        "num_turns": sum(r.get("num_turns") or 0 for r in results) if results else None,
+        "round_trips": len(round_trips),
+        "result_events": len(results),
+        "duration_ms": sum(r.get("duration_ms") or 0 for r in results) if results else None,
         "cost_usd": result.get("total_cost_usd"),
         "is_error": result.get("is_error"),
         "stop_reason": result.get("subtype"),

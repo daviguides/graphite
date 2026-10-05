@@ -614,3 +614,46 @@ def test_file_created_by_reference_is_never_a_graphite_omission():
                             "tools/orch/runner/runner/core/hooks.py"]}
     att = run.attribute(rec, truth, False)
     assert att["class"] == "failure_despite_graphite"
+
+
+# ---- turns are model round trips; num_turns counts tool results + 1
+
+
+def _ev(**kw):
+    return json.dumps(kw)
+
+
+def test_parallel_tool_calls_are_one_round_trip(tmp_path):
+    # full run: num_turns = tool calls + 1 on all 162 runs; one response with
+    # three tool calls streams as three events sharing a message id.
+    use = lambda i: {"type": "tool_use", "id": f"u{i}", "name": "Bash", "input": {"command": "ls"}}
+    lines = [_ev(type="assistant", parent_tool_use_id=None, message={"id": "m1", "content": [use(i)]})
+             for i in range(3)]
+    lines += [_ev(type="assistant", parent_tool_use_id=None, message={"id": "m2", "content": [{"type": "text", "text": "done"}]}),
+              _ev(type="result", num_turns=4, duration_ms=1000)]
+    s = tmp_path / "stream.jsonl"
+    s.write_text("\n".join(lines))
+    r = parse_stream(s)
+    assert r["num_turns"] == 4 and r["round_trips"] == 2
+
+
+def test_resumed_session_sums_result_events(tmp_path):
+    # full-A-g0-runner-wall-clock-A-2: a background task resumed the session after
+    # the answer; the last result event (1 turn, 2.7 s) was recorded as the run.
+    lines = [_ev(type="assistant", parent_tool_use_id=None, message={"id": f"m{i}", "content": []}) for i in range(3)]
+    lines.insert(2, _ev(type="result", num_turns=19, duration_ms=219539))
+    lines.append(_ev(type="result", num_turns=1, duration_ms=2718))
+    s = tmp_path / "stream.jsonl"
+    s.write_text("\n".join(lines))
+    r = parse_stream(s)
+    assert r["num_turns"] == 20 and r["result_events"] == 2 and r["duration_ms"] == 222257
+    assert r["round_trips"] == 3
+
+
+def test_verdict_uses_round_trips():
+    import analyze
+    a = {"run_id": "a", "task": "t", "arm": "A", "num_turns": 10, "round_trips": 10, "wall_s": 100}
+    c = {"run_id": "c", "task": "t", "arm": "C", "num_turns": 10, "round_trips": 7, "wall_s": 100}
+    base = {"kind": "bugfix", "difficulty": "medium", "success": True}
+    stats = analyze.per_task([{**base, **a}, {**base, **c}])
+    assert stats[("t", "C")]["turns"] == 7 and stats[("t", "C")]["tool_turns"] == 10
