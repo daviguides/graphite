@@ -309,8 +309,7 @@ fn imports_counted_and_multi_definitions_listed() {
 /// The footer: the last `#` line that is not a body's.
 fn footer(text: &str) -> &str {
     text.lines()
-        .filter(|l| l.starts_with("# ") && !l.starts_with("# graphite: body of"))
-        .last()
+        .rfind(|l| l.starts_with("# ") && !l.starts_with("# graphite: body of"))
         .unwrap_or_default()
 }
 
