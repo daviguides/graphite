@@ -219,6 +219,14 @@ def test_attribution_classes():
     assert run.attribute({**base, "outcome": "harness_error"}, truth, False) is None
 
 
+def test_paths_read_from_json_cut_mid_object():
+    # pilot-B q-resolve-owner rep 1: `graphite blast ... --json | head -c 6000` cut the
+    # envelope; json.loads fails but the dependents' paths are still in the text.
+    from stream import text_paths
+    cut = '{"ok":true,"data":{"result":{"dependents":{"items":[{"symbol":{"path":"tools/a/engine.py","kind":"fun'
+    assert text_paths(cut) == {"tools/a/engine.py"}
+
+
 def test_calls_that_returned_no_paths_are_not_a_graphite_miss():
     # pilot-issue-C2 refinement-stays-finished rep 0: one call, `graphite lookup pause;
     # graphite lookup EGEST`, both NOT FOUND, 0 hook answers; the agent then missed

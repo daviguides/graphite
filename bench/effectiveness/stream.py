@@ -144,6 +144,8 @@ def graphite_calls(path: Path) -> list[dict]:
 
 
 TEXT_PATH_RE = re.compile(r"(?<![\w/.-])(?:\./)?((?:[\w.-]+/)*[\w-][\w.-]*\.(?:py|rs|ts|tsx|js|jsx)):\d+")
+# "path"/"file" keys in JSON the agent cut mid-object (`| head -c N`): not parseable, still read.
+JSON_PATH_RE = re.compile(r'"(?:path|file)":\s*"([^"]+\.(?:py|rs|ts|tsx|js|jsx))"')
 COMPLETE_TEXT_RE = re.compile(r"(?<![A-Za-z_-])COMPLETE\b")
 COMPLETE_JSON_RE = re.compile(r'"completeness":\{[^{}]*(\{[^{}]*\}[^{}]*)?"status":"complete"')
 
@@ -154,7 +156,7 @@ def answer_is_complete(text: str) -> bool:
 
 
 def text_paths(text: str) -> set[str]:
-    return set(TEXT_PATH_RE.findall(text or ""))
+    return set(TEXT_PATH_RE.findall(text or "")) | set(JSON_PATH_RE.findall(text or ""))
 
 
 def paths_in(obj) -> set[str]:
