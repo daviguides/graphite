@@ -57,6 +57,8 @@ graph TD
 
 Full analysis in [`bench/effectiveness/`](bench/effectiveness/).
 
+For a detailed comparison with other code-graph tools (Graphify, CodeGraph, Graft, GitNexus, codebase-memory), see the [Landscape](https://tiphareth.com.br/graphite/docs/landscape/).
+
 ## Quick Start
 
 ```bash
