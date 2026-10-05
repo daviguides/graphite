@@ -36,6 +36,28 @@ pub enum Op {
     Nudge {
         paths: Vec<String>,
     },
+    /// Text search (grep/rg/ack semantics) judged against the graph; answer is agent-facing text.
+    Search {
+        spec: Box<crate::search::SearchSpec>,
+    },
+    /// One-line graph header per indexed file (used when the agent reads files).
+    FileInfo {
+        paths: Vec<String>,
+        cwd: String,
+        /// Bytes the headers may take in total (sized to what the read printed); None = no cap.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        budget: Option<usize>,
+    },
+    /// One-line graph summary per directory (used when the agent lists directories).
+    DirInfo {
+        paths: Vec<String>,
+        cwd: String,
+    },
+    /// What the graph knows about a name (appended after native search tools).
+    NameInfo {
+        name: String,
+        cwd: String,
+    },
     Shutdown,
 }
 

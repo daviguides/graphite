@@ -18,6 +18,77 @@ pub struct RepoPaths {
 /// Name of the per-repo state directory.
 pub const STATE_DIR: &str = ".graphite";
 
+/// Directory names skipped by both the indexer and embedded search, on top of `.gitignore`.
+pub const DEFAULT_EXCLUDES: &[&str] = &[
+    ".git",
+    STATE_DIR,
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "site-packages",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    ".ruff_cache",
+    ".DS_Store",
+];
+
+/// Directories embedded search never enters: VCS/Graphite state, dependency envs, caches, build
+/// output. Skipped silently, like ripgrep's defaults — they hold copies or generated files.
+pub const NOISE_DIRS: &[&str] = &[
+    ".git",
+    STATE_DIR,
+    ".venv",
+    "venv",
+    "node_modules",
+    "site-packages",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    ".ruff_cache",
+    "target",
+    "dist",
+    "build",
+];
+
+/// True for a directory that is noise by reason: a noise name, `.claude/worktrees`, or a git
+/// worktree (a directory holding a `.git` *file*, i.e. another checkout of the repo).
+pub fn is_noise_dir(path: &Path, name: &str, depth: usize) -> bool {
+    if NOISE_DIRS.contains(&name) {
+        return true;
+    }
+    if name == "worktrees"
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|p| p == ".claude")
+    {
+        return true;
+    }
+    depth > 0 && path.join(".git").is_file()
+}
+
+/// File or directory names that may hold secrets: never opened unless named exactly.
+pub fn is_secret_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == ".env"
+        || lower.starts_with(".env.")
+        || lower == ".envs"
+        || lower == ".netrc"
+        || lower.starts_with("id_rsa")
+        || lower.starts_with("id_ed25519")
+        || lower.starts_with("credentials")
+        || lower.starts_with("secrets")
+        || [".pem", ".key", ".p12", ".pfx"]
+            .iter()
+            .any(|ext| lower.ends_with(ext))
+}
+
 const STATE_GITIGNORE: &str = "*\n";
 
 /// Unix socket paths must fit `sockaddr_un.sun_path` (104 bytes on macOS, 108 on Linux).

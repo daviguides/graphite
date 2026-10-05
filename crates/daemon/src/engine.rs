@@ -14,16 +14,8 @@ use crate::freshness::Freshness;
 use crate::paths::RepoPaths;
 use crate::Result;
 
-/// Directory names never indexed, on top of `.gitignore` and hidden entries.
-const SKIP_DIRS: &[&str] = &[
-    crate::paths::STATE_DIR,
-    "target",
-    "node_modules",
-    "dist",
-    "build",
-    "__pycache__",
-    "site-packages",
-];
+/// Directory names never indexed, on top of `.gitignore` and hidden entries; shared with embedded search.
+const SKIP_DIRS: &[&str] = crate::paths::DEFAULT_EXCLUDES;
 
 /// Bump whenever the store schema, extractor output or resolution rules change in a way old DB contents can't satisfy.
 pub const DB_VERSION: u32 = 2;
@@ -284,5 +276,10 @@ impl Engine {
 
     pub fn file_count(&self) -> usize {
         self.hashes.lock().unwrap().len()
+    }
+
+    /// Repo-relative paths of every indexed file.
+    pub fn indexed_paths(&self) -> Vec<String> {
+        self.hashes.lock().unwrap().keys().cloned().collect()
     }
 }

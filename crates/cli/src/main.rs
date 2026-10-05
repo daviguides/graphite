@@ -58,6 +58,15 @@ enum Cmd {
         #[command(subcommand)]
         cmd: DaemonCmd,
     },
+    /// Claude Code hooks that let Graphite answer the agent's grep/cat/find:
+    /// install | uninstall | status | log [-n N] | show N (what the agent received, re-rendered).
+    Hooks {
+        #[arg(value_parser = ["install", "uninstall", "status", "log", "show"])]
+        action: String,
+        /// Extra arguments (`show N`, `log -n N`).
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 /// Answer-shaping options shared by traversal queries.
@@ -104,8 +113,33 @@ fn main() -> ExitCode {
     }
 }
 
+/// `graphite hooks …` runs the sibling `graphite-hook` binary, which owns hook installation.
+fn hooks(action: &str, args: &[String], paths: &RepoPaths) -> Result<ExitCode, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let hook = exe.with_file_name("graphite-hook");
+    if !hook.exists() {
+        return Err(format!(
+            "{} not found; build or install the graphite-hooks crate next to graphite",
+            hook.display()
+        ));
+    }
+    let status = std::process::Command::new(&hook)
+        .arg(action)
+        .args(args)
+        .arg("--repo")
+        .arg(&paths.root)
+        .status()
+        .map_err(|e| e.to_string())?;
+    Ok(if status.success() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
+}
+
 fn run(cli: &Cli, paths: &RepoPaths) -> Result<ExitCode, String> {
     let op = match &cli.cmd {
+        Cmd::Hooks { action, args } => return hooks(action, args, paths),
         Cmd::Daemon {
             cmd: DaemonCmd::Run,
         } => {
@@ -199,6 +233,7 @@ impl Cli {
             Cmd::Blast { .. } => "blast",
             Cmd::DiffImpact { .. } => "diff-impact",
             Cmd::Nudge { .. } => "nudge",
+            Cmd::Hooks { .. } => "hooks",
         }
         .to_string()
     }
